@@ -11,7 +11,7 @@ If you were dispatched as a subagent for one specific task, skip this skill and 
 
 Before you respond or act, including before clarifying questions or exploring code, check the available skills. If one plausibly applies, `read` its `SKILL.md` and follow it. Say which one: "Using <skill> to <purpose>". If it turns out not to fit, drop it and say so.
 
-Precedence: the user's direct instructions, then project files (AGENTS.md, CLAUDE.md), then skills, then your defaults. Process skills come before domain skills. The process skill sets the approach and the domain skill supplies the specifics.
+Precedence: the user's direct instructions, then project files (AGENTS.md, CLAUDE.md), then skills, then your defaults. Process skills come before platform and domain skills. The process skill sets the approach; platform and domain skills supply the specifics.
 
 ## Size the process to the work
 
@@ -32,7 +32,8 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 | Unfamiliar or legacy repo, no AGENTS.md | onboarding-existing-codebase |
 | New project, or a technology choice | choosing-a-stack |
 | About to say done, fixed or passing | verification-before-completion |
-| Web UI, money, payments, POS, mobile, desktop, security | the matching domain skill |
+| Web, mobile or desktop code | the platform skill: web-frontend, mobile-development, desktop-development |
+| Money, payments, POS or fiscal, auth and other security-sensitive code | the domain skill: payments-and-money, pos-systems, security-review |
 
 ## Always true
 

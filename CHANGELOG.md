@@ -1,12 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+- Clearer description of the scope (platform, domain, new or existing code) and of the skill groups: process, starting point, platforms, high-risk domains.
+- `using-skills` routes platform work and high-risk domain work to their skills separately.
+
 ## 0.2.0
 
 First public release.
 
 - 21 skills:
-  - a process core: design, plan, TDD, debugging, verification, review, git;
-  - domains: web frontend, payments, POS, security, mobile, desktop, legacy code, stack choice.
+  - process core: design, plan, TDD, debugging, verification, review, git;
+  - starting point: stack choice, onboarding, legacy code;
+  - platforms: web frontend, mobile, desktop;
+  - high-risk domains: payments, POS, security.
 - 8 prompt templates: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`.
 - Extensions:
   - `bootstrap` loads the skill rules into every request;

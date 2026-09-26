@@ -1,9 +1,20 @@
 # pi-engineering-kit
 
-A [pi](https://pi.dev) package that turns the pi coding agent into a disciplined engineer for any stack and domain: web, Android, iOS, Windows, Linux; entertainment, POS and payments; greenfield and legacy code.
+A [pi](https://pi.dev) package that turns the pi coding agent into a disciplined engineer.
+
+It works on any project, and it adapts along three independent axes:
+- **where the code runs:** web, mobile (Android, iOS) or desktop (Windows, Linux);
+- **what it does:** anything from entertainment apps to point-of-sale systems and payments, with dedicated skills where mistakes are costly (money, fiscal rules, security);
+- **what state the code is in:** a brand-new project or an existing codebase, including one written long before AI agents.
+
+The process on top of them is the same everywhere: design → plan → TDD → verify → review → git.
 
 It contains:
-- **21 skills.** A process core (design → plan → TDD → debug → verify → review → git) plus domain skills (web frontend, payments, POS, security, mobile, desktop, legacy, stack choice).
+- **21 skills:**
+  - **process core:** design, plan, TDD, debugging, verification, review, git;
+  - **starting point:** choosing a stack for a new project, onboarding an existing one, changing legacy code safely;
+  - **platforms:** web frontend, mobile, desktop;
+  - **high-risk domains:** payments and money, POS and fiscal, security review.
 - **8 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
@@ -31,10 +42,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.1
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.1
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit

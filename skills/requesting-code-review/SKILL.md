@@ -37,4 +37,4 @@ A review in a fresh context catches what the author's context hides. The reviewe
 - Severity reflects the effect on a real user, not the reviewer's taste. A visible performance regression is Critical.
 - If there are no findings, say so, with the scope covered and its limits. An AI review informs human approval; it never replaces it.
 
-The checklist is in `references/checklist.md`. Load the sections that match the diff (payments, UI, DB, and so on). The domain skills (web-frontend, payments-and-money, security-review, mobile-development…) add their own review points.
+The checklist is in `references/checklist.md`. Load the sections that match the diff (payments, UI, DB, and so on). The platform and domain skills (web-frontend, mobile-development, desktop-development, payments-and-money, pos-systems, security-review) add their own review points.
