@@ -1,0 +1,18 @@
+{
+  "modes": {
+    "deep": { "model": ["anthropic/claude-opus-5-5"], "thinking": "high" },
+    "fast": { "model": ["anthropic/claude-sonnet-5"], "thinking": "medium" },
+    "cheap": { "model": ["anthropic/claude-haiku-4-5-20251001"], "thinking": "low" }
+  },
+  "commands": {
+    "brainstorm": "deep",
+    "plan": "deep",
+    "review": "deep",
+    "debug": "deep",
+    "skill:security-review": "deep",
+    "implement": "fast",
+    "onboard": "fast",
+    "finish": "fast",
+    "new-task": "cheap"
+  }
+}

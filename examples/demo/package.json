@@ -1,0 +1,11 @@
+{
+  "name": "kit-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tiny demo project for trying pi-engineering-kit",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test src/*.test.ts"
+  }
+}

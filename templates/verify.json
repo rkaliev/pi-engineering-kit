@@ -1,0 +1,4 @@
+{
+  "commands": ["npm run typecheck", "npm test"],
+  "timeoutSec": 600
+}

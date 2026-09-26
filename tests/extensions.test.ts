@@ -1,0 +1,357 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import test from "node:test";
+import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
+import guard from "../extensions/guard.ts";
+import init from "../extensions/init.ts";
+import models from "../extensions/models.ts";
+import verify from "../extensions/verify.ts";
+
+type Handler = (event: any, ctx: any) => unknown;
+
+function fakePi(execCodes: Record<string, number> = {}) {
+	const handlers = new Map<string, Handler[]>();
+	const sent: Array<{ message: any; options: any }> = [];
+	const tools = new Map<string, any>();
+	const commands = new Map<string, any>();
+	const execs: string[] = [];
+	const modelCalls: string[] = [];
+	const pi = {
+		async setModel(model: any) {
+			modelCalls.push(`model:${model.provider}/${model.id}`);
+			return true;
+		},
+		setThinkingLevel(level: string) {
+			modelCalls.push(`thinking:${level}`);
+		},
+		on(event: string, handler: Handler) {
+			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+		},
+		sendMessage(message: any, options?: any) {
+			sent.push({ message, options });
+		},
+		sendUserMessage(content: any, options?: any) {
+			sent.push({ message: { user: content }, options });
+		},
+		registerTool(tool: any) {
+			tools.set(tool.name, tool);
+		},
+		registerCommand(name: string, options: any) {
+			commands.set(name, options);
+		},
+		async exec(_shell: string, args: string[]) {
+			const command = args[args.length - 1]!;
+			execs.push(command);
+			const code = execCodes[command] ?? 0;
+			return { stdout: code === 0 ? "ok" : `boom in ${command}`, stderr: "", code, killed: false };
+		},
+	};
+	const emit = async (event: string, payload: any, ctx: any) => {
+		let result: unknown;
+		for (const h of handlers.get(event) ?? []) result = (await h({ type: event, ...payload }, ctx)) ?? result;
+		return result as any;
+	};
+	return { pi: pi as any, handlers, sent, tools, commands, execs, modelCalls, emit };
+}
+
+function ctx(cwd: string, opts: { hasUI?: boolean; confirm?: boolean; trusted?: boolean } = {}) {
+	const notes: string[] = [];
+	const asked: string[] = [];
+	return {
+		cwd,
+		hasUI: opts.hasUI ?? true,
+		isProjectTrusted: () => opts.trusted ?? true,
+		notes,
+		asked,
+		ui: {
+			confirm: async (title: string, message: string) => (asked.push(`${title} ${message}`), opts.confirm ?? false),
+			notify: (m: string) => notes.push(m),
+			setStatus: () => {},
+			setWorkingMessage: () => {},
+		},
+	};
+}
+
+function project(files: Record<string, string>) {
+	const dir = mkdtempSync(join(tmpdir(), "kit-"));
+	for (const [name, content] of Object.entries(files)) {
+		mkdirSync(resolve(dir, name, ".."), { recursive: true });
+		writeFileSync(join(dir, name), content);
+	}
+	return dir;
+}
+
+// ---------- package manifest ----------
+
+test("package.json is a pi package exposing skills, prompts and all extensions", () => {
+	const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, "..", "package.json"), "utf8"));
+	assert.ok(pkg.keywords.includes("pi-package"));
+	assert.deepEqual(pkg.pi.skills, ["./skills"]);
+	assert.deepEqual(pkg.pi.prompts, ["./prompts/*.md"]);
+	assert.deepEqual(pkg.pi.extensions, [
+		"./extensions/bootstrap.ts",
+		"./extensions/guard.ts",
+		"./extensions/verify.ts",
+		"./extensions/models.ts",
+		"./extensions/init.ts",
+	]);
+	for (const dep of Object.keys(pkg.dependencies ?? {})) assert.ok(!dep.startsWith("@earendil-works/"), `${dep} must be a peer dependency`);
+});
+
+// ---------- bootstrap ----------
+
+test("bootstrap injects using-skills into every request as one user message after compaction summaries", async () => {
+	const { pi, emit, handlers } = fakePi();
+	bootstrap(pi);
+	assert.deepEqual([...handlers.keys()], ["context"], "stateless: no lifecycle flags to get out of sync");
+
+	const summary = { role: "compactionSummary", summary: "earlier" };
+	const user = { role: "user", content: "hi", timestamp: 1 };
+	const result = await emit("context", { messages: [summary, user] }, {});
+	assert.equal(result.messages.length, 3);
+	assert.equal(result.messages[0], summary);
+	assert.equal(result.messages[1].role, "user");
+	const text = result.messages[1].content[0].text as string;
+	assert.ok(text.includes(BOOTSTRAP_MARKER));
+	assert.ok(text.includes("## The rule"), "skill body is inlined");
+	assert.ok(!text.includes("description:"), "frontmatter is stripped");
+
+	assert.equal(await emit("context", { messages: result.messages }, {}), undefined, "no duplicate while marker present");
+	// context edits are not persisted, so a later agent run (next prompt, follow-up) must get it again
+	const later = await emit("context", { messages: [user, { role: "assistant", content: "ok" }, user] }, {});
+	assert.equal(later.messages.length, 4);
+	assert.ok(later.messages[0].content[0].text.includes(BOOTSTRAP_MARKER));
+});
+
+// ---------- guard ----------
+
+test("guard blocks, confirms and allows tool calls", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const dir = project({});
+
+	const blocked = await emit("tool_call", { toolName: "bash", input: { command: "git push --force" } }, ctx(dir));
+	assert.equal(blocked.block, true);
+	assert.match(blocked.reason, /force-with-lease/);
+
+	assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "npm test" } }, ctx(dir)), undefined);
+	assert.equal((await emit("tool_call", { toolName: "read", input: { path: ".env" } }, ctx(dir))).block, true);
+
+	const push = { toolName: "bash", input: { command: "git push origin feature" } };
+	assert.equal(await emit("tool_call", push, ctx(dir, { confirm: true })), undefined, "confirmed by human");
+	assert.equal((await emit("tool_call", push, ctx(dir, { confirm: false }))).block, true, "declined by human");
+	assert.match((await emit("tool_call", push, ctx(dir, { hasUI: false }))).reason, /unavailable/, "no UI means block");
+});
+
+test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const dir = project({ ".pi/guard.json": JSON.stringify({ allow: ["^git push origin feature"], protectedPaths: ["db/migrations/"], block: ["(unclosed"] }) });
+	const push = { toolName: "bash", input: { command: "git push origin feature" } };
+
+	assert.equal(await emit("tool_call", push, ctx(dir, { trusted: true })), undefined);
+	assert.equal((await emit("tool_call", push, ctx(dir, { trusted: false, confirm: false }))).block, true);
+	const c = ctx(dir);
+	assert.equal((await emit("tool_call", { toolName: "write", input: { path: "db/migrations/1.sql" } }, c)).block, true);
+	assert.ok(c.notes.some((n) => n.includes("invalid regex")), "bad regex is reported, not thrown");
+});
+
+// ---------- verify ----------
+
+test("verify reminds once after unverified edits and clears after a green run", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n- `npm run typecheck`\n" });
+	const { pi, emit, sent, tools } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "no edits, no reminder");
+
+	await emit("tool_result", { toolName: "edit", input: { path: "a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.equal(sent[0]!.options.triggerTurn, true);
+	assert.match(sent[0]!.message.content, /run_verification/);
+
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "at most one reminder per user prompt");
+
+	await emit("input", { text: "go on", source: "interactive" }, c);
+	await emit("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "one of two checks is not proof");
+
+	await emit("input", { text: "again", source: "interactive" }, c);
+	const result = await tools.get("run_verification").execute("id", {}, undefined, undefined, c);
+	assert.equal(result.details.ok, true);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "green run clears the gate");
+});
+
+test("run_verification reports the failing command and skips the rest", async () => {
+	const dir = project({ ".pi/verify.json": JSON.stringify({ commands: ["npm test", "npm run build"] }) });
+	const { pi, tools, execs } = fakePi({ "npm test": 1 });
+	verify(pi);
+	const result = await tools.get("run_verification").execute("id", {}, undefined, undefined, ctx(dir));
+	const text = result.content[0].text as string;
+	assert.equal(result.details.ok, false);
+	assert.match(text, /FAIL {2}npm test/);
+	assert.match(text, /SKIP {2}npm run build/);
+	assert.match(text, /boom in npm test/);
+	assert.deepEqual(execs, ["npm test"]);
+});
+
+test("run_verification explains how to configure checks when none exist", async () => {
+	const { pi, tools } = fakePi();
+	verify(pi);
+	const result = await tools.get("run_verification").execute("id", {}, undefined, undefined, ctx(project({})));
+	assert.match(result.content[0].text, /\.pi\/verify\.json/);
+});
+
+// ---------- model routing ----------
+
+const registry = [
+	{ provider: "anthropic", id: "strong" },
+	{ provider: "anthropic", id: "mid" },
+	{ provider: "openai", id: "strong" },
+];
+
+function modelCtx(cwd: string, opts: { trusted?: boolean; available?: string[] } = {}) {
+	const base = ctx(cwd, { trusted: opts.trusted });
+	const available = registry.filter((m) => (opts.available ?? ["anthropic"]).includes(m.provider));
+	return {
+		...base,
+		model: registry[1],
+		modelRegistry: {
+			find: (provider: string, id: string) => registry.find((m) => m.provider === provider && m.id === id),
+			// real pi returns fresh copies, so identity comparison must not be relied on
+			getAvailable: () => available.map((m) => ({ ...m })),
+		},
+	};
+}
+
+const routingFile = JSON.stringify({
+	modes: { deep: { model: ["anthropic/strong", "openai/strong"], thinking: "high" }, fast: { model: "anthropic/mid" } },
+	commands: { review: "deep", implement: "fast" },
+});
+
+function withAgentDir<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+	const prev = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	return fn().finally(() => {
+		if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prev;
+	});
+}
+
+test("models: routed commands switch model and thinking; plain input and extension messages do not", async () => {
+	const dir = project({ ".pi/model-routing.json": routingFile });
+	await withAgentDir(project({}), async () => {
+		const { pi, emit, modelCalls } = fakePi();
+		models(pi);
+		const c = modelCtx(dir);
+		assert.deepEqual(await emit("input", { text: "/review", source: "interactive" }, c), { action: "continue" });
+		assert.deepEqual(modelCalls, ["model:anthropic/strong", "thinking:high"]);
+
+		await emit("input", { text: "now fix it", source: "interactive" }, c);
+		await emit("input", { text: "/review", source: "extension" }, c);
+		assert.equal(modelCalls.length, 2, "sticky model; extension follow-ups are not routed");
+
+		await emit("input", { text: "/implement tasks/01.md", source: "rpc" }, c);
+		assert.deepEqual(modelCalls.slice(2), ["model:anthropic/mid"], "no thinking override when unset");
+	});
+});
+
+test("models: falls back to the next available candidate, warns when none is usable", async () => {
+	const dir = project({ ".pi/model-routing.json": routingFile });
+	await withAgentDir(project({}), async () => {
+		const { pi, emit, modelCalls } = fakePi();
+		models(pi);
+		await emit("input", { text: "/review", source: "interactive" }, modelCtx(dir, { available: ["openai"] }));
+		assert.equal(modelCalls[0], "model:openai/strong");
+
+		const none = modelCtx(dir, { available: [] });
+		await emit("input", { text: "/review", source: "interactive" }, none);
+		assert.equal(modelCalls.length, 2, "nothing switched");
+		assert.ok(none.notes.some((n) => /no available model/i.test(n)));
+	});
+});
+
+test("models: project routing needs trust; global routing always applies", async () => {
+	const dir = project({ ".pi/model-routing.json": routingFile });
+	const agentDir = project({ "model-routing.json": JSON.stringify({ modes: { cheap: { model: "anthropic/mid", thinking: "low" } }, commands: { review: "cheap" } }) });
+	await withAgentDir(agentDir, async () => {
+		const { pi, emit, modelCalls } = fakePi();
+		models(pi);
+		await emit("input", { text: "/review", source: "interactive" }, modelCtx(dir, { trusted: false }));
+		assert.deepEqual(modelCalls, ["model:anthropic/mid", "thinking:low"], "untrusted project: global only");
+	});
+});
+
+test("models: /mode switches manually, lists routes, and completes mode names", async () => {
+	const dir = project({ ".pi/model-routing.json": routingFile });
+	await withAgentDir(project({}), async () => {
+		const { pi, commands, modelCalls } = fakePi();
+		models(pi);
+		const mode = commands.get("mode");
+		const c = modelCtx(dir);
+		await mode.handler("deep", c);
+		assert.deepEqual(modelCalls, ["model:anthropic/strong", "thinking:high"]);
+		await mode.handler("", c);
+		assert.ok(c.notes.some((n) => /review → deep/.test(n)), "listing goes to the user, not the model");
+		await mode.handler("nope", c);
+		assert.ok(c.notes.some((n) => /unknown mode "nope"/.test(n)));
+		const items = await mode.getArgumentCompletions("d");
+		assert.deepEqual(items.map((i: any) => i.value), ["deep"]);
+	});
+});
+
+// ---------- /kit-init ----------
+
+test("/kit-init --yes creates missing project files and leaves existing ones untouched", async () => {
+	const dir = project({ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }), ".pi/guard.json": '{"block":["mine"]}' });
+	const { pi, commands } = fakePi();
+	init(pi);
+	const c = ctx(dir, { hasUI: false });
+	await commands.get("kit-init").handler("--yes", c);
+
+	assert.deepEqual(JSON.parse(readFileSync(join(dir, ".pi/verify.json"), "utf8")).commands, ["npm test"]);
+	assert.equal(readFileSync(join(dir, ".pi/guard.json"), "utf8"), '{"block":["mine"]}', "existing file untouched");
+	assert.ok(JSON.parse(readFileSync(join(dir, ".pi/model-routing.json"), "utf8")).commands.review);
+	assert.deepEqual(JSON.parse(readFileSync(join(dir, ".pi/settings.json"), "utf8")).packages, ["npm:pi-subagents"]);
+
+	const before = readFileSync(join(dir, ".pi/verify.json"), "utf8");
+	writeFileSync(join(dir, ".pi/verify.json"), before.replace("npm test", "npm run custom"));
+	await commands.get("kit-init").handler("--yes", c);
+	assert.match(readFileSync(join(dir, ".pi/verify.json"), "utf8"), /npm run custom/, "second run never overwrites");
+});
+
+test("/kit-init asks per file, writes only what was accepted, and offers /onboard", async () => {
+	const dir = project({});
+	const { pi, commands, sent } = fakePi();
+	init(pi);
+
+	const declined = ctx(dir, { confirm: false });
+	await commands.get("kit-init").handler("", declined);
+	assert.equal(existsSync(join(dir, ".pi/verify.json")), false, "declined: nothing written");
+	assert.ok(declined.asked.some((q) => q.includes(".pi/verify.json")));
+	assert.equal(sent.length, 0);
+
+	const accepted = ctx(dir, { confirm: true });
+	await commands.get("kit-init").handler("", accepted);
+	assert.equal(existsSync(join(dir, ".pi/verify.json")), true);
+	assert.ok(accepted.asked.some((q) => /onboard/i.test(q)));
+	assert.deepEqual(sent.at(-1), { message: { user: "/onboard" }, options: { expandPromptTemplates: true } });
+});
+
+test("/kit-init without UI and without --yes only reports the plan", async () => {
+	const dir = project({});
+	const { pi, commands, sent } = fakePi();
+	init(pi);
+	await commands.get("kit-init").handler("", ctx(dir, { hasUI: false }));
+	assert.equal(existsSync(join(dir, ".pi")), false);
+	assert.match(sent.at(-1)!.message.content, /--yes/);
+});

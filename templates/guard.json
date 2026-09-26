@@ -1,0 +1,6 @@
+{
+  "block": ["\\bdocker\\s+compose\\s+down\\s+-v\\b"],
+  "confirm": ["\\bnpm\\s+run\\s+seed\\b"],
+  "allow": ["^git push origin (feat|fix|chore)/"],
+  "protectedPaths": ["db/migrations/applied/", "src/generated/"]
+}

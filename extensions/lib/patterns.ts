@@ -1,0 +1,214 @@
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
+export type GuardAction = "allow" | "confirm" | "block";
+
+export interface GuardDecision {
+	action: GuardAction;
+	reason?: string;
+}
+
+/** Project overrides, read from `.pi/guard.json`. Regexes are JavaScript source strings. */
+export interface GuardConfig {
+	/** Extra commands to block outright. */
+	block?: string[];
+	/** Extra commands that need human confirmation. */
+	confirm?: string[];
+	/** Commands exempt from confirmation. Never overrides a block. */
+	allow?: string[];
+	/** Path prefixes (relative to the project) that must not be written or edited. */
+	protectedPaths?: string[];
+}
+
+const ALLOW: GuardDecision = { action: "allow" };
+
+const CONFIRM_RULES: Array<[RegExp, string]> = [
+	[/\bgit\b.*\bpush\b/, "pushes to a remote"],
+	[/\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+release\s+create\b|\bfastlane\b/, "publishes a release"],
+	[/\b(npm|pnpm|yarn|bun)\s+(run\s+)?deploy\b|\b(vercel|netlify|fly|flyctl|firebase|wrangler)\b.*\b(deploy|--prod)\b/, "deploys"],
+	[/\bterraform\s+(apply|destroy)\b|\bpulumi\s+(up|destroy)\b/, "changes infrastructure"],
+	[/\bkubectl\s+(apply|delete|replace|rollout|scale|patch|edit)\b|\bhelm\s+(install|upgrade|uninstall|rollback)\b/, "changes a cluster"],
+	[
+		/\bprisma\s+(migrate\s+(deploy|reset)|db\s+push)\b|\brails\s+db:(migrate|drop|reset|rollback)\b|\balembic\s+(upgrade|downgrade)\b|\bflyway\s+(migrate|clean)\b|\bknex\s+migrate\b|\bdb:migrate\b|\bmanage\.py\s+migrate\b|\bmigrate\s+(up|deploy|reset)\b/,
+		"runs a database migration",
+	],
+	[/\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE)\b/i, "destroys database data"],
+	[/\bgit\b.*\breset\s+--hard\b|\bgit\b.*\bclean\b.*\s-[a-zA-Z]*f|\bgit\b.*\bbranch\b.*\s-D\b|\bgit\b.*\bstash\s+(drop|clear)\b|\bgit\b.*\b(checkout|restore)\s+(--\s+)?\.(\s|$)|\bgit\b.*\bfilter-(branch|repo)\b/, "discards local git work"],
+	[/\bsudo\b/, "runs as root"],
+	[/\b(curl|wget)\b[^|]*\|\s*(ba|z)?sh\b/, "pipes a remote script into a shell"],
+	[/\bchmod\s+-R\s+777\b|\bdocker\s+(system|volume)\s+prune\b|\bdd\s+if=|\bmkfs\b/, "is destructive"],
+];
+
+const SECRET_EXAMPLE = /\.env\.(example|sample|template|dist)$/;
+const SECRET_PATTERNS = [
+	/(^|\/)\.env(\.[\w.-]+)?$/,
+	/(^|\/)\.envrc$/,
+	/\.(pem|key|p12|pfx|jks|keystore)$/,
+	/(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/,
+	/(^|\/)\.aws\/credentials$/,
+	/(^|\/)(credentials|secrets?)\.(json|ya?ml)$/,
+	/(^|\/)service-account[\w.-]*\.json$/,
+];
+
+export function isSecretPath(path: string): boolean {
+	const p = path.replaceAll("\\", "/");
+	if (SECRET_EXAMPLE.test(p)) return false;
+	return SECRET_PATTERNS.some((re) => re.test(p));
+}
+
+/** Decide what to do with a shell command. */
+export function checkCommand(command: string, cwd: string, config: GuardConfig): GuardDecision {
+	const segments = splitSegments(tokenize(command));
+
+	for (const segment of segments) {
+		const hard = checkSegment(segment, cwd);
+		if (hard) return hard;
+	}
+	for (const source of config.block ?? []) {
+		if (new RegExp(source).test(command)) {
+			return { action: "block", reason: `Blocked by project guard rule /${source}/ in .pi/guard.json.` };
+		}
+	}
+	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
+
+	for (const [re, what] of CONFIRM_RULES) {
+		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
+	}
+	for (const source of config.confirm ?? []) {
+		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/.` };
+	}
+	if (segments.some((segment) => segment.some(isSecretPath))) {
+		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
+	}
+	return ALLOW;
+}
+
+/** Decide what to do with a read/write/edit of a file path. */
+export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: string, config: GuardConfig): GuardDecision {
+	const absolute = resolve(cwd, path);
+	const rel = relative(cwd, absolute).replaceAll("\\", "/");
+	const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+
+	if (isSecretPath(absolute)) {
+		if (tool === "read") {
+			return {
+				action: "block",
+				reason: `Reading ${path} would send secrets to the model provider. Ask the user for the specific non-secret value you need, or read the .env.example file.`,
+			};
+		}
+		return { action: "confirm", reason: `Writing secret file ${path}.` };
+	}
+	if (tool === "read") return ALLOW;
+
+	if (/(^|\/)\.git(\/|$)/.test(inside ? rel : absolute.replaceAll("\\", "/"))) {
+		return { action: "block", reason: "Never edit .git internals directly; use git commands." };
+	}
+	const hit = (config.protectedPaths ?? []).find((prefix) => inside && rel.startsWith(prefix.replace(/^\.\//, "")));
+	if (hit) return { action: "block", reason: `${path} is protected by .pi/guard.json (${hit}). Ask the user before changing it.` };
+	if (!inside) return { action: "confirm", reason: `${path} is outside the project directory.` };
+	return ALLOW;
+}
+
+function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined {
+	if (tokens.includes("--no-verify")) {
+		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
+	}
+	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
+	const gitAt = words.indexOf("git");
+	if (gitAt !== -1) {
+		const rest = words.slice(gitAt + 1);
+		if (rest.includes("commit") && rest.some((t) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(t))) {
+			return { action: "block", reason: "git commit -n bypasses hooks. Fix what the hook reports instead." };
+		}
+		if (rest.includes("push")) {
+			const forced = rest.some((t) => t === "--force" || t === "--mirror" || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(t) || /^\+\S/.test(t));
+			if (forced) {
+				return {
+					action: "block",
+					reason: "Force-pushing rewrites shared history. Use --force-with-lease on your own branch, after the user agrees.",
+				};
+			}
+		}
+	}
+
+	const rmAt = words.indexOf("rm");
+	if (rmAt !== -1) {
+		const args = words.slice(rmAt + 1);
+		const recursive = args.some((t) => t === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(t));
+		if (recursive) {
+			const outside = args.filter((t) => !t.startsWith("-")).find((t) => isOutside(t, cwd));
+			if (outside) {
+				return { action: "block", reason: `Recursive delete of ${outside} reaches outside the project. Delete only paths inside it.` };
+			}
+		}
+	}
+	return undefined;
+}
+
+function isOutside(target: string, cwd: string): boolean {
+	if (target === "/" || target.startsWith("~") || /\$\{?HOME\b/.test(target)) return true;
+	if (target === ".." || target.startsWith("../") || target.startsWith("..\\")) return true;
+	if (isAbsolute(target)) {
+		const root = resolve(cwd);
+		const abs = resolve(target);
+		return abs !== root && !abs.startsWith(root + sep);
+	}
+	return false;
+}
+
+const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
+
+/** Minimal shell tokenizer: honours quotes and splits out control operators. */
+export function tokenize(command: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: string | null = null;
+	let has = false;
+	const push = () => {
+		if (has) tokens.push(current);
+		current = "";
+		has = false;
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i]!;
+		if (quote) {
+			if (ch === quote) quote = null;
+			else current += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			has = true;
+			continue;
+		}
+		const two = command.slice(i, i + 2);
+		if (two === "&&" || two === "||") {
+			push();
+			tokens.push(two);
+			i++;
+			continue;
+		}
+		if (ch === ";" || ch === "|" || ch === "&" || ch === "\n") {
+			push();
+			tokens.push(ch);
+			continue;
+		}
+		if (/\s/.test(ch) || ch === "<" || ch === ">") {
+			push();
+			continue;
+		}
+		current += ch;
+		has = true;
+	}
+	push();
+	return tokens;
+}
+
+/** Group tokens into simple commands separated by control operators. */
+export function splitSegments(tokens: string[]): string[][] {
+	const segments: string[][] = [[]];
+	for (const token of tokens) {
+		if (OPERATORS.has(token)) segments.push([]);
+		else segments[segments.length - 1]!.push(token);
+	}
+	return segments.filter((s) => s.length > 0);
+}
