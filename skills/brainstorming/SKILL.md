@@ -44,9 +44,10 @@ For the domain, also ask about the things that are expensive to change later. Fo
   1. Propose 2–3 approaches with trade-offs, recommended one first. Apply YAGNI to every option.
   2. Present the design in sections sized to their complexity: architecture, components and interfaces, data flow, error handling, testing, rollout or migration. Confirm each section.
   3. Design small units with one purpose and clear interfaces. In existing code, follow its patterns; include only the refactors this goal needs.
-  4. Write the spec to `docs/specs/YYYY-MM-DD-<topic>.md`, or wherever the project keeps specs.
+  4. Write the spec to `docs/specs/YYYY-MM-DD-<topic>.md`, or wherever the project keeps specs. Its second line is `Status: draft`.
   5. Self-review it: no TBDs, no contradictions, no requirement readable two ways, scope fits one plan.
-  6. Ask the user to review the file. Once approved, the next step is **writing-plans**. Invoke nothing else.
+  6. Ask the user to review the file. Only the user approves: on their explicit yes, set `Status: approved (YYYY-MM-DD)` and commit the spec. The next step is **writing-plans**. Invoke nothing else.
+  7. When a new spec replaces an old one, mark the old one `Status: superseded by <path>`.
 
 Use `../../templates/task.md` when the output is a task for someone else: numbered, testable criteria plus constraints.
 

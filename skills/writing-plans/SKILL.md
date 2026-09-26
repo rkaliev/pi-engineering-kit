@@ -16,8 +16,9 @@ Save the plan to `docs/plans/YYYY-MM-DD-<feature>.md`, or wherever the project k
 
 > Execute with the executing-plans skill. Steps use `- [ ]` checkboxes.
 
+**Status:** draft (→ approved → in progress → done)
 **Goal:** one sentence
-**Spec:** path to the approved spec
+**Spec:** path to the spec; it must say `Status: approved`. If it is still a draft, ask the user to approve it first; never approve it yourself
 **Architecture:** 2–3 sentences
 **Stack / constraints:** versions, dependency limits, platform floors, naming and copy rules. Exact values, copied from the spec or the repo.
 **Verification:** the project's commands (from AGENTS.md or `.pi/verify.json`)
@@ -63,4 +64,4 @@ Lines that decide nothing ("handle edge cases", "add validation", "TBD") are gap
 4. **Review focus:** each line has a test in its owning task.
 5. **Proportion:** if code blocks dominate, replace them with signatures and assertions.
 
-Then link the plan and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost.
+Then link the plan and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost. On approval, set the plan's `Status: approved`.

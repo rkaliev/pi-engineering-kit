@@ -12,7 +12,7 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
 ## Setup
 
 1. Work on an isolated branch or worktree (git-workflow). Never implement on `main`/`master` without explicit consent.
-2. Read the plan and its spec once. **The spec is the authority**; conflicts inside the plan resolve against it.
+2. Read the plan and its spec once. **The spec is the authority**; conflicts inside the plan resolve against it. Set the plan's `Status: in progress`.
 3. **Ledger:** create `docs/plans/<plan-name>.progress.md` (or the project's equivalent), first line `# Ledger — plan: <path>`. If it already exists and names this plan, tasks marked complete are **done**. Resume at the first incomplete one, and trust the ledger and `git log` over your memory.
 4. **Pre-flight:** for every task that consumes another task's output, compare the Interfaces blocks. Record conflicts and your rulings in the ledger.
 5. Run the verification commands once to record the baseline. Existing failures are noted in the ledger, not silently inherited.
@@ -54,4 +54,5 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 
 1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the ledger's rulings.
 2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite. Log Minor findings.
-3. Apply verification-before-completion, then use the finishing section of git-workflow.
+3. Set the plan's `Status: done` and the spec's `Status: implemented (YYYY-MM-DD)`, and tick the piece in the roadmap if there is one.
+4. Apply verification-before-completion, then use the finishing section of git-workflow.
