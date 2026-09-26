@@ -45,7 +45,7 @@ One line per numbered criterion: done / not done / not visible from code, with e
 ### Confirmed issues
 #### Critical (must fix before merge: demonstrated defect, security, data or money loss,
 ####   contract violation, visible performance regression, missing required validation)
-#### Important (should fix: design problems, missing handling, test gaps)
+#### Important (should fix: design problems, missing handling, test gaps, docs the change made stale)
 #### Minor (nice to have, with a concrete benefit)
 Each: `file:line` · trigger (inputs or conditions) · consequence · evidence (code, output,
 reproduction) · fix. State any uncertainty explicitly.

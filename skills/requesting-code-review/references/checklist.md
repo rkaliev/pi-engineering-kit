@@ -42,6 +42,6 @@ Load only the sections that match the diff.
 ## Hygiene
 - Changes are limited to the task. Unrelated fixes are called out separately.
 - Commit messages follow the repo convention (Conventional Commits by default) and say what changed.
-- Docs, AGENTS.md commands, and config examples are updated when behavior or setup changed (see writing-documentation).
+- Docs, AGENTS.md commands, and config examples are updated in the same change when behavior or setup changed; stale docs are Important, not Minor (see writing-documentation).
 - User-facing text follows the product's language and i18n conventions.
 - Web UI (accessibility, interaction states, async races, frontend performance): use the web-frontend skill's review points.

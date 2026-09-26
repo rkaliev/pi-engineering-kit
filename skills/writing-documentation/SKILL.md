@@ -25,7 +25,7 @@ Read what the repo already has: README, `docs/`, decision records or an RFC proc
 
 Keep decisions and current state apart: topic docs describe today's system, decision records explain why.
 
-Templates for a README, an ADR and a changelog entry are in `references/templates.md`.
+Templates: `references/templates.md`.
 
 ## Prose
 
@@ -40,7 +40,7 @@ Templates for a README, an ADR and a changelog entry are in `references/template
 - An exported function, type or module gets 1–3 lines: what it guarantees and when to use it. Skip parameters the signature already explains; document units, ranges, errors and side effects.
 - Inside a body, comment only the *why*: a constraint, a workaround with its reason, a non-obvious invariant. Never narrate what the next line does.
 - No commented-out code, no author or date stamps, no TODO without an issue or owner.
-- A comment that disagrees with the code is a bug. Fix one of them in the same change.
+- A comment that contradicts the code is a bug: fix one of them.
 
 ## When code changes
 
@@ -59,7 +59,7 @@ Before calling the change done, check what it made stale:
 4. Update the index (`docs/README.md`, the README docs section, `llms.txt` if the repo keeps one).
 5. Re-read as the target reader: can they do the task with only this page?
 
-Report which of these you did. An unverified command in a doc is an unverified claim.
+Report which of these you did. An unverified command in a doc is an unverified claim. To enforce these rules mechanically, propose checks from `references/checks.md`.
 
 ## Red flags
 
