@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- `brainstorming` writes a roadmap (`docs/specs/…-roadmap.md`) when a request splits into several subsystems: pieces, order, contracts, migration, open decisions. Each piece then gets its own cycle and is ticked off when finished.
+- `using-skills` resumes a large project from its roadmap.
+
 ## 0.2.2
 
 - `brainstorming` and the reviewer prompt name platform and domain skills consistently.

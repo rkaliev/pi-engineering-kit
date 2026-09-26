@@ -31,6 +31,7 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 | Bug, failing test, unexpected behavior | systematic-debugging |
 | Unfamiliar or legacy repo, no AGENTS.md | onboarding-existing-codebase |
 | New project, or a technology choice | choosing-a-stack |
+| Continuing a large project | its `docs/specs/*-roadmap.md`: next unchecked piece |
 | About to say done, fixed or passing | verification-before-completion |
 | Web, mobile or desktop code | the platform skill: web-frontend, mobile-development, desktop-development |
 | Money, payments, POS or fiscal, auth and other security-sensitive code | the domain skill: payments-and-money, pos-systems, security-review |

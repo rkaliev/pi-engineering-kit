@@ -24,7 +24,14 @@ When in doubt, take the heavier path. Hidden complexity found mid-task moves you
 ## 2. Understand
 
 1. Explore context first: relevant files, AGENTS.md, docs, recent commits.
-2. If the request contains several independent subsystems, say so and decompose it before refining any one of them. Each piece gets its own design → plan → build cycle.
+2. If the request contains several independent subsystems, say so and decompose it before refining any one of them. Write the decomposition to `docs/specs/YYYY-MM-DD-<project>-roadmap.md`:
+   - pieces, one line each: goal and boundaries, as `- [ ]` checkboxes;
+   - order and dependencies;
+   - contracts between pieces (API, data, events);
+   - migration and cut-over: what moves when;
+   - open decisions.
+
+   Get the roadmap approved first. Then each piece gets its own design → plan → build cycle, usually in a fresh session, and its checkbox is ticked after it is finished. Update the roadmap when a piece changes a contract.
 3. Ask about purpose, users, constraints and success criteria. Ask **one question per message**, multiple choice where possible. Don't re-ask what the request already answers.
 4. Write back your understanding: the outcome, the constraints and the success criteria, separating what the user said from your assumptions. Invite correction.
 
