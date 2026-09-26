@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- `brainstorming` and the reviewer prompt name platform and domain skills consistently.
+
 ## 0.2.1
 
 - Clearer description of the scope (platform, domain, new or existing code) and of the skill groups: process, starting point, platforms, high-risk domains.

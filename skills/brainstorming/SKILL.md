@@ -28,7 +28,7 @@ When in doubt, take the heavier path. Hidden complexity found mid-task moves you
 3. Ask about purpose, users, constraints and success criteria. Ask **one question per message**, multiple choice where possible. Don't re-ask what the request already answers.
 4. Write back your understanding: the outcome, the constraints and the success criteria, separating what the user said from your assumptions. Invite correction.
 
-For the domain, also ask about the things that are expensive to change later. For money: currency, rounding and idempotency. For POS: offline mode and fiscal law. For mobile and desktop: target OS versions and distribution channel. Load the domain skill if one exists.
+For the domain, also ask about the things that are expensive to change later. For money: currency, rounding and idempotency. For POS: offline mode and fiscal law. For mobile and desktop: target OS versions and distribution channel. Load the matching platform or domain skill if one exists.
 
 ## 3. Design
 
