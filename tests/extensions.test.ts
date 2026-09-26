@@ -191,6 +191,22 @@ test("verify reminds once after unverified edits and clears after a green run", 
 	assert.equal(sent.length, 2, "green run clears the gate");
 });
 
+test("verify ignores edits outside the project and doc edits by default", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	for (const path of ["README.md", "docs/specs/x.md", "/tmp/elsewhere/a.ts", "../sibling/b.ts"]) {
+		await emit("tool_result", { toolName: "write", input: { path }, isError: false }, c);
+	}
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "nothing the checks verify changed");
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+});
+
 test("run_verification reports the failing command and skips the rest", async () => {
 	const dir = project({ ".pi/verify.json": JSON.stringify({ commands: ["npm test", "npm run build"] }) });
 	const { pi, tools, execs } = fakePi({ "npm test": 1 });

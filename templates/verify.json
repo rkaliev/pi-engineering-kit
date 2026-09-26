@@ -1,4 +1,5 @@
 {
   "commands": ["npm run typecheck", "npm test"],
-  "timeoutSec": 600
+  "timeoutSec": 600,
+  "ignore": ["**/*.md", "**/*.mdx", "**/*.txt", "docs/**"]
 }

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { DEFAULT_IGNORE } from "../extensions/lib/commands.ts";
 import { detectVerifyCommands, planInit } from "../extensions/lib/init.ts";
 
 function project(files: Record<string, string>) {
@@ -50,7 +51,7 @@ test("planInit creates what is missing and never plans to overwrite", () => {
 
 	assert.equal(byTarget[".pi/guard.json"]!.status, "exists");
 	assert.equal(byTarget[".pi/verify.json"]!.status, "create");
-	assert.deepEqual(JSON.parse(byTarget[".pi/verify.json"]!.content!), { commands: ["npm test"], timeoutSec: 600 });
+	assert.deepEqual(JSON.parse(byTarget[".pi/verify.json"]!.content!), { commands: ["npm test"], timeoutSec: 600, ignore: DEFAULT_IGNORE });
 	assert.equal(byTarget[".pi/model-routing.json"]!.status, "create");
 	assert.ok(JSON.parse(byTarget[".pi/model-routing.json"]!.content!).modes.deep);
 	assert.equal(byTarget[".pi/settings.json"]!.status, "create");

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveVerifyCommands } from "./commands.ts";
+import { DEFAULT_IGNORE, resolveVerifyCommands } from "./commands.ts";
 
 export interface InitItem {
 	/** Path relative to the project root. */
@@ -28,7 +28,7 @@ export function planInit(cwd: string): InitItem[] {
 		items.push({
 			target: ".pi/verify.json",
 			status: "create",
-			content: json({ commands, timeoutSec: 600 }),
+			content: json({ commands, timeoutSec: 600, ignore: DEFAULT_IGNORE }),
 			why:
 				commands.length > 0
 					? `verification commands: ${commands.join(", ")}`

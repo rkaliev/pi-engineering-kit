@@ -7,10 +7,11 @@
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence
  *   (at most once per user message, so it can never loop).
  */
+import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
-import { commandMatches, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -85,6 +86,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("tool_result", async (event, ctx) => {
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
+			if (!countsAsEdit(String(event.input.path ?? ""), ctx.cwd)) return undefined;
 			unverified = true;
 			greenSinceEdit = new Set();
 			setStatus(ctx);
@@ -145,4 +147,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			pi.sendMessage({ customType: "verify-result", display: true, content: report });
 		},
 	});
+}
+
+/** Edits outside the project, and of files matching the verify.json `ignore` globs (docs by default), don't need a check run. */
+function countsAsEdit(path: string, cwd: string): boolean {
+	if (!path) return true;
+	const rel = relative(cwd, resolve(cwd, path));
+	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+	return !isIgnored(rel, resolveIgnore(cwd));
 }

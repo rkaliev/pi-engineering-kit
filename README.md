@@ -42,10 +42,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.5
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.6
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.5
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.6
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -93,7 +93,7 @@ Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`
 
 - **Where the commands come from:** `.pi/verify.json` (`{"commands": [...], "timeoutSec": 600}`), or else the `## Commands` section of `AGENTS.md` (the test, typecheck, lint and build lines; dev and watch commands are skipped).
 - **`/verify`** runs them and shares the result with the agent. **`run_verification`** is the tool the agent calls to get evidence.
-- **The gate:** after any `edit`/`write`, the workspace counts as unverified until every command passes, either through the tool or as an exact, unpiped bash run of that command.
+- **The gate:** after an `edit`/`write` of a file inside the project, the workspace counts as unverified until every command passes, either through the tool or as an exact, unpiped bash run of that command. Files matching `ignore` in `.pi/verify.json` don't count (default: `**/*.md`, `**/*.mdx`, `**/*.txt`, `docs/**`; set `"ignore": []` if your checks lint docs).
 - **The follow-up:** if the agent stops while the workspace is unverified, it gets one follow-up per user message asking for evidence.
 
 ### models (routing by command)

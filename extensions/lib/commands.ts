@@ -6,6 +6,41 @@ import { splitSegments, tokenize } from "./patterns.ts";
 export interface VerifyConfig {
 	commands: string[];
 	timeoutSec?: number;
+	/** Globs (relative to the project) whose edits don't make the workspace unverified. */
+	ignore?: string[];
+}
+
+/** Docs don't change what the checks verify. A project that lints them sets `"ignore": []`. */
+export const DEFAULT_IGNORE = ["**/*.md", "**/*.mdx", "**/*.txt", "docs/**"];
+
+/** The ignore globs from verify.json, or the defaults. */
+export function resolveIgnore(cwd: string): string[] {
+	const config = readProjectJson<VerifyConfig>(cwd, "verify");
+	if (Array.isArray(config.ignore)) return config.ignore.filter((g): g is string => typeof g === "string");
+	return DEFAULT_IGNORE;
+}
+
+/** Minimal glob: `**` spans directories, `*` and `?` stay within one path segment. */
+export function globToRegExp(glob: string): RegExp {
+	let re = "";
+	for (let i = 0; i < glob.length; i++) {
+		const ch = glob[i]!;
+		if (ch === "*" && glob[i + 1] === "*") {
+			i++;
+			if (glob[i + 1] === "/") {
+				i++;
+				re += "(?:.*/)?";
+			} else re += ".*";
+		} else if (ch === "*") re += "[^/]*";
+		else if (ch === "?") re += "[^/]";
+		else re += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+	}
+	return new RegExp(`^${re}$`);
+}
+
+export function isIgnored(relPath: string, globs: string[]): boolean {
+	const p = relPath.replaceAll("\\", "/");
+	return globs.some((g) => globToRegExp(g).test(p));
 }
 
 export interface ResolvedCommands {
