@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+- New platform skill `backend-services`, covering the 12-factor rules that no other skill holds:
+  - one config module validated at startup, and secrets only at runtime;
+  - one artifact promoted through every environment, with the version reported;
+  - stateless processes and separate process types;
+  - backing services attached through configuration;
+  - liveness versus readiness, and draining on SIGTERM;
+  - dev/prod parity;
+  - logs to stdout, and one-off tasks run from the release;
+  - API contracts as the source of truth.
+- New review severities: a secret in a build argument, image or client bundle is Critical. Environment access outside the config module, missing startup validation and exiting without draining are Important. Onboarding maps the configuration.
+
 ## 0.5.0
 
 - New skill `observability`:

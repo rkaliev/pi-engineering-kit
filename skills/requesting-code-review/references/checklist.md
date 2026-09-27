@@ -8,7 +8,7 @@ These don't move with the author's arguments or with how common the pattern is i
 
 | Finding | Severity |
 |---|---|
-| Secret, key or credential in code, config, logs or tests | Critical |
+| Secret, key or credential in code, config, logs, tests, a build argument, an image or a client bundle | Critical |
 | Injection, missing authorization or authentication check, unsafe deserialization | Critical |
 | Money or data loss: float money, lost update, missing idempotency or transaction on a write path | Critical |
 | A test weakened, deleted or skipped to get green | Critical |
@@ -18,6 +18,8 @@ These don't move with the author's arguments or with how common the pattern is i
 | Destructive schema change without expand/contract or a recovery path; an applied migration edited | Critical |
 | A numbered criterion without a test | Important |
 | An outbound call, queue or database wait without a deadline | Important |
+| Environment read outside the config module, or configuration not validated at startup | Important |
+| A service or worker that exits without draining in-flight work on SIGTERM | Important |
 | A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
 | Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |

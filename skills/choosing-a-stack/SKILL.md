@@ -37,7 +37,7 @@ In an existing codebase the stack is already chosen. Use what is there (changing
 | Area | Default | Consider instead when |
 |---|---|---|
 | Web frontend (then web-frontend) | TypeScript (strict) + React with a mainstream meta-framework, or the company standard | SEO- or content-heavy (SSR/SSG first), very small widget (vanilla or a small library) |
-| Backend / API | TypeScript on Node LTS, Kotlin/Java (Spring) or .NET LTS, Go for small infra services | Heavy transactional or financial domain: prefer JVM or .NET with strong typing and mature DB tooling |
+| Backend / API | TypeScript on Node LTS, Kotlin/Java (Spring) or .NET LTS, Go for small infra services | Heavy transactional or financial domain: prefer JVM or .NET with strong typing and mature DB tooling. Runtime rules: backend-services |
 | Database | PostgreSQL | Embedded, local or offline: SQLite. Analytics: a columnar store alongside, not instead |
 | Android | Kotlin + Jetpack Compose, Gradle version catalog | Payment or POS terminals: vendor SDK constraints (often Android with a fixed API level) |
 | iOS | Swift + SwiftUI (UIKit where needed), SPM | — |

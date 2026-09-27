@@ -9,6 +9,7 @@ Learn the repo from its evidence (manifests, CI, scripts, tests), not from guess
 
 ## 1. Map
 
+- **Configuration:** the environment variables, where they are read and validated, and `.env.example`.
 - **Stack and runtime:** `package.json`, lockfiles, `pyproject.toml`, `go.mod`, `Cargo.toml`, `*.csproj`/`global.json`, `build.gradle(.kts)`/`libs.versions.toml`, `Podfile`/`Package.swift`, `.nvmrc`, `.tool-versions`, Dockerfiles.
 - **Real commands:** the CI config (`.github/workflows`, `.gitlab-ci.yml`, Jenkinsfile), `Makefile`/`justfile`, package scripts, the Gradle wrapper, Xcode schemes. **CI is the truth**; the README may be stale.
 - **Structure:** entry points, modules and layers, and where business logic lives. Note generated code, vendored code, migrations and anything else that must not be hand-edited.

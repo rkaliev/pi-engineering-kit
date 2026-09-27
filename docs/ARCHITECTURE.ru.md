@@ -32,7 +32,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 │ extensions/verify.ts     → /verify, run_verification, гейт на agent_end │
 │ extensions/models.ts     → модель и thinking по команде, /mode          │
 │ extensions/init.ts       → /kit-init: .pi/ проекта одной командой       │
-│ skills/   25 скиллов (процесс, старт, платформы, домены), по описанию│
+│ skills/   26 скиллов (процесс, старт, платформы, домены), по описанию│
 │ prompts/  8 точек входа: /brainstorm /plan /implement /review …         │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -93,6 +93,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 | Скилл | Зачем |
 |---|---|
 | `web-frontend` | Семантика и минимум a11y, состояния loading / empty / error / success, гонки и устаревшие ответы, производительность, безопасность, пункты для ревью |
+| `backend-services` | Конфиг в одном модуле с проверкой при старте, один артефакт на все окружения, процессы без состояния, readiness и liveness, graceful shutdown по SIGTERM, dev ≈ prod, разовые задачи из релиза, API-контракт как источник правды (12-factor без дублирования observability и database-changes) |
 | `mobile-development` | Жизненный цикл, разрешения, безопасность, лестница проверки (unit → release-сборка → эмулятор → устройство). Android и iOS — в `references/` |
 | `desktop-development` | UI-поток, пути по платформе, IPC, подпись, автообновление, установка в чистую VM. Windows и Linux — в `references/` |
 
