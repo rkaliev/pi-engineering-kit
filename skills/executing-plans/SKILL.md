@@ -13,6 +13,7 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
 
 1. Work on an isolated branch or worktree (git-workflow). Never implement on `main`/`master` without explicit consent.
 2. Read the plan and its spec once. **The spec is the authority**; conflicts inside the plan resolve against it. Set the plan's `Status: in progress`.
+   **Drift check:** run `git diff --stat <Base>..HEAD -- <the plan's files>`. If they changed since the plan was written, record it in the ledger and re-check the affected tasks; if a task no longer fits the code, go back to writing-plans.
 3. **Ledger:** create `docs/plans/<plan-name>.progress.md` (or the project's equivalent), first line `# Ledger — plan: <path>`. If it already exists and names this plan, tasks marked complete are **done**. Resume at the first incomplete one, and trust the ledger and `git log` over your memory.
 4. **Pre-flight:** for every task that consumes another task's output, compare the Interfaces blocks. Record conflicts and your rulings in the ledger.
 5. Run the verification commands once to record the baseline. Existing failures are noted in the ledger, not silently inherited.

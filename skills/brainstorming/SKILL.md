@@ -23,7 +23,7 @@ When in doubt, take the heavier path. Hidden complexity found mid-task moves you
 
 ## 2. Understand
 
-1. Explore context first: relevant files, AGENTS.md, docs, recent commits.
+1. Build the context map first (`references/context-map.md`): request, relevant files, patterns, key types, test conventions, in-flight work, standards, stack. Then write back Intent, up to five Assumptions and the Open questions.
 2. If the request contains several independent subsystems, say so and decompose it before refining any one of them. Write the decomposition to `docs/specs/YYYY-MM-DD-<project>-roadmap.md`:
    - pieces, one line each: goal and boundaries, as `- [ ]` checkboxes;
    - order and dependencies;
@@ -31,7 +31,7 @@ When in doubt, take the heavier path. Hidden complexity found mid-task moves you
    - migration and cut-over: what moves when;
    - open decisions.
 
-   Get the roadmap approved first. Then each piece gets its own design → plan → build cycle, usually in a fresh session, and its checkbox is ticked after it is finished. Update the roadmap when a piece changes a contract.
+   Size each piece to one concern, one plan (about ten tasks at most) and one reviewable PR (roughly under 1000 changed lines); split anything bigger. Get the roadmap approved first. Then each piece gets its own design → plan → build cycle, usually in a fresh session, and its checkbox is ticked after it is finished. Update the roadmap when a piece changes a contract.
 3. Ask about purpose, users, constraints and success criteria. Ask **one question per message**, multiple choice where possible. Don't re-ask what the request already answers.
 4. Write back your understanding: the outcome, the constraints and the success criteria, separating what the user said from your assumptions. Invite correction.
 
@@ -44,8 +44,8 @@ For the domain, also ask about the things that are expensive to change later. Fo
   1. Propose 2–3 approaches with trade-offs, recommended one first. Apply YAGNI to every option.
   2. Present the design in sections sized to their complexity: architecture, components and interfaces, data flow, error handling, testing, rollout or migration. Confirm each section.
   3. Design small units with one purpose and clear interfaces. In existing code, follow its patterns; include only the refactors this goal needs.
-  4. Write the spec to `docs/specs/YYYY-MM-DD-<topic>.md`, or wherever the project keeps specs. Its second line is `Status: draft`.
-  5. Self-review it: no TBDs, no contradictions, no requirement readable two ways, scope fits one plan.
+  4. Write the spec to `docs/specs/YYYY-MM-DD-<topic>.md` (or the project's place) from `../../templates/spec.md`, keeping its exact headings. A spec over about 300 lines or ten criteria is more than one piece: go back to the roadmap.
+  5. Self-review it: no TBDs, no contradictions, no requirement readable two ways, every criterion has a way to verify it, scope fits one plan.
   6. Ask the user to review the file. Only the user approves: on their explicit yes, set `Status: approved (YYYY-MM-DD)` and commit the spec. The next step is **writing-plans**. Invoke nothing else.
   7. When a new spec replaces an old one, mark the old one `Status: superseded by <path>`.
 

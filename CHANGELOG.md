@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Spec skeleton `templates/spec.md`: Intent, Context, Success criteria (criterion + how verified), Scope in/out, Decisions, Design, Rollout, Risks and open questions. Headings are exact, each section answers one question, and `None` replaces a deleted section. A spec over about 300 lines or 10 criteria is split through the roadmap.
+- `brainstorming` builds a context map before asking anything (`references/context-map.md`), then states the intent, up to five assumptions and the open questions. Roadmap pieces are sized to one concern, one plan and one reviewable PR.
+- Plans record `Base:` (the commit SHA they were written against), and `executing-plans` checks for drift before starting.
+- `git-workflow` gains a PR description format and suggests splitting oversized PRs.
+
 ## 0.2.9
 
 - Testing standard (`test-driven-development/references/test-standard.md`), covering:
