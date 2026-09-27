@@ -16,8 +16,9 @@ A fix for a symptom is a failure. The pressure to guess is highest under time pr
 1. **Read the whole error**: the stack trace, codes, file and line numbers, and warnings above the error.
 2. **Reproduce it reliably.** Write down the exact steps. If you can't reproduce it, gather more data; don't guess.
 3. **Check what changed**: `git log`/`git diff`, dependency bumps, config, environment, data, OS or device version.
-4. **Instrument the boundaries.** In multi-component systems (UI → API → service → DB; CI → build → signing; POS → fiscal device), log what enters and leaves each boundary once. That shows where it breaks.
-5. **Trace backwards** from the bad value to where it first appears (`references/root-cause-tracing.md`). Fix at the source.
+4. **Read the telemetry first** when it happens outside your machine: a bounded, read-only query of logs and traces by request or trace id (observability).
+5. **Instrument the boundaries.** In multi-component systems (UI → API → service → DB; CI → build → signing; POS → fiscal device), log what enters and leaves each boundary once. That shows where it breaks.
+6. **Trace backwards** from the bad value to where it first appears (`references/root-cause-tracing.md`). Fix at the source.
 
 ## Phase 2: Pattern
 

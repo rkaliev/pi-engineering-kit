@@ -32,7 +32,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 │ extensions/verify.ts     → /verify, run_verification, гейт на agent_end │
 │ extensions/models.ts     → модель и thinking по команде, /mode          │
 │ extensions/init.ts       → /kit-init: .pi/ проекта одной командой       │
-│ skills/   23 скилла (процесс, старт, платформы, домены), по описанию │
+│ skills/   25 скиллов (процесс, старт, платформы, домены), по описанию│
 │ prompts/  8 точек входа: /brainstorm /plan /implement /review …         │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -102,6 +102,8 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 |---|---|
 | `payments-and-money` | Minor units или decimal, ISO 4217, идемпотентность, state machine, таймаут означает «неизвестно», webhooks, outbox, double-entry, сверка, PCI DSS scope |
 | `pos-systems` | Offline-first, очередь синхронизации, неизменяемые чеки, фискализация (54-ФЗ; для других стран — «спроси юрисдикцию»), смены X/Z, периферия за интерфейсами |
+| `observability` | Логи (уровни, статичные сообщения, поля, без PII даже в маске), корреляция request/trace id, метрики (RED/USE, ограниченные метки, гистограммы), дедлайны на каждое ожидание, алерты с runbook и на потерю телеметрии, расследование по логам ограниченными запросами |
+| `database-changes` | Миграции через expand/contract (работают со старым и новым кодом), обратимость, блокировки, бэкфилл отдельной задачей, порядок деплоя и проверка дрейфа, транзакции и outbox, защитные меры для запросов, жизненный цикл данных, миграции БД на устройствах |
 | `security-review` | STRIDE по потокам данных, чеклист (injection, authN/Z, секреты, крипто, supply chain, prompt injection), инструменты, формат находок |
 
 ---

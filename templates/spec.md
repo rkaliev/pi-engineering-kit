@@ -33,11 +33,11 @@ Links: <roadmap piece · issue · decision records · legacy map · or None>
 
 ## Design
 
-<Only what applies: components and their single responsibility, interfaces and contracts, data and schema, error handling, security and money rules, observability. Diagrams where they save words.>
+<Only what applies: components and their single responsibility, interfaces and contracts, data and schema (database-changes), error handling, security and money rules, logs, metrics and deadlines (observability). Diagrams where they save words.>
 
 ## Rollout
 
-<Migration, feature flag, cut-over, backfill, rollback. Or "None".>
+<Migration (expand/contract releases), feature flag, cut-over, backfill, alerts to watch, rollback. Or "None".>
 
 ## Risks and open questions
 

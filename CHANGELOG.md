@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+- New skill `observability`:
+  - logs: level policy, fixed messages with values in fields, no personal or payment data even masked, and each error logged once where it is handled;
+  - request and trace ids propagated through HTTP, queues and jobs;
+  - RED/USE metrics with bounded labels;
+  - a configured deadline on every wait;
+  - alerts with runbooks, including one on lost telemetry;
+  - bounded, read-only log queries when investigating.
+
+  `references/metrics-and-alerts.md` holds naming, cardinality budgets, alert templates and query recipes.
+- New skill `database-changes`:
+  - migrations that work with the old and the new code (expand/contract), are reversible and take short locks, with backfills as separate jobs;
+  - deploy order and a drift check;
+  - transactions with an outbox, and query guardrails;
+  - data lifecycle: archive, purge, retention;
+  - device databases.
+
+  `references/migration-patterns.md` holds expand/contract recipes, lock notes and a backfill template.
+- The review checklist gets new fixed severities for personal data in logs, destructive migrations, missing deadlines and unbounded metric labels. Debugging starts with telemetry for problems outside your machine.
+
 ## 0.4.0
 
 - Stricter review:

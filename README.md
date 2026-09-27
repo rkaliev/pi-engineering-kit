@@ -10,11 +10,11 @@ It works on any project, and it adapts along three independent axes:
 The process on top of them is the same everywhere: design → plan → TDD → verify → review → git.
 
 It contains:
-- **23 skills:**
+- **25 skills:**
   - **process core:** design, plan, TDD, debugging, verification, review, git, documentation, dependency updates;
   - **starting point:** choosing a stack for a new project, onboarding an existing one, changing legacy code safely;
   - **platforms:** web frontend, mobile, desktop;
-  - **high-risk domains:** payments and money, POS and fiscal, security review.
+  - **high-risk domains:** payments and money, POS and fiscal, security review, observability, database changes.
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
@@ -42,10 +42,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.4.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.5.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.4.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.5.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit

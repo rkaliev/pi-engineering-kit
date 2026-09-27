@@ -14,7 +14,11 @@ These don't move with the author's arguments or with how common the pattern is i
 | A test weakened, deleted or skipped to get green | Critical |
 | Placeholder code in shipped paths: `TODO: implement`, stub returns, `throw new Error("not implemented")`, commented-out logic | Critical |
 | Suppressed type or lint errors without a written reason: `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `@Suppress`, `# type: ignore`, `//nolint`, `@SuppressLint` | Critical |
+| Personal or payment data in logs at info or above, even masked | Critical |
+| Destructive schema change without expand/contract or a recovery path; an applied migration edited | Critical |
 | A numbered criterion without a test | Important |
+| An outbound call, queue or database wait without a deadline | Important |
+| A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
 | Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |
 | New function over ~100 lines or new file over ~1000 lines | Important |
