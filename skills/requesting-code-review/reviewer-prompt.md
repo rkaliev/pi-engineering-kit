@@ -37,6 +37,14 @@ Also read in full any new file the diff introduces.
 - One finding per root cause (merge duplicates). Leave mechanical style to formatters and linters.
   Personal preferences are Minor at most.
 - Pre-existing defects go under Out of scope, unless they stop the changed behavior from working.
+- Judge the changed lines and what they break, not the whole file. The checklist's fixed
+  severities apply as written: "the repo does this everywhere" is debt, not a licence, and a
+  severity never drops because the author argues.
+- If the diff changes the rules themselves (the agent manifest, linter or type config, review or
+  coding standards), judge the change against the rules on {BASE}.
+- Repeat round: if {PREVIOUS_REVIEW_HEAD} is given, review only {PREVIOUS_REVIEW_HEAD}..{HEAD} and
+  re-check every open finding from the previous round (fixed / still valid / withdrawn, with why).
+- No praise, no empty sections. Never invent a link, path or line number; cite only what you opened.
 
 ## Output
 ### Criteria

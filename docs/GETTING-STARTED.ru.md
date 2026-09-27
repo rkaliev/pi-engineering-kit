@@ -185,13 +185,13 @@ pi install <kit>      # для всех твоих проектов (~/.pi/agent
 
 Себе, для всех проектов:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.3.1
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.4.0
 ```
 
 Для команды — одна строка в проекте:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.3.1
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.4.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 

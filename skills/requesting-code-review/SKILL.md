@@ -14,7 +14,7 @@ A review in a fresh context catches what the author's context hides. The reviewe
 
 ## How
 
-1. **Fix the range:** `BASE=$(git merge-base <base-branch> HEAD)` (or the task's BASE) and `HEAD=$(git rev-parse HEAD)`. Commit or stash first so the review is of a known state. Include untracked files you created.
+1. **Fix the range:** `BASE=$(git merge-base <base-branch> HEAD)` (or the task's BASE) and `HEAD=$(git rev-parse HEAD)`. For a repeat round after fixes, pass the previous round's HEAD and its open findings, so only the new commits are reviewed and every earlier finding is re-checked (a rewritten history means a full review). Commit or stash first so the review is of a known state. Include untracked files you created.
 2. **Fill `reviewer-prompt.md`** with: what was built, the requirements (task file or plan and spec paths, numbered criteria), the range, the verification commands, the plan's Review focus if it has one, and `{SKILL_DIR}` = this skill's absolute directory.
 3. **Dispatch:**
    - **With a `subagent` tool:** use the `reviewer` agent (pi-subagents) or a general agent with the filled prompt, on the most capable model available. For large or high-risk diffs (payments, auth, migrations), you may run 2–3 reviewers in parallel with different focus (correctness, security, tests). Merge their findings and remove duplicates.
@@ -34,7 +34,7 @@ A review in a fresh context catches what the author's context hides. The reviewe
 - Separate **Confirmed** (reproduced or visible in code) from **Assumptions** (worth checking, not proven).
 - Map every numbered criterion to done / not done / not visible in the code.
 - Flag scope creep: changes the task didn't ask for.
-- Severity reflects the effect on a real user, not the reviewer's taste. A visible performance regression is Critical.
+- Severity reflects the effect on a real user, not the reviewer's taste. A visible performance regression is Critical. The fixed severities at the top of the checklist (secrets, placeholder code, suppressed errors, weakened tests…) are not negotiable.
 - If there are no findings, say so, with the scope covered and its limits. An AI review informs human approval; it never replaces it.
 
 The checklist is in `references/checklist.md`. Load the sections that match the diff (payments, UI, DB, and so on). The platform and domain skills (web-frontend, mobile-development, desktop-development, payments-and-money, pos-systems, security-review) add their own review points.

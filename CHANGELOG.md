@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+- Stricter review:
+  - fixed severities: secrets, placeholder code, suppressed type or lint errors and weakened tests are Critical; a criterion without a test, stale docs, an unmarked breaking change and oversized new functions or files are Important;
+  - severities don't drop for "the repo does this everywhere" or because the author argues;
+  - changes to the rules themselves are judged against the base branch;
+  - repeat review rounds cover only the new commits and re-check every open finding;
+  - no praise, and no invented links.
+- `receiving-code-review`: every comment ends fixed or answered, and nothing is called resolved while a blocker is open.
+- `git-workflow`:
+  - fetch before branching, and don't work on a branch that is already merged;
+  - follow the project's commit linter, and order split commits so each one is green;
+  - a new section, "After a push": follow CI with the host's tool, make at most two fix attempts per failing check, never merge, and rebase with `--force-with-lease=<branch>:<sha>`.
+  - `finish` offers to follow CI.
+- New skill `updating-dependencies`: one dependency at a time, the changelog read, majors and new dependencies only with approval, security first, the lockfile changed only by the package manager, and platform constraints for mobile and POS.
+- `verification-before-completion`: long-running processes run in the background; stop only the ones you started.
+
 ## 0.3.1
 
 - Approval gate: if a spec or plan in `docs/specs` or `docs/plans` has the status approved, implemented, superseded or done but isn't committed, the agent can't finish its turn until it commits the file. The reminder comes once per prompt; drafts and plans in progress don't count. `writing-plans` commits the plan on approval.

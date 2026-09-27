@@ -28,6 +28,8 @@ If you haven't run the check in this session after your last change, you can't c
 | Subagent finished | You inspected the diff and ran the checks | Its "DONE" report |
 | Works on the device or UI | You exercised it (emulator, browser, screenshot) | Unit tests alone |
 
+Long-running processes you need (dev server, watcher, emulator) run in the background. Stop only the ones you started, never someone else's, and say which ports you used.
+
 ## Report honestly
 
 The final message lists:

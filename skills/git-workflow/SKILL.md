@@ -7,11 +7,11 @@ description: Use when starting work that needs an isolated branch or worktree, w
 
 ## Before starting: isolate
 
-1. **Detect the current state.**
+1. **Detect the current state.** Fetch first (`git fetch`), so that the base is current.
    - Isolation: `git rev-parse --git-dir` differs from `--git-common-dir` means you are already in a worktree.
    - Branch: `git branch --show-current`.
    - Uncommitted changes: `git status --porcelain`.
-2. **On `main`/`master`**, or with someone else's uncommitted changes: create a branch, or ask first. Never stash or reset work you didn't create.
+2. **On `main`/`master`**, on a branch that is already merged into the base, or with someone else's uncommitted changes: create a branch from the fresh base, or ask first. Never stash or reset work you didn't create.
 3. **Parallel work** needs a worktree. Use the project's convention, else `.worktrees/<branch>`, and confirm the path is ignored first (`git check-ignore -q .worktrees`; if it isn't, add it to `.gitignore` in its own commit).
    ```bash
    git worktree add .worktrees/<branch> -b <branch>
@@ -26,7 +26,8 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 - Stage specific paths (`git add path/…`), never secrets, build output or unrelated changes. Review `git diff --staged` before committing.
 - Respect hooks. **Never** use `--no-verify`, `-n`, or `commit --amend` on pushed commits. Never rewrite shared history: no `push --force`. On your own branch after the user agrees, use `--force-with-lease`.
 - Follow the project's rules on trailers (some forbid AI co-author lines) and on issue IDs in messages.
-- Resolve conflicts by rebasing onto the base branch, not by merging it into a PR branch, unless the repo prefers merging.
+- If the repo has a commit linter (commitlint, a `commit-msg` hook), follow its config and fix the message rather than bypass it. When one change becomes several commits, order them so each one is green: build and config, then code, then tests, then docs.
+- Resolve conflicts by rebasing onto the base branch, not by merging it into a PR branch, unless the repo prefers merging. Rebasing your own pushed branch uses `--force-with-lease=<branch>:<sha before the rebase>`, after the user agrees.
 
 ## Finishing a branch
 
@@ -41,3 +42,11 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 4. Remove only worktrees you created, and only after merge or discard. Never delete a worktree or branch with unpushed work that you didn't create.
 
 Pushing, opening PRs, and merging are outward-facing: do them only on the user's choice.
+
+## After a push
+
+When the user wants CI followed:
+- Watch with the host's own tool (`gh pr checks --watch`, `gh run watch`, `glab ci status --live`), in the background, rather than a hand-written polling loop.
+- A failing check gets a root cause first (systematic-debugging), then a fix, commit and push. At most two attempts per check; then stop and ask.
+- A "changes requested" review goes through receiving-code-review; don't keep pushing around it.
+- Never merge yourself, and never re-run a red check hoping it passes.

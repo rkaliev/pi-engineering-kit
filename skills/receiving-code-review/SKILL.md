@@ -15,6 +15,7 @@ Review feedback is a set of technical claims to verify, not orders to obey or pr
 4. **Evaluate**: is it correct for *this* codebase? Does it break existing behavior? Is there a reason for the current implementation (compatibility, a legal requirement, a device quirk)? Does it contradict an earlier decision by the user?
 5. **Respond** with a technical acknowledgment or with reasoned pushback.
 6. **Implement** one item at a time, in this order: blocking issues (breakage, security, money), simple fixes, complex fixes. Test each one and check for regressions.
+7. **Account for every item.** Each comment ends either fixed (with where) or answered (with why not). None is skipped silently. Don't call the review resolved while a blocking item is open, and don't reply again to a thread whose latest message is already yours.
 
 ## Pushback is part of the job
 

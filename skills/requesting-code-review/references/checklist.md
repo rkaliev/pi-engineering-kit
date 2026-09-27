@@ -1,6 +1,24 @@
 # Review checklist
 
-Load only the sections that match the diff.
+Load the fixed severities always, and only the other sections that match the diff.
+
+## Fixed severities
+
+These don't move with the author's arguments or with how common the pattern is in the repo.
+
+| Finding | Severity |
+|---|---|
+| Secret, key or credential in code, config, logs or tests | Critical |
+| Injection, missing authorization or authentication check, unsafe deserialization | Critical |
+| Money or data loss: float money, lost update, missing idempotency or transaction on a write path | Critical |
+| A test weakened, deleted or skipped to get green | Critical |
+| Placeholder code in shipped paths: `TODO: implement`, stub returns, `throw new Error("not implemented")`, commented-out logic | Critical |
+| Suppressed type or lint errors without a written reason: `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `@Suppress`, `# type: ignore`, `//nolint`, `@SuppressLint` | Critical |
+| A numbered criterion without a test | Important |
+| Docs the change made stale | Important |
+| Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |
+| New function over ~100 lines or new file over ~1000 lines | Important |
+| Naming, readability, small duplication | Minor |
 
 ## Correctness
 - Wrong variable (shadowed, copy-pasted, from an outer scope); off-by-one errors; inverted conditions.
