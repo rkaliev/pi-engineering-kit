@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Approval gate: if a spec or plan in `docs/specs` or `docs/plans` has the status approved, implemented, superseded or done but isn't committed, the agent can't finish its turn until it commits the file. The reminder comes once per prompt; drafts and plans in progress don't count. `writing-plans` commits the plan on approval.
+
 ## 0.3.0
 
 - Spec skeleton `templates/spec.md`: Intent, Context, Success criteria (criterion + how verified), Scope in/out, Decisions, Design, Rollout, Risks and open questions. Headings are exact, each section answers one question, and `None` replaces a deleted section. A spec over about 300 lines or 10 criteria is split through the roadmap.

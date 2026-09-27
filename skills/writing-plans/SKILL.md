@@ -71,4 +71,4 @@ Lines that decide nothing ("handle edge cases", "add validation", "TBD") are gap
 5. **Proportion:** if code blocks dominate, replace them with signatures and assertions. Every step ends in something checkable: a command with its expected output, or an observable behavior.
 6. **Docs:** Post-implementation names every doc the change affects (writing-documentation).
 
-Then link the plan and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost. On approval, set the plan's `Status: approved`.
+Then link the plan and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost. On approval, set the plan's `Status: approved` and commit it.

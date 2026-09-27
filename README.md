@@ -19,7 +19,7 @@ It contains:
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
   - **guard** blocks irreversible or secret-leaking tool calls and asks you before outward-facing ones.
-  - **verify** runs the project's checks and won't let the agent finish with unverified edits.
+  - **verify** runs the project's checks and won't let the agent finish with unverified edits, or while an approved spec or plan is uncommitted.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
 
@@ -42,10 +42,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.3.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.3.1
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.3.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.3.1
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit

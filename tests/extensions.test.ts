@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -205,6 +206,28 @@ test("verify ignores edits outside the project and doc edits by default", async 
 	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1);
+});
+
+test("verify also reminds to commit approved specs and plans", async () => {
+	const dir = project({ "docs/specs/s.md": "# S\n\nStatus: approved (2026-01-01)\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+	git("init", "-q");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /Approval gate: .*docs\/specs\/s\.md/);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "once per prompt");
+	git("add", "-A");
+	git("commit", "-qm", "docs: approve s");
+	await emit("input", { text: "next", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "committed: no reminder");
 });
 
 test("run_verification reports the failing command and skips the rest", async () => {

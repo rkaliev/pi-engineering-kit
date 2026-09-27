@@ -11,6 +11,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
+import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 
 const TAIL_CHARS = 4000;
@@ -27,6 +28,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let unverified = false;
 	let greenSinceEdit = new Set<string>();
 	let remindedThisPrompt = false;
+	let approvalRemindedThisPrompt = false;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -76,11 +78,15 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		unverified = false;
 		greenSinceEdit = new Set();
 		remindedThisPrompt = false;
+		approvalRemindedThisPrompt = false;
 		setStatus(ctx);
 	});
 
 	pi.on("input", async (event) => {
-		if (event.source !== "extension") remindedThisPrompt = false;
+		if (event.source !== "extension") {
+			remindedThisPrompt = false;
+			approvalRemindedThisPrompt = false;
+		}
 		return { action: "continue" as const };
 	});
 
@@ -104,21 +110,25 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!unverified || remindedThisPrompt) return;
-		remindedThisPrompt = true;
-		const { commands } = resolveVerifyCommands(ctx.cwd);
-		const how =
-			commands.length > 0
-				? `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`
-				: "No verification commands are configured; state exactly how the change was verified, or that it was not.";
-		pi.sendMessage(
-			{
-				customType: "verify-gate",
-				display: true,
-				content: `Verify gate: files changed since the last passing verification. ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing.`,
-			},
-			{ triggerTurn: true, deliverAs: "followUp" },
-		);
+		const parts: string[] = [];
+		if (unverified && !remindedThisPrompt) {
+			remindedThisPrompt = true;
+			const { commands } = resolveVerifyCommands(ctx.cwd);
+			const how =
+				commands.length > 0
+					? `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`
+					: "No verification commands are configured; state exactly how the change was verified, or that it was not.";
+			parts.push(`Verify gate: files changed since the last passing verification. ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing.`);
+		}
+		if (!approvalRemindedThisPrompt) {
+			const files = uncommittedApproved(ctx.cwd);
+			if (files.length > 0) {
+				approvalRemindedThisPrompt = true;
+				parts.push(approvalReminder(files));
+			}
+		}
+		if (parts.length === 0) return;
+		pi.sendMessage({ customType: "verify-gate", display: true, content: parts.join("\n\n") }, { triggerTurn: true, deliverAs: "followUp" });
 	});
 
 	pi.registerTool({
