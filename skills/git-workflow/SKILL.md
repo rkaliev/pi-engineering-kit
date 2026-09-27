@@ -47,6 +47,7 @@ Pushing, opening PRs, and merging are outward-facing: do them only on the user's
 
 When the user wants CI followed:
 - Watch with the host's own tool (`gh pr checks --watch`, `gh run watch`, `glab ci status --live`), in the background, rather than a hand-written polling loop.
+- Every check in the required gate counts, not only the ones you ran locally.
 - A failing check gets a root cause first (systematic-debugging), then a fix, commit and push. At most two attempts per check; then stop and ask.
 - A "changes requested" review goes through receiving-code-review; don't keep pushing around it.
 - Never merge yourself, and never re-run a red check hoping it passes.

@@ -20,6 +20,8 @@ These don't move with the author's arguments or with how common the pattern is i
 | An outbound call, queue or database wait without a deadline | Important |
 | Environment read outside the config module, or configuration not validated at startup | Important |
 | A service or worker that exits without draining in-flight work on SIGTERM | Important |
+| A verification command that runs locally but not in CI | Important |
+| A CI check removed, skipped, set to continue on error, or given retries | Important |
 | A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
 | Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |

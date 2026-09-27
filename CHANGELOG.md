@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+- New skill `ci-quality-gates`:
+  - CI runs at least every verification command, behind one required `gate` job;
+  - layers added per stack with approval: test hygiene, end-to-end with retries off and a test-count check, secret scanning and dependency audit, migrations and schema drift, contract regeneration, doc links, commit lint, and coverage as a scheduled floor;
+  - pinned actions, no weakened checks, and branch protection only with approval;
+  - `references/ci-templates.md` holds GitHub Actions and GitLab CI templates and a tool table by stack.
+- `kit-init` checks mechanically whether the project's CI runs every verification command, and reports it as missing or stale.
+- Optional BDD layer (`test-driven-development/references/bdd.md`): one scenario per user-visible criterion, tagged with it; Given through the fast path; stable selectors; independent scenarios; CI-made visual baselines; retries off.
+- The review checklist flags a verification command missing from CI and a weakened CI check. `git-workflow` counts every check in the gate.
+
 ## 0.6.0
 
 - New platform skill `backend-services`, covering the 12-factor rules that no other skill holds:

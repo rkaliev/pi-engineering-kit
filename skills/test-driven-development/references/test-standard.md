@@ -51,6 +51,7 @@ The same branch with different data is one parametrized test (`test.each`, table
 - Every numbered criterion of a task maps to at least one test that shows it the way a user or caller sees it. Use the cheapest level that can: an API test for a service, a UI or end-to-end test for a screen (Playwright, Espresso, XCUITest, or BDD scenarios where the project uses them), and a unit test when the criterion is pure logic.
 - One scenario = one journey. It sets up its own preconditions through the fastest path (an API call or a seeded state, not the UI), and it is independent of the others.
 - Prefer accessible roles and labels, or stable test IDs, over CSS or XPath selectors.
+- If the project uses BDD scenarios, or the user chooses them, follow `bdd.md`: one scenario per user-visible criterion, tagged with it.
 
 ## Coverage
 

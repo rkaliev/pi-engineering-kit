@@ -80,3 +80,21 @@ test("verify.json without detectable commands is still created, empty, with a hi
 	assert.deepEqual(JSON.parse(item.content!).commands, []);
 	assert.match(item.why, /fill in/i);
 });
+
+test("kit-init reports whether CI runs every verification command", async () => {
+	const { ciCoverage } = await import("../extensions/lib/ci.ts");
+	const verify = JSON.stringify({ commands: ["npm test", "npm run typecheck"] });
+	const none = project({ ".pi/verify.json": verify });
+	const ciOf = (dir: string) => planInit(dir).find((i) => i.target === "CI")!;
+	assert.equal(ciOf(none).status, "missing");
+	assert.match(ciOf(none).why, /no CI configuration/);
+
+	const stale = project({ ".pi/verify.json": verify, ".github/workflows/ci.yml": "jobs:\n  t:\n    steps:\n      - run: npm   test\n" });
+	assert.equal(ciOf(stale).status, "missing");
+	assert.match(ciOf(stale).why, /doesn't run: npm run typecheck/);
+	assert.deepEqual(ciCoverage(stale, ["npm test"]).missing, [], "whitespace is normalized");
+
+	const ok = project({ ".pi/verify.json": verify, ".gitlab-ci.yml": "test:\n  script:\n    - npm run typecheck\n    - npm test\n" });
+	assert.equal(ciOf(ok).status, "exists");
+	assert.match(ciOf(ok).why, /\.gitlab-ci\.yml runs every verification command/);
+});

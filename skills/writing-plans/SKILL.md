@@ -56,7 +56,7 @@ A task is the smallest unit that has its own test cycle and could be rejected by
 ````
 
 What each step contains:
-- **Test step:** the test name and its assertions, with the spec's exact values (quote the criterion). Each numbered criterion names its acceptance test, at the level that shows it as the user sees it.
+- **Test step:** the test name and its assertions, with the spec's exact values (quote the criterion). Each numbered criterion names its acceptance test, at the level that shows it as the user sees it; with BDD in the project, that is a scenario tagged with the criterion.
 - **Code step:** the signature, the file, and any pinned values. Include a body only for an algorithm the tests don't determine.
 - **Run step:** the command and the expected output.
 
