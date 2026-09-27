@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.9
+
+- Testing standard (`test-driven-development/references/test-standard.md`), covering:
+  - expected values from requirements, never from the code's output; characterization tests marked as such;
+  - which tests are worth writing, AAA structure and names;
+  - test doubles only for unmanaged dependencies, with your own database real;
+  - determinism, and flakes fixed at their cause (no retries);
+  - an acceptance test for each criterion;
+  - coverage as a floor, not a target;
+  - test lint rules to propose.
+- Plans name each criterion's acceptance test, and the review checklist checks the new rules.
+
 ## 0.2.8
 
 - New entry point `/docs`: an inventory and documentation map (README, `docs/NN-topic.md` chapters with a `docs/README.md` index, CHANGELOG), then writing the approved documents from the code and the implemented specs. `/docs <topic>` writes one chapter, `/docs changelog` writes changelog entries from git, and `/docs adr <decision>` writes a decision record.

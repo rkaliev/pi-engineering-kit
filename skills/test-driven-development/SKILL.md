@@ -15,10 +15,10 @@ Exceptions only with the user's explicit agreement: throwaway spikes, generated 
 
 ## The cycle
 
-1. **RED.** Write one minimal test for one behavior. Give it a clear name, use real code, and mock only true boundaries (network, clock, hardware, payment provider). Before you write it, name the production change that would make it fail.
+1. **RED.** Write one minimal test for one behavior. Give it a clear name, use real code, and mock only true boundaries (network, clock, hardware, payment provider). Take the expected values from the spec or criterion, never from running the code. Before you write it, name the production change that would make it fail.
 2. **Verify RED. Mandatory.** Run it. It must *fail* (not error) with the expected message, *because the feature is missing*.
    - Passes immediately? You're testing existing behavior. Fix the test.
-   - Errors? Fix the error and re-run until it fails for the right reason.
+   - Errors? Fix the error and re-run until it fails for the right reason. A missing module or an undefined symbol is an error, not RED: add a stub that returns a wrong value, then re-run.
 3. **GREEN.** Write the simplest code that passes. No extra options, no speculative generality, no drive-by refactors.
 4. **Verify GREEN. Mandatory.** Run the test, then **the project's full test command**. The output must be clean: no new warnings or errors. If another test fails, fix it now or report it by name. A red test you saw scroll past and didn't mention falsifies your report.
 5. **REFACTOR**, only while green: remove duplication, improve names. Re-run. Add no behavior.
@@ -34,6 +34,8 @@ Code written before its test is deleted and rewritten from the test. Don't keep 
 - **Regression proof:** a test is trustworthy once you've seen it fail with the fix reverted and pass with it restored.
 
 ## Choosing the level
+
+**Before the first test of a task, read `references/test-standard.md`**: expected values, which tests are worth writing, names (subject + circumstance + result), doubles, determinism, flakes, acceptance tests and coverage.
 
 Prefer the fastest test that exercises the real behavior: unit tests for pure logic, integration tests for adapters (DB, HTTP, payment gateway sandbox, device API), and a thin end-to-end or UI test for critical user flows only. Follow the project's existing test stack and layout.
 

@@ -12,10 +12,13 @@ Load only the sections that match the diff.
 - Performance: I/O or queries in a loop (N+1), quadratic scans where a Map or Set would do, unbounded result sets without pagination.
 
 ## Tests
-- Each criterion has a test that fails without the change (someone saw it red).
+- Each criterion has a test that fails without the change (someone saw it red), at a level that shows it as the user sees it.
+- Expected values trace to the spec or a domain rule, not to the code's current output. Characterization tests are marked as such.
+- No tests that can't fail usefully: constants, config, schema shapes, "renders", mock echo. Repeated cases are parametrized.
 - Assertions check observable behavior, not mock call counts or private internals.
 - Existing tests were not weakened, skipped, or rewritten to match new output without justification.
-- Determinism: no real clock, randomness, network, or order dependence without control. No sleeps where a condition wait belongs.
+- Determinism: no real clock, randomness, network, or order dependence without control. No sleeps where a condition wait belongs. No retries used as a fix for a flake.
+- Own database and queues are real in integration tests; only unmanaged dependencies are faked.
 - External side effects (payment, email, device) are verified at the boundary that matters.
 
 ## Security
