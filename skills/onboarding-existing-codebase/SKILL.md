@@ -43,4 +43,4 @@ If something is unclear (ownership, "is this dead code?", what not to touch), **
 
 ## 4. Hand off
 
-Summarize the stack, how to run it, the baseline results, the risky areas, and open questions. New changes then follow changing-legacy-code.
+Summarize the stack, how to run it, the baseline results, the risky areas, and open questions. If the repo has no README or docs index, offer the docs entry point to write them. New changes then follow changing-legacy-code.

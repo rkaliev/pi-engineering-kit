@@ -9,7 +9,7 @@ Docs are part of the change. They ship in the same commit or PR as the code they
 
 ## Follow the project first
 
-Read what the repo already has: README, `docs/`, decision records or an RFC process, CONTRIBUTING, the language the docs are written in, the changelog style. Extend that structure. Introduce the layout below only where nothing exists, and say so.
+Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend that structure; introduce the layout below only where nothing exists, and say so.
 
 ## Where each thing goes
 
@@ -23,7 +23,7 @@ Read what the repo already has: README, `docs/`, decision records or an RFC proc
 | API reference | Exact contract of an interface | generated from the source of truth (OpenAPI from schemas or code, typedoc, KDoc, DocC); never hand-maintained in parallel |
 | Code comments | Why this code is the way it is | next to the code |
 
-Keep decisions and current state apart: topic docs describe today's system, decision records explain why.
+**Working** documents (specs, plans, ledgers, roadmaps) record intent and progress; the **system** documents above describe what exists. When a spec is implemented, move what lasts into the topic chapter for that feature and link the chapter from the spec. Decision records explain why; topic docs describe today.
 
 Templates: `references/templates.md`.
 
@@ -66,7 +66,6 @@ Report which of these you did. An unverified command in a doc is an unverified c
 | Thought | Reality |
 |---|---|
 | "I'll update the docs later" | Later means never; the next reader gets the stale version. Same change. |
-| "The README is obvious" | Obvious to you, with this session's context. Write the quick start and run it. |
 | "I'll copy that section here too" | Two copies drift. Link to one. |
 | "Describe how it will work" | Docs describe what exists. Plans go in a spec or plan file. |
 | "The comment explains the code" | If it restates the code, delete it. |

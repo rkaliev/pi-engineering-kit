@@ -15,7 +15,7 @@ It contains:
   - **starting point:** choosing a stack for a new project, onboarding an existing one, changing legacy code safely;
   - **platforms:** web frontend, mobile, desktop;
   - **high-risk domains:** payments and money, POS and fiscal, security review.
-- **8 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`.
+- **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
   - **guard** blocks irreversible or secret-leaking tool calls and asks you before outward-facing ones.
@@ -42,10 +42,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.7
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.2.8
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.7
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.2.8
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit

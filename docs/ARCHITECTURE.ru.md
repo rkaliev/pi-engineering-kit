@@ -119,7 +119,13 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 
 ## 5. Промпты и шаблоны
 
-- **Промпты** — тонкие входы в скиллы: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`. Методика живёт только в скиллах.
+**Два вида документов.**
+- **Рабочие** — spec, план, журнал, roadmap, карта легаси. Создаются по ходу работы (`brainstorming`, `writing-plans`, `executing-plans`), записывают намерение и прогресс.
+- **Системные** — README, главы `docs/NN-topic.md` с индексом `docs/README.md`, ADR, CHANGELOG. Описывают, что есть сейчас. Создаёт их `/docs`, а поддерживают в актуальном виде блок Post-implementation и шаг docs при исполнении плана.
+
+Когда spec реализована, её долгоживущая часть переходит в главу про эту фичу, а сама spec получает ссылку на главу.
+
+- **Промпты** — тонкие входы в скиллы: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`. Методика живёт только в скиллах.
 - **`templates/AGENTS.md`**: структура, команды, правила, границы «спроси / никогда», DoD. Версии указываются ссылкой на источник, а не числом.
 - **`templates/task.md`**: нумерованные проверяемые критерии, ограничения, Out of scope.
 - **`templates/settings.json`, `guard.json`, `verify.json`, `model-routing.json`** — примеры проектных настроек.

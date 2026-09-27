@@ -29,7 +29,8 @@ Up to five inputs or failure modes the spec implies but no test yet covers, most
 
 ## Post-implementation
 Docs this change makes stale (README, docs/, decision record, CHANGELOG, agent manifest, API reference),
-each with what to update, or "none: <why>". Done in the same branch, before finishing.
+each with what to update, or "none: <why>". Name the topic chapter that describes this feature;
+a new feature gets a new `docs/NN-<feature>.md`. Done in the same branch, before finishing.
 ```
 
 ## Map files first
