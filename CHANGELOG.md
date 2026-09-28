@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- Risk sets the floor of the process: `using-skills` now says a change to CI or release pipelines, permissions, auth, secrets handling, money, database schema or deploy configuration is never Bounded, however small. Two new red flags: "It's small, so it's Bounded" and "They answered my question, so the design is approved".
+- Guard asks before any write or edit of a CI or release pipeline file: `.github/workflows/`, `.github/actions/`, `.gitlab-ci.yml`, `.gitlab/ci/`, `.circleci/`, `.buildkite/`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `Jenkinsfile`. Reading them is unchanged.
+
 ## 0.7.1
 
 - English versions of the docs in `docs/`. English is now the primary version; the Russian originals stay as `*.ru.md`, and each file links to its counterpart.

@@ -187,13 +187,13 @@ pi install <kit>      # for all your projects (~/.pi/agent/settings.json)
 
 For yourself, for all projects:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.7.1
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.8.0
 ```
 
 For a team, one line in the project:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.7.1
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.8.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 

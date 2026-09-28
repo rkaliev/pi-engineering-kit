@@ -23,6 +23,8 @@ Precedence: the user's direct instructions, then project files (AGENTS.md, CLAUD
 
 When unsure, take the heavier path. If hidden complexity shows up mid-task, stop, say so, and move up a path. Never move down mid-task.
 
+**Risk sets the floor:** CI or release pipelines, permissions, auth, secrets, money, schema and deploy config are never Bounded, however small. Extra care doesn't replace the heavier path.
+
 ## Where to start
 
 | Situation | Skill |
@@ -63,3 +65,4 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 | "I remember that skill" | Skills change. Read the current file. |
 | "Should work now" | Run it and read the output. |
 | "Quick fix, then investigate" | The first fix sets the pattern. Find the root cause first. |
+| "They answered, so the design is approved" | An answer covers only that question. Approval is a yes to the design you showed. |

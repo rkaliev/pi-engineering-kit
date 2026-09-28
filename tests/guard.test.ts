@@ -91,3 +91,14 @@ test("paths: secrets are unreadable, .git is unwritable, secrets writes need con
 	assert.equal(checkPath("write", "src/app.ts", cwd, none).action, "allow");
 	assert.equal(checkPath("write", "migrations/001.sql", cwd, { protectedPaths: ["migrations/"] }).action, "block");
 });
+
+test("paths: CI and release pipeline edits need confirmation", () => {
+	for (const path of [".github/workflows/release.yml", ".github/actions/setup/action.yml", ".gitlab-ci.yml", ".gitlab/ci/deploy.yml", ".circleci/config.yml", "azure-pipelines.yml", "Jenkinsfile", ".buildkite/pipeline.yml", "bitbucket-pipelines.yml", "/work/app/.github/workflows/ci.yml"]) {
+		assert.equal(checkPath("edit", path, cwd, none).action, "confirm", path);
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+		assert.equal(checkPath("read", path, cwd, none).action, "allow", path);
+	}
+	for (const path of ["src/ci.ts", "docs/ci.md", "docs/github/workflows.md", "tools/Jenkinsfile.md"]) {
+		assert.equal(checkPath("edit", path, cwd, none).action, "allow", path);
+	}
+});

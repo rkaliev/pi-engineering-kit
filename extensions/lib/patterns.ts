@@ -82,6 +82,9 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig):
 	return ALLOW;
 }
 
+/** CI and release pipelines run with repository credentials, so edits to them need a human look. */
+const CI_PIPELINE = /^(\.github\/(workflows|actions)\/|\.gitlab\/ci\/|\.circleci\/|\.buildkite\/|(\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|Jenkinsfile)$)/;
+
 /** Decide what to do with a read/write/edit of a file path. */
 export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: string, config: GuardConfig): GuardDecision {
 	const absolute = resolve(cwd, path);
@@ -104,6 +107,9 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	}
 	const hit = (config.protectedPaths ?? []).find((prefix) => inside && rel.startsWith(prefix.replace(/^\.\//, "")));
 	if (hit) return { action: "block", reason: `${path} is protected by .pi/guard.json (${hit}). Ask the user before changing it.` };
+	if (inside && CI_PIPELINE.test(rel)) {
+		return { action: "confirm", reason: `${path} is a CI/release pipeline; it runs with repository credentials. Show the user the design before editing it.` };
+	}
 	if (!inside) return { action: "confirm", reason: `${path} is outside the project directory.` };
 	return ALLOW;
 }

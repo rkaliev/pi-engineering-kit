@@ -15,7 +15,7 @@ This document describes how the package is built and why it is built this way. H
 
 ## 1. The idea in three sentences
 
-1. **The process scales with the size of the task.** A small fix takes the short path, an architectural change takes the full path from spec to review. When in doubt, the heavier path is chosen.
+1. **The process scales with the size of the task.** A small fix takes the short path, an architectural change takes the full path from spec to review. When in doubt, the heavier path is chosen. Risk sets the floor: CI and release pipelines, permissions, auth, secrets, money, schema and deploy config never take the short path, however small the change.
 2. **The model does not decide on its own that the work is done.** The project's checks decide that. A gate in an extension sends the agent back to work if there was no green run after its edits.
 3. **Irreversible and outward-facing actions go through a human.** The guard extension blocks dangerous commands and asks for confirmation on push, deploy, migrations and publishing.
 
@@ -125,7 +125,7 @@ Before asking questions, the agent builds a **context map** (`brainstorming/refe
 | Extension | How it works | Why this way |
 |---|---|---|
 | `bootstrap.ts` | On the `context` event, inserts `using-skills` as a **user** message after compactionSummary, deduplicated by a marker | Without bootstrap, skills are inert: the model sees only their descriptions. Changes made in `context` are not saved to history, so the rules are injected into **every** request. The message sits at a stable position with the same timestamp and lands in the prompt cache |
-| `guard.ts` | A tokenizer aware of quotes and chains (`&&`, `\|`, `;`). Three decisions: block, confirm or allow. Project `.pi/guard.json` | `allow` works only in a trusted project: someone else's repository must not weaken the protection. Without a UI, confirmation is impossible, so such calls are blocked |
+| `guard.ts` | A tokenizer aware of quotes and chains (`&&`, `\|`, `;`). Three decisions: block, confirm or allow. Project `.pi/guard.json`. Edits to CI and release pipelines (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` and similar) need confirmation | `allow` works only in a trusted project: someone else's repository must not weaken the protection. Without a UI, confirmation is impossible, so such calls are blocked |
 | `verify.ts` | Commands from `.pi/verify.json` or from `## Commands` in AGENTS.md. `/verify` and the `run_verification` tool. After an `edit`/`write`, the working copy counts as unverified. On `agent_end`, the agent gets a follow-up, **no more than one per user message** | Only an exact run of the command counts as evidence: no pipe (it hides the exit code), no `cd`, no filter |
 | `init.ts` | `/kit-init` creates the missing `.pi/verify.json`, `guard.json`, `model-routing.json` and adds `pi-subagents` to `settings.json`. It does not overwrite existing files | AGENTS.md is deliberately not written from a template: a file the agent builds from the code and verified commands is better than a stub full of placeholders |
 | `models.ts` | `model-routing.json`: modes (`deep`, `fast`, `cheap`) and a mapping of commands to modes. `/review` switches the model and thinking before the turn starts. `/mode` does it manually. A model can be a list | The strongest model is for reviews and plans, a mid-tier one for execution. The project file applies only in a trusted project. The gate's follow-up does not change the model |
