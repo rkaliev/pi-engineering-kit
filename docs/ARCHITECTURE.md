@@ -35,7 +35,7 @@ This document describes how the package is built and why it is built this way. H
 │ extensions/models.ts     → model and thinking per command, /mode                │
 │ extensions/init.ts       → /kit-init: the project's .pi/ in one command         │
 │ skills/   27 skills (process, start, platforms, domains), by description        │
-│ prompts/  8 entry points: /brainstorm /plan /implement /review …                │
+│ prompts/  9 entry points: /brainstorm /plan /implement /review …                │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json           │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```

@@ -35,7 +35,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 │ extensions/models.ts     → модель и thinking по команде, /mode          │
 │ extensions/init.ts       → /kit-init: .pi/ проекта одной командой       │
 │ skills/   27 скиллов (процесс, старт, платформы, домены), по описанию│
-│ prompts/  8 точек входа: /brainstorm /plan /implement /review …         │
+│ prompts/  9 точек входа: /brainstorm /plan /implement /review …         │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
