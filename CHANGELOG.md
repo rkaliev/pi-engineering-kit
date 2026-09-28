@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- English versions of the docs in `docs/`. English is now the primary version; the Russian originals stay as `*.ru.md`, and each file links to its counterpart.
+
 ## 0.7.0
 
 - New skill `ci-quality-gates`:

@@ -1,5 +1,7 @@
 # Быстрый старт
 
+English version: [GETTING-STARTED.md](GETTING-STARTED.md)
+
 Копировать ничего не нужно. Пакет — это обычный pi-пакет, и pi ставит его сам.
 
 Репозиторий пакета: [github.com/rkaliev/pi-engineering-kit](https://github.com/rkaliev/pi-engineering-kit). Ниже **`<kit>`** — локальный клон (`git clone https://github.com/rkaliev/pi-engineering-kit`), он нужен только для демо и разработки.
@@ -185,13 +187,13 @@ pi install <kit>      # для всех твоих проектов (~/.pi/agent
 
 Себе, для всех проектов:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.7.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.7.1
 ```
 
 Для команды — одна строка в проекте:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.7.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.7.1
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 

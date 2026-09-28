@@ -23,7 +23,7 @@ It contains:
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
 
-How it works and why, in Russian: [docs/ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md). A step-by-step Russian guide with a demo project is in [docs/GETTING-STARTED.ru.md](docs/GETTING-STARTED.ru.md). The demo project itself is [examples/demo](examples/demo): a dependency-free cart library with one task, so you can try the whole loop in a minute.
+How it works and why: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A step-by-step guide with a demo project is in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). Both are also available in Russian: [ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md), [GETTING-STARTED.ru.md](docs/GETTING-STARTED.ru.md). The demo project itself is [examples/demo](examples/demo): a dependency-free cart library with one task, so you can try the whole loop in a minute.
 
 ## Install
 
@@ -36,16 +36,16 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent    # any OS, wit
 npx -y @earendil-works/pi-coding-agent                             # run without installing
 ```
 
-Then run `pi` and `/login` to connect a model. All options (pnpm, bun, Docker, per-project version, Termux, updates, uninstall) are in the [getting-started guide](docs/GETTING-STARTED.ru.md#0-установить-pi).
+Then run `pi` and `/login` to connect a model. All options (pnpm, bun, Docker, per-project version, Termux, updates, uninstall) are in the [getting-started guide](docs/GETTING-STARTED.md#0-install-pi).
 
 Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.7.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.7.1
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.7.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.7.1
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -128,7 +128,7 @@ npm test          # extension unit tests + skill linter (frontmatter, budgets, l
 npm run typecheck
 ```
 
-Edit skills with the `writing-skills` skill. Keep `docs/ARCHITECTURE.ru.md` in sync.
+Edit skills with the `writing-skills` skill. Keep `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` in sync.
 
 **Name clashes:** pi silently keeps one prompt per name. With `pi install`, a project's own `.pi/prompts/implement.md` or `review.md` wins over this kit's; with `pi -e`, the kit wins. Rename one of them if you need both.
 
