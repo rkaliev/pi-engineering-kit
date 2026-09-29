@@ -19,8 +19,20 @@ Run exactly these; they mirror CI.
 - `<build command>`: build
 - `<dev command>`: dev server. <Run it | Don't run it; it's already open in another terminal>
 
+## Docs
+<!-- Where knowledge lives. This file loads in every session: keep facts every task needs, link the rest. -->
+- Index: `docs/README.md` lists every doc with one line<; `llms.txt` too, if the repo keeps one>.
+- Read only what the task needs. Start here:
+
+| Task | Start with |
+|---|---|
+| <Change the checkout flow> | <`docs/03-checkout.md`, `src/checkout/`> |
+
+- Which source wins: code, tests and CI say what exists; decision records (`docs/decisions/`) say which rules hold and why; topic docs describe. A contradiction is a bug: report it, don't pick one silently.
+- Working documents (`docs/specs/`, `docs/plans/`) stay on work branches and are deleted when the work is done. Only a roadmap with open pieces lives on the base branch.
+
 ## Rules
-<Only what differs from sensible defaults or from the pi-engineering-kit skills. Delete lines that don't apply.>
+<!-- Only what differs from sensible defaults or from the pi-engineering-kit skills. Delete lines that don't apply. -->
 - Business logic lives in `<path>`; UI and components only display state.
 - New dependencies need approval.
 - Money: <integer minor units | Decimal>; see the payments-and-money skill.

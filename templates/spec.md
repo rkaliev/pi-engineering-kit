@@ -1,6 +1,7 @@
 # <Title: what the user gets, ≤ 80 characters>
 
 Status: draft
+<!-- draft → approved (YYYY-MM-DD). Lives only on the work branch: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Links: <roadmap piece · issue · decision records · legacy map · or None>
 
 <!-- Each section answers one question and never repeats another. Keep every heading; write "None" instead of deleting a section. -->

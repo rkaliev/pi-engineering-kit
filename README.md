@@ -18,8 +18,8 @@ It contains:
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
-  - **guard** blocks irreversible or secret-leaking tool calls and asks you before outward-facing ones.
-  - **verify** runs the project's checks and won't let the agent finish with unverified edits, or while an approved spec or plan is uncommitted.
+  - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry working documents to the base branch, and asks you before outward-facing ones.
+  - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved spec or plan is uncommitted, or while an implemented plan or roadmap is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
 
@@ -68,7 +68,7 @@ A typical loop:
 ```
 /brainstorm add refunds to the checkout API     # design approved before code
 /plan docs/specs/2026-09-25-refunds.md          # bite-sized TDD tasks
-/implement docs/plans/2026-09-25-refunds.md     # executes, verifies, records rulings
+/implement docs/plans/2026-09-25-refunds.md     # executes, verifies; moves what lasts to docs/, deletes spec and plan
 /review                                         # fresh-context review: Confirmed vs Assumptions
 /finish                                         # verify → merge / PR / keep / discard
 ```
@@ -86,8 +86,9 @@ Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`
 | recursive `rm` outside the project (`/`, `~`, `$HOME`, `..`, other absolute paths) | DB migrations, `DROP` / `TRUNCATE` |
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`, `curl … \| sh` |
 | writing into `.git/` and `protectedPaths` | shell access to secret files; writes outside the project |
+| `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while specs, plans or ledgers are tracked; committing them on the base branch | editing CI and release pipelines |
 
-`.pi/guard.json` has four keys: `block`, `confirm`, `allow` (regex sources) and `protectedPaths` (path prefixes). `allow` only relaxes confirmation, never a block, and it applies only in trusted projects.
+`.pi/guard.json` has five keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes) and `workDocs` (the working-document folders, default `["docs/specs", "docs/plans"]`; `[]` turns that rule off). `allow` only relaxes confirmation, never a block. `allow` and `workDocs` apply only in trusted projects.
 
 ### verify
 
@@ -95,6 +96,7 @@ Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`
 - **`/verify`** runs them and shares the result with the agent. **`run_verification`** is the tool the agent calls to get evidence.
 - **The gate:** after an `edit`/`write` of a file inside the project, the workspace counts as unverified until every command passes, either through the tool or as an exact, unpiped bash run of that command. Files matching `ignore` in `.pi/verify.json` don't count (default: `**/*.md`, `**/*.mdx`, `**/*.txt`, `docs/**`; set `"ignore": []` if your checks lint docs).
 - **The follow-up:** if the agent stops while the workspace is unverified, it gets one follow-up per user message asking for evidence.
+- **Working documents** (specs, plans and their ledgers) live only on the work branch. The same follow-up asks to commit a spec or plan marked `Status: approved` (on a work branch), and to move what lasts into `docs/` and delete a plan whose checkboxes are all ticked or a roadmap with no open piece. A roadmap may stay on the base branch while it has open pieces. The ci-quality-gates templates add a `working-docs` CI job that fails the same way for people and other tools.
 
 ### models (routing by command)
 

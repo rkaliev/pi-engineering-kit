@@ -56,5 +56,5 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the ledger's rulings.
 2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite. Log Minor findings.
 3. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
-4. Set the plan's `Status: done` and the spec's `Status: implemented (YYYY-MM-DD)` with a link to its topic chapter, and tick the piece in the roadmap if there is one.
+4. **Working docs:** move what lasts out of the spec, plan and ledger: behavior into the topic chapter, decisions and lasting rulings into `docs/decisions/` (writing-documentation). Tick the piece in the roadmap, if there is one; if it was the last open piece, delete the roadmap too. Then delete the spec, plan and ledger in one commit (`docs: remove working docs for <feature>`). The guard blocks a PR or merge while they exist; git keeps them.
 5. Apply verification-before-completion, then use the finishing section of git-workflow.

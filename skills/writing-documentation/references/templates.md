@@ -68,31 +68,26 @@ File: `docs/NN-topic.md`, numbered in reading order and listed in `docs/README.m
 
 - Code: `<path>` (relative links)
 - Decisions: `docs/decisions/NNNN-…`
-- Spec it came from: `docs/specs/…`
 ```
 
-## Architecture decision record
+## Decision record
 
-File: `docs/decisions/NNNN-short-title.md`, numbered in order, never renumbered.
+File: `docs/decisions/NNNN-slug.md`, one topic per file. The number is its stable ID for citations ("see decision 0007"); numbers are never reused. The file holds only the decision in force: when it changes, rewrite the record in place; when it no longer applies, delete it and repoint the links. Git keeps every earlier version, so the record has no status, date or changelog.
 
 ```markdown
-# NNNN. <Decision in a few words>
-
-- Status: proposed | accepted | superseded by NNNN (relative link to it)
-- Date: YYYY-MM-DD
-
-## Context
-<The forces at play: requirements, constraints, what makes this a real choice.>
-
-## Options
-1. <Option A>: <pros, cons, cost>
-2. <Option B>: <pros, cons, cost>
+# NNNN. <Topic: the decision in a few words>
 
 ## Decision
-<What we chose, in one or two sentences.>
+<What holds now, as rules a reader can follow and a reviewer can check.>
+
+## Why
+<The forces: requirements, constraints, what made this a real choice.>
 
 ## Consequences
-<What becomes easier, what becomes harder, what we must now do, and what would make us revisit this.>
+<What becomes easier or harder, what we must now do, and what would make us revisit this.>
+
+## Considered and rejected
+- <Option>: <why not, in one line>. Kept so the question is not reopened without new facts.
 ```
 
 ## Changelog entry

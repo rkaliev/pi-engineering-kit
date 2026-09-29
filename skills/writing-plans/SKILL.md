@@ -7,7 +7,7 @@ description: Use when you have an approved spec or clear requirements for a mult
 
 A plan is the set of decisions the implementer cannot make alone: which files, which names and signatures, which values from the spec, which tests prove each task. Write for a capable engineer who has never seen this codebase or conversation. **A plan longer than the code it describes has written the code instead.**
 
-Save the plan to `docs/plans/YYYY-MM-DD-<feature>.md`, or wherever the project keeps plans.
+Save the plan to `docs/plans/YYYY-MM-DD-<feature>.md` on the work branch. Plans, like specs and ledgers, never reach the base branch: they are deleted when the work is finished, and the guard blocks a PR or merge while they exist.
 
 ## Header
 
@@ -16,7 +16,7 @@ Save the plan to `docs/plans/YYYY-MM-DD-<feature>.md`, or wherever the project k
 
 > Execute with the executing-plans skill. Steps use `- [ ]` checkboxes.
 
-**Status:** draft (→ approved → in progress → done)
+**Status:** draft (→ approved → in progress; deleted when finished)
 **Base:** the commit SHA this plan was written against (`git rev-parse HEAD`)
 **Goal:** one sentence
 **Spec:** path to the spec; it must say `Status: approved`. If it is still a draft, ask the user to approve it first; never approve it yourself
@@ -32,6 +32,7 @@ Up to five inputs or failure modes the spec implies but no test yet covers, most
 Docs this change makes stale (README, docs/, decision record, CHANGELOG, agent manifest, API reference),
 each with what to update, or "none: <why>". Name the topic chapter that describes this feature;
 a new feature gets a new `docs/NN-<feature>.md`. Done in the same branch, before finishing.
+What outlives the spec and this plan: behavior → that chapter; decisions and lasting rulings → `docs/decisions/`.
 ```
 
 ## Map files first

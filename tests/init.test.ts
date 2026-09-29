@@ -99,7 +99,7 @@ test("kit-init reports whether CI runs every verification command", async () => 
 	assert.match(ciOf(noDocsCheck).why, /working-docs check/);
 	assert.doesNotMatch(ciOf(noDocsCheck).why, /doesn't run/);
 
-	const gitlab = "test:\n  script:\n    - npm run typecheck\n    - npm test\nworking-docs:\n  script: # eng-kit: working-docs\n    - true\n";
+	const gitlab = "test:\n  script:\n    - npm run typecheck\n    - npm test\nworking-docs:\n  script:\n    - true\n";
 	const ok = project({ ".pi/verify.json": verify, ".gitlab-ci.yml": gitlab });
 	assert.equal(ciOf(ok).status, "exists");
 	assert.match(ciOf(ok).why, /\.gitlab-ci\.yml runs every verification command and the working-docs check/);

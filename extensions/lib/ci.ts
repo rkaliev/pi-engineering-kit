@@ -10,12 +10,12 @@ export interface CiCoverage {
 	files: string[];
 	/** Verification commands that no CI file runs. */
 	missing: string[];
-	/** A CI file carries the working-docs step (marked `eng-kit: working-docs`, from the ci-quality-gates templates). */
+	/** A CI file has the `working-docs` job from the ci-quality-gates templates. */
 	workDocsCheck: boolean;
 }
 
-/** The marker comment on the CI step that fails when working documents reach the base branch. */
-export const WORK_DOCS_MARKER = "eng-kit: working-docs";
+/** The CI job that fails when working documents reach the base branch, found by its YAML key. */
+export const WORK_DOCS_MARKER = "working-docs:";
 
 export function findCiFiles(cwd: string): string[] {
 	const files = CI_FILES.filter((f) => existsSync(join(cwd, f)));

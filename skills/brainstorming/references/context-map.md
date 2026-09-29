@@ -8,7 +8,7 @@ Gather this before asking the user anything, so that questions are about decisio
 - **Key types and interfaces:** the contracts the change consumes or changes.
 - **Test conventions:** framework, layout, levels in use, fixtures, how to run a single test.
 - **In-flight work:** open branches, uncommitted changes, recent commits in these files.
-- **Standards:** CLAUDE.md or AGENTS.md rules, decision records, linters that apply.
+- **Standards:** the agent manifest (CLAUDE.md or AGENTS.md) and the path rules that match these files, decision records, linters that apply.
 - **Stack:** versions from their source files, not from memory.
 
-Then write back: **Intent** (one sentence), **Assumptions** (at most five, each one the user can reject) and **Open questions** (only decisions the code cannot answer).
+Tickets, old plans and docs are hypotheses: check each claim you rely on against the code and its tests. Then write back: **Intent** (one sentence), **Assumptions** (at most five, each one the user can reject) and **Open questions** (only decisions the code cannot answer).

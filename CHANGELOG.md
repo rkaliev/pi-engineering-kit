@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+- Working documents never reach the base branch. Specs, plans and their ledgers live only on the work branch; at the end of the work, what lasts moves into the topic chapter and `docs/decisions/`, and they are deleted in one commit. A roadmap stays on the base branch only while it has open pieces.
+  - Guard denies `gh pr create/merge`, `glab mr create/merge`, `git merge` into the base and `git push` to the base while working documents are tracked, and denies committing them on the base branch. `.pi/guard.json` gets a `workDocs` key (default `["docs/specs", "docs/plans"]`, `[]` turns the rule off; trusted projects only).
+  - New verify follow-up (working-docs gate): a plan with every checkbox ticked, or a roadmap with no open piece, brings a follow-up once per user message to move what lasts and delete it.
+  - The approval gate counts only `Status: approved`; on the base branch it asks for a work branch first. The statuses `done`, `implemented` and `superseded` are gone.
+  - The ci-quality-gates templates add a `working-docs` job; /kit-init reports CI that lacks it.
+- Decision records are living: one topic per `docs/decisions/NNNN-slug.md`, rewritten in place or deleted, with sections Decision, Why, Consequences, Considered and rejected. `/docs decision <topic>` replaces `/docs adr`.
+- Roadmaps split work only at seams: each piece delivers value or a rollout step and is green on its own; a coherent change is never cut to fit a size.
+- The AGENTS.md template has a Docs section: the index, a task map, which source wins, and the working-docs rule. Onboarding explains that pi reads AGENTS.md from the working directory and its parents only, so packages are routed through the root task map.
+- The reviewer checks the project's own rules (AGENTS.md, decision records); breaking one is Important. The context map treats tickets, old plans and docs as hypotheses to check against the code.
+
 ## 0.8.0
 
 - Risk sets the floor of the process: `using-skills` now says a change to CI or release pipelines, permissions, auth, secrets handling, money, database schema or deploy configuration is never Bounded, however small. Two new red flags: "It's small, so it's Bounded" and "They answered my question, so the design is approved".

@@ -32,7 +32,7 @@ Create or update `AGENTS.md` from `../../templates/AGENTS.md`:
 - the boundaries (don't touch, ask first);
 - the Definition of Done.
 
-Keep it under about 150 lines. Link to docs instead of copying them. In a monorepo, a short nested `AGENTS.md` per package overrides the root one for that package.
+Keep it under about 150 lines: it loads in every session. Link to docs instead of copying them, and fill its Docs section: the index, a task map, which source wins. pi reads `AGENTS.md` from the working directory and its parents only, so in a monorepo a package's own `AGENTS.md` applies when pi starts in that package; route to package docs through the root task map.
 
 Create `.pi/verify.json` with the fast, reliable checks:
 

@@ -24,6 +24,7 @@ These don't move with the author's arguments or with how common the pattern is i
 | A CI check removed, skipped, set to continue on error, or given retries | Important |
 | A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
+| A project rule broken (agent manifest, path rule, decision record) | Important |
 | Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |
 | New function over ~100 lines or new file over ~1000 lines | Important |
 | Naming, readability, small duplication | Minor |

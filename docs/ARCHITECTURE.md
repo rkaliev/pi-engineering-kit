@@ -68,18 +68,18 @@ Thanks to this split, the package does not duplicate itself: the definition-of-d
 | Skill | What it does | Why this way |
 |---|---|---|
 | `using-skills` | The "check skills first" rule, priorities, three paths (Spike / Bounded / Architectural), a "where to start" table, the "Always true" block, red flags | It is injected into every request, so it carries the common rules: evidence before claims, scope, tests, questions at forks, secrets |
-| `brainstorming` | Design before code: work classification, one question at a time, 2–3 approaches, spec, self-review | Domain questions (money, POS, OS) are asked up front, because changing things later is expensive |
+| `brainstorming` | Design before code: work classification, one question at a time, 2–3 approaches, spec, self-review | Domain questions (money, POS, OS) are asked up front, because changing things later is expensive. A large goal becomes a roadmap split only at real seams: each piece delivers value or a rollout step and is green on its own; a coherent change is never cut to fit a size |
 | `writing-plans` | A plan as the set of decisions the executor won't make on its own: files, signatures, Interfaces, Review focus | A plan longer than the code means the code is already written in the plan. Execution is inline or one subagent per task |
-| `executing-plans` | Plan execution with a ledger file, "rulings, not stalls", a task completion contract, the "subagent per task" mode | The ledger is plain markdown: it survives compaction and needs no scripts |
+| `executing-plans` | Plan execution with a ledger file, "rulings, not stalls", a task completion contract, the "subagent per task" mode | The ledger is plain markdown: it survives compaction and needs no scripts. At the finish, what lasts moves into `docs/`, and the spec, plan and ledger are deleted in one commit |
 | `test-driven-development` | Iron Law, RED→GREEN→REFACTOR | "A test that was never red proves nothing" and "don't weaken tests to get green". For legacy, characterization tests come first |
 | `systematic-debugging` | 4 phases, root-cause tracing, "3 failed fixes means a question about the architecture" | System boundaries with examples for POS and mobile, a rule on flaky tests |
 | `verification-before-completion` | The IDENTIFY→RUN→READ→VERIFY→CLAIM gate and the format of an honest report | local / commit / push / CI / deploy / live are kept separate. A pipe into `tail` hides the exit code |
-| `requesting-code-review` | Review in a fresh context over a SHA range, a reviewer prompt template, a checklist | **Confirmed / Assumptions / Questions**; every finding has a trigger, a consequence and evidence. A failure is compared against the base revision. AI review does not replace human approval |
+| `requesting-code-review` | Review in a fresh context over a SHA range, a reviewer prompt template, a checklist | **Confirmed / Assumptions / Questions**; every finding has a trigger, a consequence and evidence. A failure is compared against the base revision. The project's own rules (AGENTS.md, the decision records the diff touches or cites) are requirements too. AI review does not replace human approval |
 | `receiving-code-review` | Verify before implementing; YAGNI via grep | A comment is rejected only with a concrete justification |
-| `git-workflow` | Isolation, baseline, commits, 4 ways to finish a branch | Never `--no-verify`, force only as `--force-with-lease`, discard only on explicit input |
+| `git-workflow` | Isolation, baseline, commits, 4 ways to finish a branch | Never `--no-verify`, force only as `--force-with-lease`, discard only on explicit input. The PR body links the spec and plan at the last commit that had them |
 | `dispatching-parallel-agents` | Grouping by independent domains, self-contained prompts | Writers with non-overlapping files; without subagents, sequentially |
-| `writing-documentation` | Where things live (README, docs/, ADR, CHANGELOG, agent manifest, API reference, comments), rules for text and comments, what goes stale when code changes | Documentation is part of the change: in the same commit and about the current state. Before "docs updated", commands are run and links are checked. If the project has its own format, that one is used. It rests on four layers: the rule in this skill; the "Post-implementation" block in every plan and the docs update step in `/implement` and `executing-plans`; stale docs in review are Important; mechanical checks (`references/checks.md`) are offered for the project's verify and CI |
-| `ci-quality-gates` | Checks in the project's CI | CI runs at least everything from verify.json; one required `gate` job; per-stack layers are added only with a "yes": test hygiene, e2e without retries and with a count of executed tests, secrets and dependency audit, migrations and drift, contracts, coverage as a floor on a schedule; branch protection only with a "yes" |
+| `writing-documentation` | Where things live (README, docs/, decision records, CHANGELOG, agent manifest, API reference, comments), rules for text and comments, what goes stale when code changes | Documentation is part of the change: in the same commit and about the current state. Before "docs updated", commands are run and links are checked. If the project has its own format, that one is used. It rests on four layers: the rule in this skill; the "Post-implementation" block in every plan and the docs update step in `/implement` and `executing-plans`; stale docs in review are Important; mechanical checks (`references/checks.md`) are offered for the project's verify and CI |
+| `ci-quality-gates` | Checks in the project's CI | CI runs at least everything from verify.json; one required `gate` job; per-stack layers are added only with a "yes": test hygiene, e2e without retries and with a count of executed tests, secrets and dependency audit, migrations and drift, contracts, coverage as a floor on a schedule; a `working-docs` job, so specs, plans and ledgers never reach the base branch from any author; branch protection only with a "yes" |
 | `updating-dependencies` | Updating, adding and removing dependencies, SDKs and toolchains | One at a time; changelog read, breaking changes written down; a major version or a new dependency only with a "yes"; vulnerabilities first; only the package manager changes the lockfile; a full run of the checks |
 | `writing-skills` | How to write and test skills | The description is triggers only. A skill is tested with a scenario run without it (RED) |
 
@@ -88,7 +88,7 @@ Thanks to this split, the package does not duplicate itself: the definition-of-d
 | Skill | Why |
 |---|---|
 | `choosing-a-stack` | The stack is chosen for reliability in the domain. A table of defaults per platform. **Choosing a stack is always a fork for the user.** Versions are checked against official sources, not memory |
-| `onboarding-existing-codebase` | CI is the truth; commands are proven by running them. The output is an AGENTS.md from the template and `.pi/verify.json` |
+| `onboarding-existing-codebase` | CI is the truth; commands are proven by running them. The output is an AGENTS.md from the template, with its Docs section filled in, and `.pi/verify.json` |
 | `changing-legacy-code` | Characterization tests, seams, sprout/wrap, strangler fig. Delete only your own orphans: a strange branch may be a requirement |
 
 ### Platforms
@@ -114,9 +114,10 @@ Thanks to this split, the package does not duplicate itself: the definition-of-d
 
 A **spec** is written from the `templates/spec.md` template:
 - sections Intent / Context / Success criteria / Scope / Decisions / Design / Rollout / Risks;
-- each has an exact heading and one question; an empty section is marked "None".
+- each has an exact heading and one question; an empty section is marked "None";
+- status `draft → approved`; a plan goes `draft → approved → in progress`. There is no "done" status: finished working documents are deleted (section 5).
 
-Before asking questions, the agent builds a **context map** (`brainstorming/references/context-map.md`) and writes down the intent, assumptions and open questions. A plan has a `Base:` with the commit SHA; during execution it is checked whether the code has drifted. A PR has a description format, and one topic per PR.
+Before asking questions, the agent builds a **context map** (`brainstorming/references/context-map.md`) and writes down the intent, assumptions and open questions. Tickets, old plans and docs count as hypotheses: each claim it relies on is checked against the code and its tests. A plan has a `Base:` with the commit SHA; during execution it is checked whether the code has drifted. A PR has a description format, and one topic per PR.
 
 ---
 
@@ -125,9 +126,9 @@ Before asking questions, the agent builds a **context map** (`brainstorming/refe
 | Extension | How it works | Why this way |
 |---|---|---|
 | `bootstrap.ts` | On the `context` event, inserts `using-skills` as a **user** message after compactionSummary, deduplicated by a marker | Without bootstrap, skills are inert: the model sees only their descriptions. Changes made in `context` are not saved to history, so the rules are injected into **every** request. The message sits at a stable position with the same timestamp and lands in the prompt cache |
-| `guard.ts` | A tokenizer aware of quotes and chains (`&&`, `\|`, `;`). Three decisions: block, confirm or allow. Project `.pi/guard.json`. Edits to CI and release pipelines (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` and similar) need confirmation | `allow` works only in a trusted project: someone else's repository must not weaken the protection. Without a UI, confirmation is impossible, so such calls are blocked |
-| `verify.ts` | Commands from `.pi/verify.json` or from `## Commands` in AGENTS.md. `/verify` and the `run_verification` tool. After an `edit`/`write`, the working copy counts as unverified. On `agent_end`, the agent gets a follow-up, **no more than one per user message** | Only an exact run of the command counts as evidence: no pipe (it hides the exit code), no `cd`, no filter |
-| `init.ts` | `/kit-init` creates the missing `.pi/verify.json`, `guard.json`, `model-routing.json` and adds `pi-subagents` to `settings.json`. It does not overwrite existing files | AGENTS.md is deliberately not written from a template: a file the agent builds from the code and verified commands is better than a stub full of placeholders |
+| `guard.ts` | A tokenizer aware of quotes and chains (`&&`, `\|`, `;`). Three decisions: block, confirm or allow. Project `.pi/guard.json`. Edits to CI and release pipelines (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` and similar) need confirmation. While working documents are tracked, `gh pr create/merge`, `glab mr create/merge`, `git merge` into the base branch and `git push` to it are blocked (an open roadmap is allowed); `git commit` on the base branch with staged working documents is blocked too. Pushing the work branch is allowed and asks, like any push. The folders come from the `workDocs` key (default `["docs/specs", "docs/plans"]`, `[]` turns the rule off) | `allow` and `workDocs` work only in a trusted project: someone else's repository must not weaken the protection. Without a UI, confirmation is impossible, so such calls are blocked |
+| `verify.ts` | Commands from `.pi/verify.json` or from `## Commands` in AGENTS.md. `/verify` and the `run_verification` tool. After an `edit`/`write`, the working copy counts as unverified. On `agent_end`, the agent gets a follow-up, **no more than one per user message**. The same follow-up carries two more gates. **Approval gate:** a spec or plan marked `Status: approved` that is not committed; on the base branch it says to create a work branch first. **Working-docs gate:** a plan with every checkbox ticked, or a roadmap with no open piece, is due: move what lasts into `docs/` and delete it | Only an exact run of the command counts as evidence: no pipe (it hides the exit code), no `cd`, no filter. An approval that isn't in git can be lost or silently edited; a finished plan left in the tree becomes stale context |
+| `init.ts` | `/kit-init` creates the missing `.pi/verify.json`, `guard.json`, `model-routing.json` and adds `pi-subagents` to `settings.json`. It does not overwrite existing files. It reports CI that doesn't run every verification command or lacks the `working-docs` job | AGENTS.md is deliberately not written from a template: a file the agent builds from the code and verified commands is better than a stub full of placeholders |
 | `models.ts` | `model-routing.json`: modes (`deep`, `fast`, `cheap`) and a mapping of commands to modes. `/review` switches the model and thinking before the turn starts. `/mode` does it manually. A model can be a list | The strongest model is for reviews and plans, a mid-tier one for execution. The project file applies only in a trusted project. The gate's follow-up does not change the model |
 
 ---
@@ -135,13 +136,28 @@ Before asking questions, the agent builds a **context map** (`brainstorming/refe
 ## 5. Prompts and templates
 
 **Two kinds of documents.**
-- **Working** documents: spec, plan, ledger, roadmap, legacy map. They are created along the way (`brainstorming`, `writing-plans`, `executing-plans`) and record intent and progress.
-- **System** documents: README, `docs/NN-topic.md` chapters with a `docs/README.md` index, ADR, CHANGELOG. They describe what exists now. `/docs` creates them, and the Post-implementation block and the docs step during plan execution keep them up to date.
+- **Working** documents record intent and progress. They are created along the way (`brainstorming`, `writing-plans`, `executing-plans`) and live only on the work branch.
+- **System** documents describe what exists now: README, `docs/NN-topic.md` chapters with a `docs/README.md` index, decision records, CHANGELOG. Only they reach the base branch. `/docs` creates them, and the Post-implementation block and the docs step during plan execution keep them up to date.
 
-Once a spec is implemented, its long-lived part moves into the chapter about that feature, and the spec itself gets a link to the chapter.
+| Document | Where it lives | Statuses | End of life |
+|---|---|---|---|
+| Spec | `docs/specs/YYYY-MM-DD-<topic>.md`, work branch only | `draft → approved` | deleted at the finish; a replaced spec is deleted, not marked |
+| Plan | `docs/plans/YYYY-MM-DD-<feature>.md`, work branch only | `draft → approved → in progress` | deleted at the finish |
+| Ledger | `docs/plans/*.progress.md`, work branch only | none | deleted at the finish |
+| Roadmap | `docs/specs/*-roadmap.md`, base branch while it has open pieces | a checkbox per piece | deleted by the last piece |
+| Decision record | `docs/decisions/NNNN-slug.md` | none: only the decision in force | rewritten in place when the decision changes, deleted when it no longer applies |
+
+**Finishing a feature** (`executing-plans`, Finish step 4): behavior moves into the topic chapter, decisions and lasting rulings into `docs/decisions/`, the roadmap piece is ticked, and then the spec, plan and ledger are deleted in one commit, `docs: remove working docs for <feature>`. Git keeps them; the PR body links them at the last commit that had them. The roadmap is the one working document on the base branch: it is the memory between pieces and sessions when there is no tracker.
+
+**Decision records** are living: one topic per file, the number is a stable ID for citations ("see decision 0007"), and the sections are Decision, Why, Consequences, Considered and rejected. There is no status, date or changelog. Personal notes go in the agent's memory, not the repo.
 
 - **Prompts** are thin entry points into skills: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`. The method lives only in skills.
-- **`templates/AGENTS.md`**: structure, commands, rules, "ask / never" boundaries, DoD. Versions are given as a link to the source, not as a number.
+- **`templates/AGENTS.md`**: structure, commands, a Docs section, rules, "ask / never" boundaries, DoD. Versions are given as a link to the source, not as a number. The Docs section holds:
+  - the index (`docs/README.md`, `llms.txt` if the repo keeps one) and a "Task → Start with" table, so the agent reads only what the task needs;
+  - which source wins: code, tests and CI say what exists; decision records say which rules hold and why; topic docs describe. A contradiction is a bug to report, not to resolve silently;
+  - the working-documents rule.
+
+  pi reads `AGENTS.md` from the working directory and its parents only, so in a monorepo a package's own `AGENTS.md` applies when pi starts in that package; the root task map routes to package docs.
 - **`templates/task.md`**: numbered testable criteria, constraints, Out of scope.
 - **`templates/settings.json`, `guard.json`, `verify.json`, `model-routing.json`** are examples of project settings.
 
@@ -154,6 +170,7 @@ Once a spec is implemented, its long-lived part moves into the chapter about tha
 - **rules against persuasion:** "it's like that everywhere in the project" is debt, not permission; severity is not lowered under the pressure of arguments; what is judged is the changed lines and what they break;
 - **rule changes in the diff itself:** if the diff changes the rules (agent manifest, linter config, standards), it is judged by the rules of the base branch;
 - **repeat round:** only what is new since the last review is checked, and every earlier finding is re-checked;
+- **project rules:** the reviewer reads AGENTS.md and the decision records the diff touches or cites; breaking one is Important;
 - **no noise:** no praise and no made-up references.
 
 **Responding to review** (`receiving-code-review`): every comment is either fixed or answered; none is silently skipped. You can't write "resolved" while a blocker is open.
@@ -170,13 +187,14 @@ Once a spec is implemented, its long-lived part moves into the chapter about tha
 
 ## Two verification loops: session and CI
 
-- **The agent session.** TDD, the verify gate after every edit, the approval gate, guard, review. Catches a problem right away, while the agent is working.
+- **The agent session.** TDD, the verify gate after every edit, the approval and working-docs gates, guard, review. Catches a problem right away, while the agent is working.
 - **The project's CI** (`ci-quality-gates`). Runs on every change, whoever made it, and does not depend on hooks or the model:
   - at least everything from `verify.json`;
   - one required `gate`;
-  - per stack and only with your "yes": test hygiene, e2e without retries and with a count of executed tests, secret scanning and dependency audit, migrations and schema drift, contracts, coverage as a floor on a schedule.
+  - per stack and only with your "yes": test hygiene, e2e without retries and with a count of executed tests, secret scanning and dependency audit, migrations and schema drift, contracts, coverage as a floor on a schedule;
+  - the `working-docs` job: fails when specs, plans or ledgers reach the base branch, whoever put them there.
 - **Linking the loops:**
-  - `kit-init` mechanically checks that CI runs every verification command;
+  - `kit-init` mechanically checks that CI runs every verification command and has the `working-docs` job;
   - review treats a command missing from CI and a weakened check as Important.
 - **BDD** is an optional acceptance layer (`test-driven-development/references/bdd.md`). Each user-visible spec criterion is one scenario tagged with that criterion. The result is a "criterion → scenario → CI" chain.
 
@@ -205,16 +223,17 @@ The plan names an acceptance test for each criterion. The reviewer checks these 
 4. Subagents come through `pi-subagents` if it is installed. Otherwise the work runs inline, with no made-up tool calls.
 5. Confirmation on any `git push`. For your own branches, a narrow `allow` in `.pi/guard.json` removes it, for example `^git push origin feat/`.
 6. Skills are in English: they trigger more precisely that way. Documentation is in English, with a Russian version of each file (`*.ru.md`).
+7. Each document keeps only its current version: working documents are deleted when the work is done, and decision records are rewritten in place. Git holds the history, so the context the agent reads stays small and consistent.
 
 ---
 
 ## 7. How it is verified
 
 - **`npm test`**:
-  - guard (block, confirm, allow, config, paths);
+  - guard (block, confirm, allow, config, paths, working documents on the base branch);
   - the command parser and the evidence rule;
   - bootstrap in every request;
-  - the verify gate (one reminder, cleared after a green run);
+  - the verify gate (one reminder, cleared after a green run), the approval and working-docs gates;
   - model routing;
   - `/kit-init`;
   - the package manifest and the linter for all skills and prompts.

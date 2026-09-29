@@ -9,7 +9,8 @@ If the task is a path to a file, read the file.
 Do not change code; this is a review only. Use the requesting-code-review skill:
 1. Look at `git status` and `git diff` against the base. Read new untracked files in full.
 2. Map each criterion to done / not done / not visible from the code.
-3. Check edge cases: empty input, whitespace, case, combined conditions, empty results, errors, concurrency. Load the matching domain skill for money, POS, security or platform code.
-4. Find anything the task did not ask for.
+3. Check the project's own rules: AGENTS.md and the decision records (`docs/decisions/`) the diff touches or cites. A broken rule is Important.
+4. Check edge cases: empty input, whitespace, case, combined conditions, empty results, errors, concurrency. Load the matching domain skill for money, POS, security or platform code.
+5. Find anything the task did not ask for.
 
 Split the answer into **Confirmed** (reproduced, or visible in the code, with file:line) and **Assumptions** (worth checking, not confirmed), then give a verdict.
