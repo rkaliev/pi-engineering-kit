@@ -230,6 +230,53 @@ test("verify also reminds to commit approved specs and plans", async () => {
 	assert.equal(sent.length, 1, "committed: no reminder");
 });
 
+test("working docs: guard blocks a PR while they exist; agent_end reminds once to delete a finished plan", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	mkdirSync(join(dir, "docs/plans"), { recursive: true });
+	writeFileSync(join(dir, "docs/plans/p.md"), "# Plan\n\n- [x] one\n- [ ] two\n");
+	git("add", "-A");
+	git("commit", "-qm", "docs: plan");
+
+	const g = fakePi();
+	guard(g.pi);
+	const bash = (command: string, c = ctx(dir)) => g.emit("tool_call", { toolName: "bash", input: { command } }, c);
+	const pr = await bash("gh pr create --fill");
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /^Guard: Working documents would reach .*docs\/plans\/p\.md/);
+	const push = ctx(dir, { confirm: true });
+	assert.equal(await bash("git push -u origin feat/a", push), undefined, "the work branch may be pushed after confirmation");
+	assert.equal(push.asked.length, 1);
+
+	mkdirSync(join(dir, ".pi"), { recursive: true });
+	writeFileSync(join(dir, ".pi/guard.json"), JSON.stringify({ workDocs: [] }));
+	assert.equal((await bash("gh pr create", ctx(dir, { trusted: false })))?.block, true, "an untrusted project cannot turn the rule off");
+	assert.equal(await bash("gh pr create", ctx(dir, { trusted: true })), undefined, "a trusted project can");
+
+	const v = fakePi();
+	verify(v.pi);
+	const c = ctx(dir);
+	await v.emit("session_start", { reason: "startup" }, c);
+	writeFileSync(join(dir, ".pi/guard.json"), "{}");
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.equal(v.sent.length, 0, "a plan with open tasks is not finished");
+	writeFileSync(join(dir, "docs/plans/p.md"), "# Plan\n\n- [x] one\n- [x] two\n");
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.equal(v.sent.length, 1);
+	assert.match(v.sent[0]!.message.content, /Working-docs gate: .*docs\/plans\/p\.md/);
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.equal(v.sent.length, 1, "once per prompt");
+	await v.emit("input", { text: "next", source: "interactive" }, c);
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.equal(v.sent.length, 2);
+});
+
 test("run_verification reports the failing command and skips the rest", async () => {
 	const dir = project({ ".pi/verify.json": JSON.stringify({ commands: ["npm test", "npm run build"] }) });
 	const { pi, tools, execs } = fakePi({ "npm test": 1 });
