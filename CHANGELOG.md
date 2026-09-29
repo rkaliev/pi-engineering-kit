@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0
+
+- New skill `ui-motion` for web, Android, iOS and desktop. It decides first whether something should move at all: frequent and keyboard-triggered actions get no motion except press feedback, and every animation needs a named purpose. Then it covers easing by movement type (no ease-in on UI), budgets under 300 ms, physical origin, interruptibility, cheap properties only, reduced motion as "gentler, not zero", and gesture physics (velocity handoff, momentum projection, rubber-banding). It includes review and audit procedures. `references/` holds the exact values and formulas and the per-platform APIs.
+- web-frontend gets two references. `state-and-data.md` covers where state lives, optimistic updates (a rollback is never silent, money is never optimistic), real content instead of placeholders, and explicit time zones. `design-system.md` covers tokens and the rule of three, closed component variants, design context in `design.md`, system fonts on operational UIs, and honest copy for destructive actions. Bundle budgets are measured on the built artifact; profiling comes before memoizing.
+- mobile-development adds touch and feel: respond on touch-down, touch targets of 44 pt / 48 dp, safe areas and insets. desktop-development adds the system animation setting and hover only with a precise pointer.
+- The review checklist gains severities for optimistic payments, silent rollbacks and motion defects. ci-quality-gates adds a bundle and size budget layer, and turns a review comment repeated a third time into a lint rule. BDD waits get a project-wide ceiling. Onboarding maps the design system, and the manifest template points UI work at `design.md`.
+- NOTICE.md credits Emil Kowalski's skills (MIT), which the motion rules adapt.
+
 ## 0.9.0
 
 - Working documents never reach the base branch. Specs, plans and their ledgers live only on the work branch; at the end of the work, what lasts moves into the topic chapter and `docs/decisions/`, and they are deleted in one commit. A roadmap stays on the base branch only while it has open pieces.

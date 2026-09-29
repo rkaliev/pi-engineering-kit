@@ -10,10 +10,10 @@ It works on any project, and it adapts along three independent axes:
 The process on top of them is the same everywhere: design → plan → TDD → verify → review → git.
 
 It contains:
-- **27 skills:**
+- **28 skills:**
   - **process core:** design, plan, TDD (with optional BDD), debugging, verification, review, git, CI quality gates, documentation, dependency updates;
   - **starting point:** choosing a stack for a new project, onboarding an existing one, changing legacy code safely;
-  - **platforms:** web frontend, backend services, mobile, desktop;
+  - **platforms:** web frontend, backend services, mobile, desktop, and UI motion across them;
   - **high-risk domains:** payments and money, POS and fiscal, security review, observability, database changes.
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**

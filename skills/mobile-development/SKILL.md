@@ -33,6 +33,11 @@ Platform details:
   - deep links and intents are validated;
   - WebViews are locked down.
   See security-review and OWASP MASVS.
+- **Touch and feel:**
+  - respond on touch-down (a pressed state at once), commit on touch-up;
+  - touch targets at least 44×44 pt (iOS) and 48×48 dp (Android), enlarged with padding rather than a bigger visual;
+  - content respects system insets and safe areas (status and navigation bars, notches, the keyboard); overlays, sheets and toasts don't slide under them;
+  - animation, gestures and haptics follow ui-motion; data rules (optimistic updates, placeholders) and destructive-action copy follow the web-frontend references (`../web-frontend/references/`).
 - **Accessibility and i18n:**
   - content descriptions or labels;
   - dynamic type and font scaling;

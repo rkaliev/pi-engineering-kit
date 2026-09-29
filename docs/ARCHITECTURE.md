@@ -34,7 +34,7 @@ This document describes how the package is built and why it is built this way. H
 │ extensions/verify.ts     → /verify, run_verification, gate on agent_end         │
 │ extensions/models.ts     → model and thinking per command, /mode                │
 │ extensions/init.ts       → /kit-init: the project's .pi/ in one command         │
-│ skills/   27 skills (process, start, platforms, domains), by description        │
+│ skills/   28 skills (process, start, platforms, domains), by description        │
 │ prompts/  9 entry points: /brainstorm /plan /implement /review …                │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json           │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -95,10 +95,11 @@ Thanks to this split, the package does not duplicate itself: the definition-of-d
 
 | Skill | Why |
 |---|---|
-| `web-frontend` | Semantics and baseline a11y, loading / empty / error / success states, races and stale responses, performance, security, review items |
+| `web-frontend` | Semantics and baseline a11y, loading / empty / error / success states, races and stale responses, performance, security, review items. In `references/`: where state lives and optimistic updates; the design system, design context and destructive-action copy |
 | `backend-services` | Config in one module validated at startup, one artifact for all environments, stateless processes, readiness and liveness, graceful shutdown on SIGTERM, dev ≈ prod, one-off tasks from the release, the API contract as the source of truth (12-factor without duplicating observability and database-changes) |
 | `mobile-development` | Lifecycle, permissions, security, a verification ladder (unit → release build → emulator → device). Android and iOS are in `references/` |
 | `desktop-development` | UI thread, per-platform paths, IPC, signing, auto-update, installation on a clean VM. Windows and Linux are in `references/` |
+| `ui-motion` | Animation and gestures on every platform. First the gate: how often the element is seen and what the motion is for; frequent and keyboard actions get none. Then easing by movement, budgets under 300 ms, interruptibility, cheap properties, reduced motion as "gentler, not zero", gesture physics. Values and per-platform APIs are in `references/` |
 
 ### High-risk domains
 

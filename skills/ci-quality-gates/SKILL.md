@@ -43,3 +43,4 @@ Requiring `gate`, requiring an up-to-date branch and blocking direct pushes to t
 - When a verification command is added or changed, change the CI in the same commit.
 - The kit-init check reports CI that doesn't run every verification command or lacks the working-docs job; fix the CI rather than dropping the check locally.
 - A change to the CI itself is reviewed like code: it may not remove a check or weaken one (review checklist).
+- A review comment made for the third time is a rule that isn't written down yet: propose a lint rule or a check for it.

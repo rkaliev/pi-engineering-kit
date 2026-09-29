@@ -34,7 +34,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 │ extensions/verify.ts     → /verify, run_verification, гейт на agent_end │
 │ extensions/models.ts     → модель и thinking по команде, /mode          │
 │ extensions/init.ts       → /kit-init: .pi/ проекта одной командой       │
-│ skills/   27 скиллов (процесс, старт, платформы, домены), по описанию│
+│ skills/   28 скиллов (процесс, старт, платформы, домены), по описанию│
 │ prompts/  9 точек входа: /brainstorm /plan /implement /review …         │
 │ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -95,10 +95,11 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 
 | Скилл | Зачем |
 |---|---|
-| `web-frontend` | Семантика и минимум a11y, состояния loading / empty / error / success, гонки и устаревшие ответы, производительность, безопасность, пункты для ревью |
+| `web-frontend` | Семантика и минимум a11y, состояния loading / empty / error / success, гонки и устаревшие ответы, производительность, безопасность, пункты для ревью. В `references/`: где живёт состояние и optimistic-обновления; дизайн-система, дизайн-контекст и тексты деструктивных действий |
 | `backend-services` | Конфиг в одном модуле с проверкой при старте, один артефакт на все окружения, процессы без состояния, readiness и liveness, graceful shutdown по SIGTERM, dev ≈ prod, разовые задачи из релиза, API-контракт как источник правды (12-factor без дублирования observability и database-changes) |
 | `mobile-development` | Жизненный цикл, разрешения, безопасность, лестница проверки (unit → release-сборка → эмулятор → устройство). Android и iOS — в `references/` |
 | `desktop-development` | UI-поток, пути по платформе, IPC, подпись, автообновление, установка в чистую VM. Windows и Linux — в `references/` |
+| `ui-motion` | Анимации и жесты на всех платформах. Сначала гейт: как часто элемент видят и зачем движение; у частых и клавиатурных действий его нет. Затем easing по типу движения, бюджеты до 300 мс, прерываемость, дешёвые свойства, reduced motion как «мягче, а не ноль», физика жестов. Значения и API платформ — в `references/` |
 
 ### Домены с высокой ценой ошибки
 

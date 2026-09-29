@@ -25,6 +25,9 @@ These don't move with the author's arguments or with how common the pattern is i
 | A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
 | A project rule broken (agent manifest, path rule, decision record) | Important |
+| A payment, or its status, shown optimistically before the server confirms | Critical |
+| A failed optimistic update rolled back silently | Important |
+| Motion on a frequent or keyboard action, ease-in on UI, scaling from 0, animated layout properties, or no reduced-motion handling (ui-motion) | Important |
 | Breaking change (API, schema, config, CLI) not called out in the PR and changelog | Important |
 | New function over ~100 lines or new file over ~1000 lines | Important |
 | Naming, readability, small duplication | Minor |

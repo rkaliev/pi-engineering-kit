@@ -111,6 +111,10 @@ Protect the main branch and require the pipeline to succeed before merge (Settin
 | Python | ruff (including `PT` rules) | `pip-audit` | `pytest -p no:cacheprovider`; randomized order with pytest-randomly |
 | .NET | analyzers as errors | `dotnet list package --vulnerable` | `dotnet test` |
 
+## Bundle and size budgets
+
+Measure the built, compressed artifact itself (for example the `.br` or `.gz` files, or the APK/IPA size), not the bundler's own summary, and fail when the measurement is empty. Keep the budget in a committed file; raising it is a reviewed diff that states the measurement and the reason. Report deltas on every PR, but ignore noise: flag a change only when it is both at least 1 KiB and at least 5 %.
+
 ## Test-count check
 
 Compare the number of tests found with the number that ran, from the runner's report (JUnit XML, a JSON reporter or shard manifests), and fail when they differ. This catches a shard that crashed before reporting.

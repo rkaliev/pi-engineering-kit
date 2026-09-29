@@ -22,7 +22,7 @@ Run exactly these; they mirror CI.
 ## Docs
 <!-- Where knowledge lives. This file loads in every session: keep facts every task needs, link the rest. -->
 - Index: `docs/README.md` lists every doc with one line<; `llms.txt` too, if the repo keeps one>.
-- Read only what the task needs. Start here:
+- Read only what the task needs. UI work starts with <`design.md`: tokens, components, motion>, if the project keeps one. Start here:
 
 | Task | Start with |
 |---|---|
