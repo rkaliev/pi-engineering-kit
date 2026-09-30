@@ -132,6 +132,8 @@ npm run typecheck
 
 Edit skills with the `writing-skills` skill. Keep `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` in sync.
 
+**Releasing:** bump `version` in `package.json`, add its `## X.Y.Z` section to `CHANGELOG.md`, and merge to `main`. CI checks the section on every PR, and after a green run on `main` it creates the `vX.Y.Z` tag and GitHub Release with that section as the notes.
+
 **Name clashes:** pi silently keeps one prompt per name. With `pi install`, a project's own `.pi/prompts/implement.md` or `review.md` wins over this kit's; with `pi -e`, the kit wins. Rename one of them if you need both.
 
 **Team installs:** `pi install -l <local path>` records a machine-specific relative path. For teams, use the git source with a version tag: `pi install -l git:…@vX.Y.Z`. See the getting-started guide.
