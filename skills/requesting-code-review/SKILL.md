@@ -28,11 +28,7 @@ A review in a fresh context catches what the author's context hides. The reviewe
 
 ## Review gate
 
-Before opening or merging a PR/MR, merging into the base branch or pushing to it, the guard asks the user unless the reviewer's last verdict is `Yes` for the commit being landed. The guard records the verdict from a `subagent` result that carries the reviewer's `Reviewed HEAD:` and `Ready to merge:` lines; you never write it yourself. Run the reviewer in the foreground, so its report comes back as that result.
-
-- A commit after the review that touches more than task files or ignored paths (docs by default) needs a new review. Deleting the task files after the final review doesn't.
-- `With fixes`, `No` and `Inconclusive` don't pass: fix, then re-review the new range.
-- A branch that only changes ignored paths needs no review. Only the user can waive the gate: by confirming, or with `"reviewGate": false` in `.pi/guard.json` (trusted projects only; the guard asks before that file is edited). A self-review in a separate pass does not satisfy the gate, so without a `subagent` tool the user decides at the prompt.
+Before a PR/MR, a merge into the base branch or a push to it, the guard asks the user unless the reviewer's last verdict is `Yes` for the change being landed. The guard records the verdict from the `reviewer` run's own lines; you never write it. Run the reviewer in the foreground and land in a command of its own. The rules (what stays valid after a review, what needs a new one, how verdicts combine, the waiver) are in `references/review-gate.md`.
 
 ## Reviewer rules (they are in the prompt too)
 

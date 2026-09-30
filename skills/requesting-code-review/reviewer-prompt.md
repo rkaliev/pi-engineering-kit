@@ -78,11 +78,12 @@ Changes the task did not ask for.
 
 ### Verdict
 Reviewed HEAD: {HEAD}
-Ready to merge: Yes / No / With fixes / Inconclusive, plus a 1–2 sentence technical reason.
+Ready to merge: <exactly one of Yes, No, With fixes, Inconclusive>
+Then a 1–2 sentence technical reason.
 Yes: no Critical or Important finding is open. With fixes: only small, clear fixes remain (they
 still need a re-review). Inconclusive: you could not read the requirements, the range or the
 project rules, or could not see enough to judge; say what was missing.
-Keep these two lines exactly in this form: the kit's review gate reads them.
+Write both lines once, with the SHA and a single verdict word: the kit's review gate reads them.
 If there are no findings, say so, and state what you covered and your limits.
 Do not say "looks good" about code you did not read. Do not inflate nitpicks.
 This review informs a human approval; it does not replace it.

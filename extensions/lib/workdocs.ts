@@ -15,7 +15,19 @@ const NEXT_SECTION = /^## /m;
 const OPEN_BOX = /^\s*[-*]\s+\[ \]/m;
 const DONE_BOX = /^\s*[-*]\s+\[[xX]\]/m;
 
-type Landing = { kind: "pr" } | { kind: "merge"; refs: string[] } | { kind: "push"; refspecs: string[]; all: boolean } | { kind: "commit" };
+/**
+ * What one command segment does to history: opens or merges a PR/MR (`target`: the branch, number or URL
+ * it names), merges, pushes, commits, or otherwise moves HEAD. `dir` is the `git -C` directory.
+ */
+export type Landing =
+	| { kind: "pr"; target?: string }
+	| { kind: "merge"; refs: string[]; dir?: string }
+	| { kind: "push"; refspecs: string[]; all: boolean; dir?: string }
+	| { kind: "commit"; dir?: string }
+	| { kind: "head"; dir?: string };
+
+/** git subcommands that create commits or move HEAD, so a landing chained after them lands a commit the guard never saw. */
+const MOVES_HEAD = new Set(["cherry-pick", "am", "rebase", "pull", "reset", "revert", "switch", "checkout"]);
 
 /**
  * Block a command that would put working documents on the base branch: opening or merging a PR/MR,
@@ -29,6 +41,7 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 	const base = baseBranch(projectDir);
 	const onBase = base !== undefined && currentBranch(projectDir) === base;
 	for (const l of landings) {
+		if (l.kind === "head") continue;
 		if (l.kind === "commit") {
 			if (!onBase) continue;
 			const staged = markdown(stagedPaths(projectDir, dirs));
@@ -47,17 +60,6 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 		}
 	}
 	return undefined;
-}
-
-/** The refs a command would land on the base branch (a PR/MR from HEAD, a merge into it, a push to it), or undefined. */
-export function landingRefs(command: string, projectDir: string): { base: string; refs: string[] } | undefined {
-	const landings = splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined && l.kind !== "commit");
-	if (landings.length === 0 || git(projectDir, ["rev-parse", "--git-dir"]) === undefined) return undefined;
-	const base = baseBranch(projectDir);
-	if (!base) return undefined;
-	const onBase = currentBranch(projectDir) === base;
-	const refs = landings.flatMap((l) => (l.kind === "pr" ? ["HEAD"] : l.kind === "merge" ? (onBase ? l.refs : []) : l.kind === "push" ? pushedToBase(l, base, onBase) : []));
-	return refs.length > 0 ? { base, refs } : undefined;
 }
 
 /** Task files whose Plan section has every checkbox ticked: implemented, so due for deletion. */
@@ -100,40 +102,51 @@ export function onBaseBranch(projectDir: string): string | undefined {
 	return base !== undefined && currentBranch(projectDir) === base ? base : undefined;
 }
 
-function currentBranch(projectDir: string): string | undefined {
+export function currentBranch(projectDir: string): string | undefined {
 	return git(projectDir, ["branch", "--show-current"]) || undefined;
 }
 
-function landing(tokens: string[]): Landing | undefined {
+export function landing(tokens: string[]): Landing | undefined {
 	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
 	for (const tool of ["gh", "glab"]) {
 		const at = words.indexOf(tool);
 		if (at === -1) continue;
-		const [noun, verb] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
-		if ((noun === "pr" || noun === "mr") && (verb === "create" || verb === "merge")) return { kind: "pr" };
+		const args = tokens.slice(tokens.indexOf(tool) + 1);
+		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
+		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
+		if (verb === "merge") return { kind: "pr", target: first };
+		const head = args.findIndex((t) => t === "--head" || t === "-H" || t === "--source-branch" || t.startsWith("--head=") || t.startsWith("--source-branch="));
+		if (head === -1) return { kind: "pr" };
+		const flag = args[head]!;
+		return { kind: "pr", target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1] };
 	}
 	if (!words.includes("git")) return undefined;
 	// Raw tokens after git: `-c key=value` keeps its value, so options and their values pair up.
 	const rest = tokens.slice(tokens.indexOf("git") + 1);
 	// The subcommand is the first word after git's own options (`-C <dir>` and `-c <key=value>` take a value).
 	let verb = 0;
-	while (verb < rest.length && rest[verb]!.startsWith("-")) verb += rest[verb] === "-C" || rest[verb] === "-c" ? 2 : 1;
+	let dir: string | undefined;
+	while (verb < rest.length && rest[verb]!.startsWith("-")) {
+		if (rest[verb] === "-C") dir = rest[verb + 1];
+		verb += rest[verb] === "-C" || rest[verb] === "-c" ? 2 : 1;
+	}
 	const args = rest.slice(verb + 1);
 	const positional = args.filter((t) => !t.startsWith("-"));
-	switch (rest[verb]) {
+	const subcommand = rest[verb] ?? "";
+	switch (subcommand) {
 		case "commit":
-			return { kind: "commit" };
+			return { kind: "commit", dir };
 		case "merge":
-			return { kind: "merge", refs: positional };
+			return { kind: "merge", refs: positional, dir };
 		case "push":
-			return { kind: "push", refspecs: positional.slice(1), all: args.includes("--all") };
+			return { kind: "push", refspecs: positional.slice(1), all: args.includes("--all"), dir };
 		default:
-			return undefined;
+			return MOVES_HEAD.has(subcommand) ? { kind: "head", dir } : undefined;
 	}
 }
 
 /** Refs whose content a push would place on the base branch. */
-function pushedToBase(l: Extract<Landing, { kind: "push" }>, base: string | undefined, onBase: boolean): string[] {
+export function pushedToBase(l: Extract<Landing, { kind: "push" }>, base: string | undefined, onBase: boolean): string[] {
 	if (!base) return [];
 	if (l.all) return [base];
 	if (l.refspecs.length === 0) return onBase ? ["HEAD"] : [];

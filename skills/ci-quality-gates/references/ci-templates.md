@@ -94,9 +94,7 @@ Protect the main branch and require the pipeline to succeed before merge (Settin
 
 ```
 *                     @org/maintainers
-/CLAUDE.md            @org/maintainers
 /AGENTS.md            @org/maintainers
-/.claude/             @org/maintainers
 /.pi/                 @org/maintainers
 /.github/             @org/platform
 /.gitlab-ci.yml       @org/platform

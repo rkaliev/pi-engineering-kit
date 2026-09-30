@@ -3,11 +3,12 @@
 ## 0.12.0
 
 - Review gate. Before `gh pr create/merge`, `glab mr create/merge`, `git merge` into the base or `git push` to the base, the guard asks the user unless the reviewer's last verdict is `Yes` for the commit being landed (no UI: blocked).
-  - The guard records the verdict from a `subagent` tool result that carries the reviewer's `Reviewed HEAD: <sha>` and `Ready to merge: …` lines; the main agent never writes it. A background run may not report back, so a missing stamp asks rather than blocks.
-  - A commit after the review that changes more than task files or ignored paths (verify.json `ignore`, docs by default) needs a new review; deleting the task files doesn't. A branch that only changes ignored paths needs no review.
-  - `.pi/guard.json` gets `reviewGate` (`false` turns it off, trusted projects only). The guard now asks before `.pi/guard.json` is edited and blocks writes to the stamp files.
+  - The guard records the verdict of each `reviewer` run in a `subagent` tool result (`Reviewed HEAD: <sha>` and `Ready to merge: …` in its final output); a failed reviewer run counts as Inconclusive, and the main agent never writes a verdict. Reviews from one user message combine to the worst verdict. A background run may not report back, so a missing verdict asks rather than blocks.
+  - A review covers the branch's own change to reviewable files, compared with the remote base. Deleting task files, changing docs or other markdown, and rebasing onto a newer base keep it valid; any other change needs a new review. Markdown that steers the agent (AGENTS.md, SKILL.md, `.pi/`, `rules/`, `skills/`, `agents/`, `prompts/`) is reviewable. The list is fixed.
+  - Worktrees: `cd <dir>` and `git -C <dir>` are followed. A landing chained after a commit or a HEAD move asks; `gh pr merge <number>` asks.
+  - `.pi/guard.json` gets `reviewGate` (`false` turns it off, trusted projects only). The guard asks before `.pi/guard.json` is changed (edit/write or shell) and blocks writes to the review records.
 - The reviewer's output ends with `Reviewed HEAD:` and adds the verdict `Inconclusive` for a review that could not read the requirements, the range or the rules. A finding against a project rule cites the rule. The reviewer doesn't repeat what the verification commands and linters check, gives wordy prose at most one grouped Minor, and matches repeat-round findings by the underlying defect.
-- Parallel reviewers merge by root cause; the same `file:line` keeps the higher severity. executing-plans re-reviews after fixes until `Yes`, and `/finish` now reviews an unreviewed branch first, as the Claude Code edition already did. receiving-code-review doesn't call a finding resolved before a re-review closed it.
+- Parallel reviewers merge by root cause; the same `file:line` keeps the higher severity. executing-plans re-reviews after fixes until `Yes`, and `/finish` now reviews an unreviewed branch first. receiving-code-review doesn't call a finding resolved before a re-review closed it.
 - ci-quality-gates offers one required human approval and a CODEOWNERS file for the files that steer every change (template in `references/ci-templates.md`), both only on the user's yes.
 
 ## 0.11.0

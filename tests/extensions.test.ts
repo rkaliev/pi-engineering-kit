@@ -442,7 +442,7 @@ test("/kit-init without UI and without --yes only reports the plan", async () =>
 	assert.match(sent.at(-1)!.message.content, /--yes/);
 });
 
-test("review gate: a subagent report stamps the verdict; without one the guard asks before a PR", async () => {
+test("review gate: a reviewer run's report records the verdict; without one the guard asks before a PR", async () => {
 	const dir = project({ "README.md": "x\n" });
 	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
 	git("init", "-q", "-b", "main");
@@ -457,9 +457,12 @@ test("review gate: a subagent report stamps the verdict; without one the guard a
 	const head = git("rev-parse", "HEAD");
 
 	const g = fakePi();
-	guard(g.pi);
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
 	const bash = (command: string, c = ctx(dir)) => g.emit("tool_call", { toolName: "bash", input: { command } }, c);
-	const result = (toolName: string, text: string) => g.emit("tool_result", { toolName, input: {}, content: [{ type: "text", text }], isError: false }, ctx(dir));
+	const verdict = (v: string) => `Reviewed HEAD: ${head.slice(0, 9)}\nReady to merge: ${v}`;
+	const result = (toolName: string, results: unknown[], isError = false) =>
+		g.emit("tool_result", { toolName, toolCallId: `c${Math.random()}`, input: {}, content: [{ type: "text", text: "summary" }], details: { mode: "single", results }, isError }, ctx(dir));
+	const pr = async () => (await bash("gh pr create --fill"))?.block;
 
 	const asking = ctx(dir);
 	assert.equal((await bash("gh pr create --fill", asking))?.block, true, "declined");
@@ -469,8 +472,45 @@ test("review gate: a subagent report stamps the verdict; without one the guard a
 	await bash("git push origin feat/a:main", push);
 	assert.match(push.asked[0]!, /Review gate: .* Also: This command pushes to a remote/, "one confirmation names both reasons");
 
-	await result("bash", `Reviewed HEAD: ${head}\nReady to merge: Yes`);
-	assert.equal((await bash("gh pr create --fill"))?.block, true, "only a subagent result stamps");
-	await result("subagent", `Reviewed HEAD: ${head.slice(0, 9)}\nReady to merge: Yes`);
+	await result("bash", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }]);
+	await result("subagent", [{ agent: "scout", exitCode: 0, finalOutput: verdict("Yes") }]);
+	assert.equal(await pr(), true, "only a reviewer run of the subagent tool counts");
+
+	await g.emit("input", { text: "review it", source: "interactive" }, ctx(dir));
+	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("No") }]);
+	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }]);
+	assert.equal(await pr(), true, "a later Yes in the same prompt doesn't overturn a No");
+	await g.emit("input", { text: "re-review", source: "interactive" }, ctx(dir));
+	await result("subagent", [
+		{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") },
+		{ agent: "reviewer", exitCode: 1 },
+	]);
+	assert.equal(await pr(), true, "a failed reviewer run is Inconclusive");
+	await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
+	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }]);
 	assert.equal(await bash("gh pr create --fill"), undefined);
+});
+
+test("review gate: reviewGate: false only in a trusted project; the guard config and stamps are protected", async () => {
+	const dir = project({ ".pi/guard.json": JSON.stringify({ reviewGate: false }) });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("commit", "-q", "--allow-empty", "-m", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "x\n");
+	git("add", "-A");
+	git("commit", "-qm", "a");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const call = (toolName: string, input: Record<string, unknown>, c = ctx(dir)) => g.emit("tool_call", { toolName, input }, c);
+	assert.equal(await call("bash", { command: "gh pr create" }, ctx(dir, { trusted: true })), undefined, "trusted: off");
+	assert.equal((await call("bash", { command: "gh pr create" }, ctx(dir, { trusted: false })))?.block, true, "untrusted: still on");
+
+	const asked = ctx(dir, { confirm: false });
+	assert.equal((await call("edit", { path: ".pi/guard.json" }, asked))?.block, true);
+	assert.match(asked.asked[0]!, /guard config decides/);
+	assert.equal((await call("write", { path: join(tmpdir(), "eng-kit", "reviews", "x.json") }))?.block, true);
+	assert.equal((await call("bash", { command: `echo '{}' > .pi/guard.json` }))?.block, true, "declined confirmation");
 });

@@ -4,18 +4,34 @@
  * outward-facing ones. Tightening rules from `.pi/guard.json` always apply; `allow`, `workDocs`
  * and `reviewGate` (which relax the defaults) apply only in trusted projects.
  *
- * The review stamp comes from a `subagent` tool result whose report carries the reviewer's
- * `Reviewed HEAD:` and `Ready to merge:` lines. A background run may never report back here, so
- * a missing stamp asks the human rather than blocking.
+ * The review verdict comes from a `subagent` tool result: each child run of the `reviewer` agent
+ * whose final output carries `Reviewed HEAD:` and `Ready to merge:`; a failed reviewer run counts
+ * as Inconclusive. A background run may never report back here, so a missing verdict asks the
+ * human rather than blocking.
  */
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readProjectJson } from "./lib/config.ts";
-import { resolveIgnore } from "./lib/commands.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
-import { checkReview, recordReview } from "./lib/reviews.ts";
+import { checkGateFiles, checkReview, recordReview, recordVerdict } from "./lib/reviews.ts";
 import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
-export default function guardExtension(pi: ExtensionAPI) {
+/** The part of a pi-subagents result the review gate reads. */
+interface SubagentRun {
+	agent?: string;
+	exitCode?: number;
+	finalOutput?: string;
+}
+
+export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?: string } = {}) {
+	// Reviews from one user message combine to the worst verdict; the next message starts a new round.
+	const session = randomUUID();
+	let prompt = 0;
+	pi.on("input", async () => {
+		prompt += 1;
+		return undefined;
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		const config = loadConfig(ctx);
 		const input = event.input as Record<string, unknown>;
@@ -27,8 +43,10 @@ export default function guardExtension(pi: ExtensionAPI) {
 			decision = checkCommand(subject, ctx.cwd, config);
 			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
+			if (decision.action !== "block") decision = checkGateFiles(subject, ".pi/guard.json") ?? decision;
 			if (decision.action !== "block" && config.reviewGate !== false) {
-				const review = checkReview(subject, ctx.cwd, { ignore: resolveIgnore(ctx.cwd), workDocs, missing: "confirm" });
+				const gate = { workDocs, missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json' };
+				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				// One confirmation that names both reasons: the user should know the review is missing.
 				if (review) decision = decision.action === "confirm" ? { action: "confirm", reason: `${review.reason} Also: ${decision.reason}` } : review;
 			}
@@ -50,11 +68,16 @@ export default function guardExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
-		if (!event.toolName.startsWith("subagent") || event.isError) return undefined;
-		const text = event.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
-		if (!/Ready to merge/i.test(text)) return undefined;
-		const result = recordReview(ctx.cwd, text);
-		if (typeof result === "string" && ctx.hasUI) ctx.ui.notify(`Review gate: no stamp recorded: ${result}.`, "warning");
+		if (event.toolName !== "subagent") return undefined;
+		const runs = (event.details as { results?: SubagentRun[] } | undefined)?.results;
+		if (!Array.isArray(runs)) return undefined;
+		runs.forEach((run, index) => {
+			if (run.agent !== "reviewer") return;
+			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
+			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string";
+			const result = failed ? recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot) : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
+			if (typeof result === "string" && ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded: ${result}.`, "warning");
+		});
 		return undefined;
 	});
 }
