@@ -27,7 +27,7 @@ Propose the layers that fit the stack, explain what each catches, and add each o
 4. **Security:** secret scanning (gitleaks) and a dependency audit (osv-scanner or the ecosystem's tool) on every change.
 5. **Database** (database-changes): migrations applied, and rolled back where the project supports it, on a throwaway database, plus a schema drift check.
 6. **Contracts:** regenerate OpenAPI, protobuf or generated types from the source of truth, and fail if they differ from what is committed.
-7. **Docs:** link check, when the project keeps docs.
+7. **Docs:** link check, when the project keeps docs, and the `working-docs` job, so task files never reach the base branch from any author.
 8. **Commits:** the project's commit linter, if it uses one.
 9. **Coverage:** a report on every change, and a floor checked on a schedule. It never blocks a merge: it is a floor, not a target.
 10. **BDD scenarios**, when the project has them (`../test-driven-development/references/bdd.md`).
@@ -41,5 +41,6 @@ Requiring `gate`, requiring an up-to-date branch and blocking direct pushes to t
 ## Keeping it in sync
 
 - When a verification command is added or changed, change the CI in the same commit.
-- The kit-init check reports CI that doesn't run every verification command; fix it rather than dropping the command locally.
+- The kit-init check reports CI that doesn't run every verification command or lacks the working-docs job; fix the CI rather than dropping the check locally.
 - A change to the CI itself is reviewed like code: it may not remove a check or weaken one (review checklist).
+- A review comment made for the third time is a rule that isn't written down yet: propose a lint rule or a check for it.

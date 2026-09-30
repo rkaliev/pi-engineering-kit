@@ -1,11 +1,12 @@
 /**
- * Guard: blocks irreversible or secret-leaking tool calls and asks the human
- * before outward-facing ones. Tightening rules from `.pi/guard.json` always apply;
- * the `allow` list (which relaxes confirmation) applies only in trusted projects.
+ * Guard: blocks irreversible or secret-leaking tool calls and task files reaching the base
+ * branch, and asks the human before outward-facing ones. Tightening rules from `.pi/guard.json`
+ * always apply; `allow` and `workDocs` (which relax the defaults) apply only in trusted projects.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
+import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
 export default function guardExtension(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
@@ -17,6 +18,7 @@ export default function guardExtension(pi: ExtensionAPI) {
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			subject = String(input.command ?? "");
 			decision = checkCommand(subject, ctx.cwd, config);
+			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, config.workDocs ?? WORK_DOC_DIRS) ?? decision;
 		} else if (event.toolName === "read" || event.toolName === "write" || event.toolName === "edit") {
 			subject = String(input.path ?? "");
 			decision = checkPath(event.toolName, subject, ctx.cwd, config);
@@ -54,6 +56,7 @@ function loadConfig(ctx: ExtensionContext): GuardConfig {
 		confirm: regexes(raw.confirm),
 		protectedPaths: strings(raw.protectedPaths),
 		allow: trusted ? regexes(raw.allow) : [],
+		workDocs: trusted && Array.isArray(raw.workDocs) ? strings(raw.workDocs) : undefined,
 	};
 }
 

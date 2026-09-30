@@ -10,16 +10,16 @@ It works on any project, and it adapts along three independent axes:
 The process on top of them is the same everywhere: design → plan → TDD → verify → review → git.
 
 It contains:
-- **27 skills:**
+- **28 skills:**
   - **process core:** design, plan, TDD (with optional BDD), debugging, verification, review, git, CI quality gates, documentation, dependency updates;
   - **starting point:** choosing a stack for a new project, onboarding an existing one, changing legacy code safely;
-  - **platforms:** web frontend, backend services, mobile, desktop;
+  - **platforms:** web frontend, backend services, mobile, desktop, and UI motion across them;
   - **high-risk domains:** payments and money, POS and fiscal, security review, observability, database changes.
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
-  - **guard** blocks irreversible or secret-leaking tool calls and asks you before outward-facing ones.
-  - **verify** runs the project's checks and won't let the agent finish with unverified edits, or while an approved spec or plan is uncommitted.
+  - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry a task file to the base branch, and asks you before outward-facing ones.
+  - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
 
@@ -61,19 +61,19 @@ Without `pi-subagents`, the skills fall back to doing that work inline.
 1. Run `/kit-init`. It creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or build tools), `.pi/guard.json` and `.pi/model-routing.json`, and adds `pi-subagents` to `.pi/settings.json`. It never overwrites existing files, and `--yes` skips the questions.
 2. Run `/onboard`. It maps the repo, proves the build and test commands, and proposes `AGENTS.md` and `.pi/verify.json`. For new projects, start from [templates/AGENTS.md](templates/AGENTS.md).
 3. Tune `.pi/guard.json` ([example](templates/guard.json)) and `.pi/model-routing.json` if needed.
-4. Describe tasks with [templates/task.md](templates/task.md): numbered, testable criteria plus constraints (`/new-task` writes one for you).
+4. Each piece of work gets one task file, `docs/tasks/YYYY-MM-DD-<slug>.md`, from [templates/task.md](templates/task.md): description, criteria, plan and progress in one place, standing in for a tracker issue (`/new-task` writes the description for you).
 
 A typical loop:
 
 ```
-/brainstorm add refunds to the checkout API     # design approved before code
-/plan docs/specs/2026-09-25-refunds.md          # bite-sized TDD tasks
-/implement docs/plans/2026-09-25-refunds.md     # executes, verifies, records rulings
+/brainstorm add refunds to the checkout API     # task file, design approved before code
+/plan docs/tasks/2026-09-25-refunds.md          # bite-sized TDD tasks in its ## Plan
+/implement docs/tasks/2026-09-25-refunds.md     # executes, verifies; moves what lasts to docs/, deletes the task file
 /review                                         # fresh-context review: Confirmed vs Assumptions
 /finish                                         # verify → merge / PR / keep / discard
 ```
 
-Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`.
+Small, bounded changes need no task file: they stay in chat, e.g. `/implement make search ignore case`.
 
 ## Extensions
 
@@ -86,8 +86,9 @@ Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`
 | recursive `rm` outside the project (`/`, `~`, `$HOME`, `..`, other absolute paths) | DB migrations, `DROP` / `TRUNCATE` |
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`, `curl … \| sh` |
 | writing into `.git/` and `protectedPaths` | shell access to secret files; writes outside the project |
+| `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines |
 
-`.pi/guard.json` has four keys: `block`, `confirm`, `allow` (regex sources) and `protectedPaths` (path prefixes). `allow` only relaxes confirmation, never a block, and it applies only in trusted projects.
+`.pi/guard.json` has five keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes) and `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off). `allow` only relaxes confirmation, never a block. `allow` and `workDocs` apply only in trusted projects.
 
 ### verify
 
@@ -95,6 +96,7 @@ Small, bounded changes can go straight to `/implement tasks/01-search-filter.md`
 - **`/verify`** runs them and shares the result with the agent. **`run_verification`** is the tool the agent calls to get evidence.
 - **The gate:** after an `edit`/`write` of a file inside the project, the workspace counts as unverified until every command passes, either through the tool or as an exact, unpiped bash run of that command. Files matching `ignore` in `.pi/verify.json` don't count (default: `**/*.md`, `**/*.mdx`, `**/*.txt`, `docs/**`; set `"ignore": []` if your checks lint docs).
 - **The follow-up:** if the agent stops while the workspace is unverified, it gets one follow-up per user message asking for evidence.
+- **Task files** (`docs/tasks/`) live only on the work branch. The same follow-up asks to commit a task file marked `Status: design approved` or `plan approved` (on a work branch), and, once every `## Plan` checkbox is ticked, to move what lasts into `docs/`, show its Follow-ups and delete it. The ci-quality-gates templates add a `working-docs` CI job that fails on any tracked `docs/tasks/*.md`, for people and other tools alike.
 
 ### models (routing by command)
 

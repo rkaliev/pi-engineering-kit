@@ -94,7 +94,16 @@ test("kit-init reports whether CI runs every verification command", async () => 
 	assert.match(ciOf(stale).why, /doesn't run: npm run typecheck/);
 	assert.deepEqual(ciCoverage(stale, ["npm test"]).missing, [], "whitespace is normalized");
 
-	const ok = project({ ".pi/verify.json": verify, ".gitlab-ci.yml": "test:\n  script:\n    - npm run typecheck\n    - npm test\n" });
+	const noDocsCheck = project({ ".pi/verify.json": verify, ".gitlab-ci.yml": "test:\n  script:\n    - npm run typecheck\n    - npm test\n" });
+	assert.equal(ciOf(noDocsCheck).status, "missing");
+	assert.match(ciOf(noDocsCheck).why, /working-docs check/);
+	assert.doesNotMatch(ciOf(noDocsCheck).why, /doesn't run/);
+
+	const gitlab = "test:\n  script:\n    - npm run typecheck\n    - npm test\nworking-docs:\n  script:\n    - true\n";
+	const ok = project({ ".pi/verify.json": verify, ".gitlab-ci.yml": gitlab });
 	assert.equal(ciOf(ok).status, "exists");
-	assert.match(ciOf(ok).why, /\.gitlab-ci\.yml runs every verification command/);
+	assert.match(ciOf(ok).why, /\.gitlab-ci\.yml runs every verification command and the working-docs check/);
+
+	const optedOut = project({ ".pi/verify.json": verify, ".pi/guard.json": JSON.stringify({ workDocs: [] }), ".gitlab-ci.yml": "test:\n  script:\n    - npm run typecheck\n    - npm test\n" });
+	assert.equal(ciOf(optedOut).status, "exists", "workDocs: [] turns the check off");
 });

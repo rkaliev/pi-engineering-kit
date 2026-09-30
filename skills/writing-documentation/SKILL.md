@@ -17,13 +17,13 @@ Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING,
 |---|---|---|
 | README | What is this, how do I run it, where is the rest | repo root (and one per package in a monorepo) |
 | Topic docs | How does X work today | `docs/NN-topic.md`, one topic per file, indexed in `docs/README.md` |
-| Decision record (ADR) | Why did we choose X over Y | `docs/decisions/NNNN-title.md`: context, decision, consequences. Never edited after acceptance; a new ADR supersedes it |
+| Decision record | Which rule holds, and why | `docs/decisions/NNNN-slug.md`, one topic each, cited by number; rewritten in place or deleted, never superseded |
 | CHANGELOG | What changed for users in each version | `CHANGELOG.md`, Keep a Changelog sections, grouped from Conventional Commits |
 | Agent manifest | Commands, rules and boundaries for AI agents | CLAUDE.md / AGENTS.md: short, links to docs instead of copying them |
 | API reference | Exact contract of an interface | generated from the source of truth (OpenAPI from schemas or code, typedoc, KDoc, DocC); never hand-maintained in parallel |
 | Code comments | Why this code is the way it is | next to the code |
 
-**Working** documents (specs, plans, ledgers, roadmaps) record intent and progress; the **system** documents above describe what exists. When a spec is implemented, move what lasts into the topic chapter for that feature and link the chapter from the spec. Decision records explain why; topic docs describe today.
+**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Every document keeps only its current version, so context stays small and consistent. Personal notes go in the agent's memory, not the repo.
 
 Templates: `references/templates.md`.
 
@@ -47,7 +47,7 @@ Templates: `references/templates.md`.
 Before calling the change done, check what it made stale:
 - setup, commands or environment variables → README and the agent manifest;
 - behavior of a documented flow → its topic doc;
-- a choice between real alternatives with lasting consequences → a new decision record;
+- a choice between real alternatives with lasting consequences → the decision record for that topic, new or updated in place;
 - anything a user or integrator notices → a changelog entry;
 - an interface → regenerate the API reference.
 
@@ -59,7 +59,7 @@ Before calling the change done, check what it made stale:
 4. Update the index (`docs/README.md`, the README docs section, `llms.txt` if the repo keeps one).
 5. Re-read as the target reader: can they do the task with only this page?
 
-Report which of these you did. An unverified command in a doc is an unverified claim. To enforce these rules mechanically, propose checks from `references/checks.md`.
+Report which of these you did. To enforce these rules mechanically, propose checks from `references/checks.md`.
 
 ## Red flags
 
@@ -67,5 +67,5 @@ Report which of these you did. An unverified command in a doc is an unverified c
 |---|---|
 | "I'll update the docs later" | Later means never; the next reader gets the stale version. Same change. |
 | "I'll copy that section here too" | Two copies drift. Link to one. |
-| "Describe how it will work" | Docs describe what exists. Plans go in a spec or plan file. |
+| "Describe how it will work" | Docs describe what exists. Plans go in the task file. |
 | "The comment explains the code" | If it restates the code, delete it. |

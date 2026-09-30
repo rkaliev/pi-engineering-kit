@@ -31,12 +31,12 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 
 ## Finishing a branch
 
-1. Run verification-before-completion on the final state. Don't offer options while tests are red.
+1. Run verification-before-completion on the final state. Don't offer options while tests are red. The task file is already deleted (executing-plans, Finish); the guard refuses a PR or a merge into the base while it exists.
 2. Determine the base branch (`git merge-base HEAD main`, or ask).
 3. Offer exactly these options:
    1. **Merge locally** into the base branch, re-run the tests on the merged result, delete the branch.
    2. **Push and open a PR.** One concern per PR; if the diff is far over about 1000 meaningful lines, suggest splitting it.
-      The PR body: one or two sentences on what changed and why; at most seven bullets for the decisions a reviewer needs; `Out of scope:` bullets for what was deliberately left out; how it was verified (the commands run); risks and rollback; screenshots for UI; links to the spec and plan, and the issue it closes (`Closes …`) last.
+      The PR body: one or two sentences on what changed and why; at most seven bullets for the decisions a reviewer needs; `Out of scope:` bullets for what was deliberately left out; how it was verified (the commands run); risks and rollback; screenshots for UI; a link to the task file at the last commit that had it (`blob/<sha>/docs/tasks/…`), and the issue it closes (`Closes …`) last.
    3. **Keep the branch** as is for later.
    4. **Discard.** Require the user to type `discard`. Show what will be lost (commits, files) first.
 4. Remove only worktrees you created, and only after merge or discard. Never delete a worktree or branch with unpushed work that you didn't create.

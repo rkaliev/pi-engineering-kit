@@ -31,7 +31,8 @@ Platform details:
   - culture-aware number, date and currency formatting (but invariant culture for data files and protocols);
   - keyboard navigation;
   - screen reader names;
-  - high-contrast and DPI scaling.
+  - high-contrast and DPI scaling;
+  - the system's "reduce animations" setting, and hover effects only with a precise pointer (ui-motion for animation; the web-frontend references for design tokens, state and copy).
 
 ## Verification
 

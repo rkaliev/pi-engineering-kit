@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ciCoverage } from "./ci.ts";
+import { readProjectJson } from "./config.ts";
 import { DEFAULT_IGNORE, resolveVerifyCommands } from "./commands.ts";
 
 export interface InitItem {
@@ -133,8 +134,14 @@ function safeList(dir: string): string[] {
 function planCi(cwd: string, hint: string): InitItem {
 	const configured = resolveVerifyCommands(cwd).commands;
 	const commands = configured.length > 0 ? configured : detectVerifyCommands(cwd);
-	const { files, missing } = ciCoverage(cwd, commands);
+	const { files, missing, workDocsCheck } = ciCoverage(cwd, commands);
 	if (files.length === 0) return { target: "CI", status: "missing", why: `no CI configuration found; run ${hint} to set up checks that don't depend on an agent session` };
-	if (missing.length > 0) return { target: "CI", status: "missing", why: `${files.join(", ")} doesn't run: ${missing.join(", ")}; run ${hint}` };
-	return { target: "CI", status: "exists", why: `${files.join(", ")} runs every verification command` };
+	const guard = readProjectJson<{ workDocs: string[] }>(cwd, "guard");
+	const wantsDocsCheck = !(Array.isArray(guard.workDocs) && guard.workDocs.length === 0);
+	const gaps = [
+		...(missing.length > 0 ? [`doesn't run: ${missing.join(", ")}`] : []),
+		...(wantsDocsCheck && !workDocsCheck ? ["has no working-docs check (task files must not reach the base branch)"] : []),
+	];
+	if (gaps.length > 0) return { target: "CI", status: "missing", why: `${files.join(", ")} ${gaps.join("; ")}; run ${hint}` };
+	return { target: "CI", status: "exists", why: `${files.join(", ")} runs every verification command${wantsDocsCheck ? " and the working-docs check" : ""}` };
 }

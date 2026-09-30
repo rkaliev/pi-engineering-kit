@@ -12,11 +12,11 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
 ## Setup
 
 1. Work on an isolated branch or worktree (git-workflow). Never implement on `main`/`master` without explicit consent.
-2. Read the plan and its spec once. **The spec is the authority**; conflicts inside the plan resolve against it. Set the plan's `Status: in progress`.
-   **Drift check:** run `git diff --stat <Base>..HEAD -- <the plan's files>`. If they changed since the plan was written, record it in the ledger and re-check the affected tasks; if a task no longer fits the code, go back to writing-plans.
-3. **Ledger:** create `docs/plans/<plan-name>.progress.md` (or the project's equivalent), first line `# Ledger — plan: <path>`. If it already exists and names this plan, tasks marked complete are **done**. Resume at the first incomplete one, and trust the ledger and `git log` over your memory.
-4. **Pre-flight:** for every task that consumes another task's output, compare the Interfaces blocks. Record conflicts and your rulings in the ledger.
-5. Run the verification commands once to record the baseline. Existing failures are noted in the ledger, not silently inherited.
+2. Read the task file once: description, then Plan. **The description is the authority**; conflicts inside the plan resolve against it. Set `Status: in progress`.
+   **Drift check:** run `git diff --stat <Base>..HEAD -- <the plan's files>`. If they changed since the plan was written, record it in Progress and re-check the affected tasks; if a task no longer fits the code, go back to writing-plans.
+3. **Progress:** the task file's `## Progress` section is the record. If it already lists tasks as complete, they are **done**. Resume at the first incomplete one, and trust Progress and `git log` over your memory.
+4. **Pre-flight:** for every task that consumes another task's output, compare the Interfaces blocks. Record conflicts and your rulings in Progress.
+5. Run the verification commands once to record the baseline. Existing failures are noted in Progress, not silently inherited.
 
 ## Per task
 
@@ -24,14 +24,14 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
 2. Work the steps in order. For every command, compare the output with the plan's `Expected`:
    - **Matches:** next step.
    - **The code is wrong:** use systematic-debugging. Never patch the symptom to match.
-   - **The plan is wrong:** choose the smallest change that satisfies the spec, log `Ruling: <what> — <why> — <cost if wrong>`, and continue.
+   - **The plan is wrong:** choose the smallest change that satisfies the description, add `Ruling: <what> — <why> — <cost if wrong>` to Progress, and continue.
 3. Commit as the plan says.
 4. **Completion contract**, with evidence from this session:
    - every named test exists and ran;
    - the full suite is green;
    - every `Expected` was compared;
    - every deviation has a ruling.
-   Then log `Task N: complete (BASE..HEAD, <command> → <result>)` and tick the checkbox.
+   Then add `Task N: complete (BASE..HEAD, <command> → <result>)` to Progress and tick its checkboxes in the Plan.
 
 **Rulings, not stalls.** Don't pause between tasks to ask "should I continue?". Stop and ask only for:
 - an irreversible or destructive action;
@@ -53,8 +53,8 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 
 ## Finish
 
-1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the ledger's rulings.
-2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite. Log Minor findings.
+1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the rulings in Progress.
+2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite. Record Minor findings in Progress.
 3. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
-4. Set the plan's `Status: done` and the spec's `Status: implemented (YYYY-MM-DD)` with a link to its topic chapter, and tick the piece in the roadmap if there is one.
+4. **Task file:** move what lasts out of it: behavior into the topic chapter, decisions and lasting rulings into `docs/decisions/` (writing-documentation). Show the user its Follow-ups and offer to start the next one. Then delete the task file in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists; git keeps it.
 5. Apply verification-before-completion, then use the finishing section of git-workflow.

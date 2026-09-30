@@ -15,7 +15,7 @@ A review in a fresh context catches what the author's context hides. The reviewe
 ## How
 
 1. **Fix the range:** `BASE=$(git merge-base <base-branch> HEAD)` (or the task's BASE) and `HEAD=$(git rev-parse HEAD)`. For a repeat round after fixes, pass the previous round's HEAD and its open findings, so only the new commits are reviewed and every earlier finding is re-checked (a rewritten history means a full review). Commit or stash first so the review is of a known state. Include untracked files you created.
-2. **Fill `reviewer-prompt.md`** with: what was built, the requirements (task file or plan and spec paths, numbered criteria), the range, the verification commands, the plan's Review focus if it has one, and `{SKILL_DIR}` = this skill's absolute directory.
+2. **Fill `reviewer-prompt.md`** with: what was built, the requirements (the task file path or the request, numbered criteria), the range, the verification commands, the plan's Review focus if it has one, and `{SKILL_DIR}` = this skill's absolute directory.
 3. **Dispatch:**
    - **With a `subagent` tool:** use the `reviewer` agent (pi-subagents) or a general agent with the filled prompt, on the most capable model available. For large or high-risk diffs (payments, auth, migrations), you may run 2–3 reviewers in parallel with different focus (correctness, security, tests). Merge their findings and remove duplicates.
    - **Without one:** do the review yourself in a *separate pass*. Re-read the requirements, then walk the diff file by file with the checklist. Don't rely on your memory of writing it.

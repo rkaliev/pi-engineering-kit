@@ -5,13 +5,16 @@
  *   (`.pi/verify.json`, else the Commands section of AGENTS.md).
  * - Files edited since the last fully green run make the workspace "unverified".
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence
- *   (at most once per user message, so it can never loop).
+ *   (at most once per user message, so it can never loop). The same follow-up carries the approval
+ *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
+ *   files must be deleted).
  */
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
+import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 
 const TAIL_CHARS = 4000;
@@ -29,6 +32,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let greenSinceEdit = new Set<string>();
 	let remindedThisPrompt = false;
 	let approvalRemindedThisPrompt = false;
+	let workDocsRemindedThisPrompt = false;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -79,6 +83,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		greenSinceEdit = new Set();
 		remindedThisPrompt = false;
 		approvalRemindedThisPrompt = false;
+		workDocsRemindedThisPrompt = false;
 		setStatus(ctx);
 	});
 
@@ -86,6 +91,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		if (event.source !== "extension") {
 			remindedThisPrompt = false;
 			approvalRemindedThisPrompt = false;
+			workDocsRemindedThisPrompt = false;
 		}
 		return { action: "continue" as const };
 	});
@@ -120,11 +126,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
 					: "No verification commands are configured; state exactly how the change was verified, or that it was not.";
 			parts.push(`Verify gate: files changed since the last passing verification. ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing.`);
 		}
+		const dirs = workDocDirs(ctx);
 		if (!approvalRemindedThisPrompt) {
-			const files = uncommittedApproved(ctx.cwd);
+			const files = uncommittedApproved(ctx.cwd, dirs);
 			if (files.length > 0) {
 				approvalRemindedThisPrompt = true;
-				parts.push(approvalReminder(files));
+				parts.push(approvalReminder(files, onBaseBranch(ctx.cwd)));
+			}
+		}
+		if (!workDocsRemindedThisPrompt) {
+			const files = finishedWorkDocs(ctx.cwd, dirs);
+			if (files.length > 0) {
+				workDocsRemindedThisPrompt = true;
+				parts.push(workDocsReminder(files));
 			}
 		}
 		if (parts.length === 0) return;
@@ -165,4 +179,11 @@ function countsAsEdit(path: string, cwd: string): boolean {
 	const rel = relative(cwd, resolve(cwd, path));
 	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
 	return !isIgnored(rel, resolveIgnore(cwd));
+}
+
+/** Task-file folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
+function workDocDirs(ctx: ExtensionContext): string[] {
+	const raw = readProjectJson<{ workDocs: unknown }>(ctx.cwd, "guard").workDocs;
+	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return WORK_DOC_DIRS;
+	return raw.filter((v): v is string => typeof v === "string");
 }

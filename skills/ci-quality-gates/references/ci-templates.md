@@ -34,13 +34,23 @@ jobs:
       - uses: gitleaks/gitleaks-action@<sha>
       - uses: google/osv-scanner-action/osv-scanner-action@<sha>
         with: { scan-args: "--recursive ./" }
+  working-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@<sha>
+      - run: |
+          leaks=$(git ls-files 'docs/tasks/*.md')
+          test -z "$leaks" || { echo "::error::Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
   gate:
     if: always()
-    needs: [verify, security]
+    needs: [verify, security, working-docs]
     runs-on: ubuntu-latest
     steps:
       - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"
 ```
+
+The `working-docs` job enforces the kit's rule for people and other tools too: task files never reach the base branch (`git ls-files` pathspecs also match nested folders). Point it at the project's folders if they differ (the `workDocs` list in the guard config); drop the job if the project turned the rule off with `workDocs: []`.
 
 Branch protection: require the `gate` check and an up-to-date branch, and block force pushes, for example with `gh api -X PUT repos/<owner>/<repo>/branches/main/protection …` (only after the user agrees).
 
@@ -63,10 +73,17 @@ secrets:
   stage: verify
   image: zricethezav/gitleaks@sha256:<digest>
   script: [gitleaks detect --source . --redact]
+working-docs:
+  stage: verify
+  image: alpine/git@sha256:<digest>
+  script:
+    - |
+      leaks=$(git ls-files 'docs/tasks/*.md')
+      test -z "$leaks" || { echo "Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
 gate:
   stage: gate
   script: [echo "all checks passed"]
-  needs: [verify, secrets]
+  needs: [verify, secrets, working-docs]
 ```
 
 Protect the main branch and require the pipeline to succeed before merge (Settings → Merge requests), with the user's agreement.
@@ -81,6 +98,10 @@ Protect the main branch and require the pipeline to succeed before merge (Settin
 | Go | `go vet`, staticcheck | `govulncheck` | `go test -race ./...` |
 | Python | ruff (including `PT` rules) | `pip-audit` | `pytest -p no:cacheprovider`; randomized order with pytest-randomly |
 | .NET | analyzers as errors | `dotnet list package --vulnerable` | `dotnet test` |
+
+## Bundle and size budgets
+
+Measure the built, compressed artifact itself (for example the `.br` or `.gz` files, or the APK/IPA size), not the bundler's own summary, and fail when the measurement is empty. Keep the budget in a committed file; raising it is a reviewed diff that states the measurement and the reason. Report deltas on every PR, but ignore noise: flag a change only when it is both at least 1 KiB and at least 5 %.
 
 ## Test-count check
 

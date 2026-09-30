@@ -10,3 +10,4 @@ Rules that a tool can check belong in the project's checks, not only in review. 
 | TODO/FIXME carry an issue or owner | a lint rule or a grep in CI |
 | API reference matches the code | regenerate in CI (OpenAPI from schemas, typedoc, Dokka, DocC) and fail on a diff |
 | Docs index is complete | a small script: every file under `docs/` is linked from `docs/README.md` |
+| Task files don't reach the base branch | the `working-docs` job from the ci-quality-gates templates |

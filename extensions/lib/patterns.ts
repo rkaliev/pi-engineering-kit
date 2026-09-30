@@ -17,6 +17,8 @@ export interface GuardConfig {
 	allow?: string[];
 	/** Path prefixes (relative to the project) that must not be written or edited. */
 	protectedPaths?: string[];
+	/** Folders holding task files that must never reach the base branch. `[]` turns the check off. */
+	workDocs?: string[];
 }
 
 const ALLOW: GuardDecision = { action: "allow" };
