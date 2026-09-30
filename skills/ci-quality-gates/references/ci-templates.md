@@ -40,14 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@<sha>
       - run: |
-          leaks=$(git ls-files 'docs/specs/*.md' 'docs/plans/*.md' | while read -r f; do
-            if [ "${f%-roadmap.md}" != "$f" ]; then
-              grep -Eq '^[[:space:]]*[-*] \[ \]' "$f" && continue
-              grep -Eq '^[[:space:]]*[-*] \[[xX]\]' "$f" || continue
-            fi
-            echo "$f"
-          done)
-          test -z "$leaks" || { echo "::error::Delete working documents before merge; move what lasts into docs/: $leaks"; exit 1; }
+          leaks=$(git ls-files 'docs/tasks/*.md')
+          test -z "$leaks" || { echo "::error::Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
   gate:
     if: always()
     needs: [verify, security, working-docs]
@@ -56,7 +50,7 @@ jobs:
       - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"
 ```
 
-The `working-docs` job enforces the kit's rule for people and other tools too: specs, plans and ledgers never reach the base branch, and a roadmap stays only while it has open pieces. Point it at the project's folders if they differ (the `workDocs` list in the guard config); drop the job if the project turned the rule off with `workDocs: []`.
+The `working-docs` job enforces the kit's rule for people and other tools too: task files never reach the base branch (`git ls-files` pathspecs also match nested folders). Point it at the project's folders if they differ (the `workDocs` list in the guard config); drop the job if the project turned the rule off with `workDocs: []`.
 
 Branch protection: require the `gate` check and an up-to-date branch, and block force pushes, for example with `gh api -X PUT repos/<owner>/<repo>/branches/main/protection …` (only after the user agrees).
 
@@ -84,14 +78,8 @@ working-docs:
   image: alpine/git@sha256:<digest>
   script:
     - |
-      leaks=$(git ls-files 'docs/specs/*.md' 'docs/plans/*.md' | while read -r f; do
-        if [ "${f%-roadmap.md}" != "$f" ]; then
-          grep -Eq '^[[:space:]]*[-*] \[ \]' "$f" && continue
-          grep -Eq '^[[:space:]]*[-*] \[[xX]\]' "$f" || continue
-        fi
-        echo "$f"
-      done)
-      test -z "$leaks" || { echo "Delete working documents before merge; move what lasts into docs/: $leaks"; exit 1; }
+      leaks=$(git ls-files 'docs/tasks/*.md')
+      test -z "$leaks" || { echo "Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
 gate:
   stage: gate
   script: [echo "all checks passed"]

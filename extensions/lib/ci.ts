@@ -14,7 +14,7 @@ export interface CiCoverage {
 	workDocsCheck: boolean;
 }
 
-/** The CI job that fails when working documents reach the base branch, found by its YAML key. */
+/** The CI job that fails when task files reach the base branch, found by its YAML key. */
 export const WORK_DOCS_MARKER = "working-docs:";
 
 export function findCiFiles(cwd: string): string[] {

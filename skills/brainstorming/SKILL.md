@@ -24,14 +24,7 @@ When in doubt, take the heavier path. Hidden complexity found mid-task moves you
 ## 2. Understand
 
 1. Build the context map first (`references/context-map.md`): request, relevant files, patterns, key types, test conventions, in-flight work, standards, stack. Then write back Intent, up to five Assumptions and the Open questions.
-2. If the request contains several independent subsystems, say so and decompose it before refining any one of them. Write the decomposition to `docs/specs/YYYY-MM-DD-<project>-roadmap.md`:
-   - pieces, one line each: goal and boundaries, as `- [ ]` checkboxes;
-   - order and dependencies;
-   - contracts between pieces (API, data, events);
-   - migration and cut-over: what moves when;
-   - open decisions.
-
-   Split only at seams: each piece delivers value or a rollout step and is green on its own. Never cut a coherent change to fit a size; give it a longer plan and ordered commits. Get the roadmap approved first. Each piece then gets its own design → plan → build cycle, usually in a fresh session, and ticks its checkbox in its own branch. Update the roadmap when a piece changes a contract. It stays on the base branch only while a piece is open; the last piece deletes it.
+2. If the request contains several independent subsystems, say so before refining any one of them and propose separate tasks: the one to start now, and the others one line each in its Follow-ups, with order and the contracts between them (API, data, events). Split only at seams: each task delivers value or a rollout step and is green on its own. Never cut a coherent change to fit a size; give it a longer plan and ordered commits. Each later task gets its own task file, branch and PR, usually in a fresh session. There is no roadmap file: when a task finishes, its Follow-ups go to the user.
 3. Ask about purpose, users, constraints and success criteria. Ask **one question per message**, multiple choice where possible. Don't re-ask what the request already answers.
 4. Write back your understanding: the outcome, the constraints and the success criteria, separating what the user said from your assumptions. Invite correction.
 
@@ -44,19 +37,19 @@ For the domain, also ask about the things that are expensive to change later. Fo
   1. Propose 2–3 approaches with trade-offs, recommended one first. Apply YAGNI to every option.
   2. Present the design in sections sized to their complexity: architecture, components and interfaces, data flow, error handling, testing, rollout or migration. Confirm each section.
   3. Design small units with one purpose and clear interfaces. In existing code, follow its patterns; include only the refactors this goal needs.
-  4. On a work branch (git-workflow), write the spec to `docs/specs/YYYY-MM-DD-<topic>.md` from `../../templates/spec.md`, keeping its exact headings. A spec over about 300 lines or ten criteria usually hides several concerns: if they split at a seam, go back to the roadmap.
-  5. Self-review it: no TBDs, no contradictions, no requirement readable two ways, every criterion has a way to verify it, scope fits one plan.
-  6. Ask the user to review the file. Only the user approves: on their explicit yes, set `Status: approved (YYYY-MM-DD)` and commit the spec. The next step is **writing-plans**. Invoke nothing else.
-  7. When a new spec replaces an old one, delete the old one in the same commit; git keeps it.
+  4. On a work branch (git-workflow), write the task file `docs/tasks/YYYY-MM-DD-<topic>.md` from `../../templates/task.md`, keeping its exact headings: the user's request verbatim, then the description; Plan and Progress stay "None yet". A description over about 300 lines or ten criteria usually hides several concerns: if they split at a seam, move the rest to Follow-ups.
+  5. Self-review the description: no TBDs, no contradictions, no requirement readable two ways, every criterion has a way to verify it, scope fits one plan.
+  6. Ask the user to review the file. Only the user approves: on their explicit yes, set `Status: design approved (YYYY-MM-DD)` and commit the task file. The next step is **writing-plans**. Invoke nothing else.
+  7. When a new task file replaces an old one, delete the old one in the same commit; git keeps it.
 
-Use `../../templates/task.md` when the output is a task for someone else: numbered, testable criteria plus constraints.
+For a task someone else will do, `/new-task` writes the same file with only the description.
 
 ## Red flags
 
 | Thought | Reality |
 |---|---|
 | "Too simple to need a design" | A bounded change needs two sentences and a yes. That's cheap. |
-| "I'll call it bounded and skip the spec" | Reaching for a label to skip work is the doubt. Take the heavier path. |
+| "I'll call it bounded and skip the task file" | Reaching for a label to skip work is the doubt. Take the heavier path. |
 | "I know this kind of app" | Bounded measures the repo, not your familiarity. |
 | "The spike works, I'll keep it" | Keeping it is a new request. Classify it. |
-| "They liked the idea, so the plan is approved" | Each stage needs its own approval. |
+| "They liked the design, so the plan is approved" | Design and plan each need their own approval. |

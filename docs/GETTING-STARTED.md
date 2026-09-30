@@ -212,7 +212,7 @@ The command shows what it will create, asks about each file and **never overwrit
 | File | What it contains |
 |---|---|
 | `.pi/verify.json` | Verification commands: from `## Commands` in AGENTS.md, otherwise from `package.json` scripts (npm/pnpm/yarn/bun by lockfile), otherwise `./gradlew check`, `cargo test`, `go test`, `dotnet test`, `pytest` |
-| `.pi/guard.json` | Empty project guard rules. The built-in rules apply without them, including the working-documents rule for `docs/specs` and `docs/plans` (the `workDocs` key changes the folders; `[]` turns it off) |
+| `.pi/guard.json` | Empty project guard rules. The built-in rules apply without them, including the task-file rule for `docs/tasks` (the `workDocs` key changes the folders; `[]` turns it off) |
 | `.pi/model-routing.json` | The `deep`, `fast` and `cheap` modes and which command runs in which mode. **Check the model IDs against `pi --list-models`** |
 | `.pi/settings.json` | Adds `npm:pi-subagents` to `packages` and leaves the other keys alone |
 
@@ -250,10 +250,10 @@ From here on, commands are typed inside pi.
 How to check guard: create `.env` with any value and ask the agent to read it. Reading through the `read` tool is blocked, and `cat .env` in the shell needs confirmation. `git push --force` is refused with a hint about `--force-with-lease`.
 
 Other ways into the work:
-- `/brainstorm <idea>`: design before code;
-- `/plan <spec>`: a plan;
+- `/brainstorm <idea>`: design before code, written to a task file in `docs/tasks/`;
+- `/plan <task file>`: a plan in its `## Plan`;
 - `/debug <symptom>`: finding a bug's root cause;
-- `/new-task <what to do>`: write a task with criteria;
+- `/new-task <what to do>`: write a task file with only the description and criteria;
 - `/skill:<name>`: force-load a skill.
 
 On your own project the sequence is the same: `/kit-init` → `/onboard` (if there is no AGENTS.md) → `/new-task` → `/implement`.
@@ -266,7 +266,7 @@ On your own project the sequence is the same: `/kit-init` → `/onboard` (if the
   - with `pi -e`, the package wins.
   To use our version, rename the project file, or delete it if it duplicates ours.
 - **"no available model for mode …".** `model-routing.json` names a model you don't have access to. Fix the ID or give a list, for example `"model": ["anthropic/…", "openai/…"]`: the first available one is used.
-- **Guard refuses `gh pr create` or a merge: "Working documents would reach …".** Specs, plans and ledgers live only on the work branch. Finish them first (`/finish` does it): move what lasts into `docs/` (topic chapter, decision records), then delete them in one commit. A roadmap with open pieces may stay.
+- **Guard refuses `gh pr create` or a merge: "Task files would reach …".** A task file (`docs/tasks/`) lives only on the work branch. Finish it first (`/finish` does it): move what lasts into `docs/` (topic chapter, decision records), look at its Follow-ups, then delete it in one commit.
 - **The verify gate says there are no commands.** Fill in `.pi/verify.json` or the `## Commands` section in AGENTS.md.
 - **How to see what is loaded.** `pi list` shows the packages, `pi config` turns individual package resources on and off.
 

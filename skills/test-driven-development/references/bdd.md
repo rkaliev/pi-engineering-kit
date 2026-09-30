@@ -9,9 +9,9 @@ Use BDD when acceptance criteria should read in the domain's language and be che
 - Go: Godog;
 - .NET: Reqnroll.
 
-## Link to the spec
+## Link to the criteria
 
-Every user-visible criterion in the spec's success criteria table maps to one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and a criterion without a scenario is visible in review.
+Every user-visible criterion in the task file's success criteria table maps to one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and a criterion without a scenario is visible in review.
 
 ## Writing scenarios
 

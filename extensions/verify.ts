@@ -6,8 +6,8 @@
  * - Files edited since the last fully green run make the workspace "unverified".
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence
  *   (at most once per user message, so it can never loop). The same follow-up carries the approval
- *   gate (approved specs/plans must be committed) and the working-docs gate (implemented plans and
- *   roadmaps must be deleted).
+ *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
+ *   files must be deleted).
  */
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -181,7 +181,7 @@ function countsAsEdit(path: string, cwd: string): boolean {
 	return !isIgnored(rel, resolveIgnore(cwd));
 }
 
-/** Working-document folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
+/** Task-file folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
 function workDocDirs(ctx: ExtensionContext): string[] {
 	const raw = readProjectJson<{ workDocs: unknown }>(ctx.cwd, "guard").workDocs;
 	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return WORK_DOC_DIRS;

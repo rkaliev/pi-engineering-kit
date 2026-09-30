@@ -198,7 +198,7 @@ test("verify ignores edits outside the project and doc edits by default", async 
 	verify(pi);
 	const c = ctx(dir);
 	await emit("session_start", { reason: "startup" }, c);
-	for (const path of ["README.md", "docs/specs/x.md", "/tmp/elsewhere/a.ts", "../sibling/b.ts"]) {
+	for (const path of ["README.md", "docs/tasks/x.md", "/tmp/elsewhere/a.ts", "../sibling/b.ts"]) {
 		await emit("tool_result", { toolName: "write", input: { path }, isError: false }, c);
 	}
 	await emit("agent_end", { messages: [] }, c);
@@ -208,8 +208,8 @@ test("verify ignores edits outside the project and doc edits by default", async 
 	assert.equal(sent.length, 1);
 });
 
-test("verify also reminds to commit approved specs and plans", async () => {
-	const dir = project({ "docs/specs/s.md": "# S\n\nStatus: approved (2026-01-01)\n" });
+test("verify also reminds to commit an approved task file", async () => {
+	const dir = project({ "docs/tasks/s.md": "# S\n\nStatus: design approved (2026-01-01)\n" });
 	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
 	git("init", "-q");
 	git("config", "user.email", "t@example.com");
@@ -220,7 +220,7 @@ test("verify also reminds to commit approved specs and plans", async () => {
 	await emit("session_start", { reason: "startup" }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1);
-	assert.match(sent[0]!.message.content, /Approval gate: .*docs\/specs\/s\.md/);
+	assert.match(sent[0]!.message.content, /Approval gate: .*docs\/tasks\/s\.md/);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1, "once per prompt");
 	git("add", "-A");
@@ -230,7 +230,7 @@ test("verify also reminds to commit approved specs and plans", async () => {
 	assert.equal(sent.length, 1, "committed: no reminder");
 });
 
-test("working docs: guard blocks a PR while they exist; agent_end reminds once to delete a finished plan", async () => {
+test("task files: guard blocks a PR while they exist; agent_end reminds once to delete a finished one", async () => {
 	const dir = project({ "README.md": "x\n" });
 	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
 	git("init", "-q", "-b", "main");
@@ -239,8 +239,8 @@ test("working docs: guard blocks a PR while they exist; agent_end reminds once t
 	git("add", "-A");
 	git("commit", "-qm", "init");
 	git("switch", "-qc", "feat/a");
-	mkdirSync(join(dir, "docs/plans"), { recursive: true });
-	writeFileSync(join(dir, "docs/plans/p.md"), "# Plan\n\n- [x] one\n- [ ] two\n");
+	mkdirSync(join(dir, "docs/tasks"), { recursive: true });
+	writeFileSync(join(dir, "docs/tasks/p.md"), "# P\n\n## Plan\n\n- [x] one\n- [ ] two\n");
 	git("add", "-A");
 	git("commit", "-qm", "docs: plan");
 
@@ -249,7 +249,7 @@ test("working docs: guard blocks a PR while they exist; agent_end reminds once t
 	const bash = (command: string, c = ctx(dir)) => g.emit("tool_call", { toolName: "bash", input: { command } }, c);
 	const pr = await bash("gh pr create --fill");
 	assert.equal(pr?.block, true);
-	assert.match(pr.reason, /^Guard: Working documents would reach .*docs\/plans\/p\.md/);
+	assert.match(pr.reason, /^Guard: Task files would reach .*docs\/tasks\/p\.md/);
 	const push = ctx(dir, { confirm: true });
 	assert.equal(await bash("git push -u origin feat/a", push), undefined, "the work branch may be pushed after confirmation");
 	assert.equal(push.asked.length, 1);
@@ -265,11 +265,11 @@ test("working docs: guard blocks a PR while they exist; agent_end reminds once t
 	await v.emit("session_start", { reason: "startup" }, c);
 	writeFileSync(join(dir, ".pi/guard.json"), "{}");
 	await v.emit("agent_end", { messages: [] }, c);
-	assert.equal(v.sent.length, 0, "a plan with open tasks is not finished");
-	writeFileSync(join(dir, "docs/plans/p.md"), "# Plan\n\n- [x] one\n- [x] two\n");
+	assert.equal(v.sent.length, 0, "a task file with open plan steps is not finished");
+	writeFileSync(join(dir, "docs/tasks/p.md"), "# P\n\n## Plan\n\n- [x] one\n- [x] two\n");
 	await v.emit("agent_end", { messages: [] }, c);
 	assert.equal(v.sent.length, 1);
-	assert.match(v.sent[0]!.message.content, /Working-docs gate: .*docs\/plans\/p\.md/);
+	assert.match(v.sent[0]!.message.content, /Working-docs gate: .*docs\/tasks\/p\.md/);
 	await v.emit("agent_end", { messages: [] }, c);
 	assert.equal(v.sent.length, 1, "once per prompt");
 	await v.emit("input", { text: "next", source: "interactive" }, c);

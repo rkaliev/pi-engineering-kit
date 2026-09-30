@@ -29,7 +29,7 @@ Run exactly these; they mirror CI.
 | <Change the checkout flow> | <`docs/03-checkout.md`, `src/checkout/`> |
 
 - Which source wins: code, tests and CI say what exists; decision records (`docs/decisions/`) say which rules hold and why; topic docs describe. A contradiction is a bug: report it, don't pick one silently.
-- Working documents (`docs/specs/`, `docs/plans/`) stay on work branches and are deleted when the work is done. Only a roadmap with open pieces lives on the base branch.
+- Task files (`docs/tasks/`: one per piece of work, with its description, plan and progress) stay on work branches and are deleted when the work is done; what lasts moves to `docs/`.
 
 ## Rules
 <!-- Only what differs from sensible defaults or from the pi-engineering-kit skills. Delete lines that don't apply. -->

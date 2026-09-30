@@ -1,17 +1,17 @@
 /**
- * Working documents (specs, plans, ledgers) live only on a work branch and never reach the base
- * branch. A roadmap may live on the base branch while it still has open pieces. Git keeps the history.
+ * Task files (one per piece of work: its description, plan and progress) live only on a work branch
+ * and never reach the base branch. Git keeps the history.
  */
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 
-/** Where the kit keeps specs, roadmaps, plans and ledgers. */
-export const WORK_DOC_DIRS = ["docs/specs", "docs/plans"];
+/** Where the kit keeps task files. */
+export const WORK_DOC_DIRS = ["docs/tasks"];
 
-const ROADMAP = /-roadmap\.md$/;
-const LEDGER = /\.progress\.md$/;
+const PLAN = /^## Plan[ \t]*$/m;
+const NEXT_SECTION = /^## /m;
 const OPEN_BOX = /^\s*[-*]\s+\[ \]/m;
 const DONE_BOX = /^\s*[-*]\s+\[[xX]\]/m;
 
@@ -31,25 +31,25 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 	for (const l of landings) {
 		if (l.kind === "commit") {
 			if (!onBase) continue;
-			const staged = leaking(projectDir, ":", stagedPaths(projectDir, dirs));
+			const staged = markdown(stagedPaths(projectDir, dirs));
 			if (staged.length > 0) {
 				return {
 					action: "block",
-					reason: `Working documents are staged on ${base}: ${staged.join(", ")}. Specs, plans and ledgers are committed only on a work branch: create one (\`git switch -c <type>/<topic>\`) and commit there.`,
+					reason: `Task files are staged on ${base}: ${staged.join(", ")}. Task files are committed only on a work branch: create one (\`git switch -c <type>/<topic>\`) and commit there.`,
 				};
 			}
 			continue;
 		}
 		const refs = l.kind === "pr" ? ["HEAD"] : l.kind === "merge" ? (onBase ? l.refs : []) : pushedToBase(l, base, onBase);
 		for (const ref of refs) {
-			const files = leaking(projectDir, ref, trackedPaths(projectDir, ref, dirs));
+			const files = markdown(trackedPaths(projectDir, ref, dirs));
 			if (files.length > 0) return { action: "block", reason: leakReason(files, base) };
 		}
 	}
 	return undefined;
 }
 
-/** Plans whose checkboxes are all ticked, and roadmaps with no open piece: implemented, so due for deletion. */
+/** Task files whose Plan section has every checkbox ticked: implemented, so due for deletion. */
 export function finishedWorkDocs(projectDir: string, dirs = WORK_DOC_DIRS): string[] {
 	const files: string[] = [];
 	for (const dir of dirs) {
@@ -61,8 +61,7 @@ export function finishedWorkDocs(projectDir: string, dirs = WORK_DOC_DIRS): stri
 		}
 		for (const name of names) {
 			const path = `${dir}/${name.replaceAll("\\", "/")}`;
-			const isPlan = basename(dir) === "plans" && path.endsWith(".md") && !LEDGER.test(path);
-			if (!isPlan && !ROADMAP.test(path)) continue;
+			if (!path.endsWith(".md")) continue;
 			try {
 				if (finished(readFileSync(join(projectDir, path), "utf8"))) files.push(path);
 			} catch {
@@ -74,7 +73,7 @@ export function finishedWorkDocs(projectDir: string, dirs = WORK_DOC_DIRS): stri
 }
 
 export function workDocsReminder(files: string[]): string {
-	return `Working-docs gate: implemented working documents are still in the tree: ${files.join(", ")}. Move what lasts into the topic chapter (docs/NN-topic.md) and docs/decisions/, then delete them, with the plan's ledger and spec, in one commit (\`git rm …\`). Opening a PR or landing on the base branch is blocked while they exist.`;
+	return `Working-docs gate: implemented task files are still in the tree: ${files.join(", ")}. Move what lasts into the topic chapter (docs/NN-topic.md) and docs/decisions/, show the user each file's Follow-ups, then delete the files in one commit (\`git rm …\`). Opening a PR or landing on the base branch is blocked while they exist.`;
 }
 
 /** The branch work lands on: `origin/HEAD`, else an existing `main` or `master`. */
@@ -143,17 +142,23 @@ function stagedPaths(projectDir: string, dirs: string[]): string[] {
 	return lines(git(projectDir, ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...dirs]));
 }
 
-/** Markdown working documents at `ref` (`:` is the index), except roadmaps with open pieces. */
-function leaking(projectDir: string, ref: string, paths: string[]): string[] {
-	return paths.filter((p) => p.endsWith(".md") && (!ROADMAP.test(p) || finished(git(projectDir, ["show", `${ref === ":" ? "" : ref}:${p}`]) ?? "")));
+/** Markdown task files among `paths`. */
+function markdown(paths: string[]): string[] {
+	return paths.filter((p) => p.endsWith(".md"));
 }
 
+/** The Plan section has at least one ticked box and none open. Boxes elsewhere in the file don't count. */
 function finished(text: string): boolean {
-	return DONE_BOX.test(text) && !OPEN_BOX.test(text);
+	const start = text.search(PLAN);
+	if (start === -1) return false;
+	const body = text.slice(start).replace(PLAN, "");
+	const end = body.search(NEXT_SECTION);
+	const plan = end === -1 ? body : body.slice(0, end);
+	return DONE_BOX.test(plan) && !OPEN_BOX.test(plan);
 }
 
 function leakReason(files: string[], base: string | undefined): string {
-	return `Working documents would reach ${base ?? "the base branch"}: ${files.join(", ")}. Specs, plans and ledgers live only on the work branch, and a roadmap only while it has open pieces. Move what lasts into the topic chapter (docs/NN-topic.md) and docs/decisions/, remove them in one commit (\`git rm ${files.join(" ")}\`), then retry.`;
+	return `Task files would reach ${base ?? "the base branch"}: ${files.join(", ")}. A task file lives only on its work branch. Move what lasts into the topic chapter (docs/NN-topic.md) and docs/decisions/, show the user its Follow-ups, remove it in one commit (\`git rm ${files.join(" ")}\`), then retry.`;
 }
 
 function lines(out: string | undefined): string[] {

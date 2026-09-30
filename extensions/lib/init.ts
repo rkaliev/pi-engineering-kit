@@ -140,7 +140,7 @@ function planCi(cwd: string, hint: string): InitItem {
 	const wantsDocsCheck = !(Array.isArray(guard.workDocs) && guard.workDocs.length === 0);
 	const gaps = [
 		...(missing.length > 0 ? [`doesn't run: ${missing.join(", ")}`] : []),
-		...(wantsDocsCheck && !workDocsCheck ? ["has no working-docs check (specs and plans must not reach the base branch)"] : []),
+		...(wantsDocsCheck && !workDocsCheck ? ["has no working-docs check (task files must not reach the base branch)"] : []),
 	];
 	if (gaps.length > 0) return { target: "CI", status: "missing", why: `${files.join(", ")} ${gaps.join("; ")}; run ${hint}` };
 	return { target: "CI", status: "exists", why: `${files.join(", ")} runs every verification command${wantsDocsCheck ? " and the working-docs check" : ""}` };

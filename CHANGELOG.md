@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0
+
+- One task file replaces the roadmap, spec, plan and ledger. Each piece of work gets `docs/tasks/YYYY-MM-DD-<slug>.md` from `templates/task.md`, which stands in for a tracker issue: the user's request verbatim, the description (Intent, Context, Success criteria, Scope, Decisions, Design, Rollout, Risks), Follow-ups, Plan and Progress. `templates/spec.md` is gone.
+  - Two approvals in one file: brainstorming writes the description (`Status: design approved`), then writing-plans fills `## Plan` (`Status: plan approved`). The approval gate reminds to commit either one.
+  - executing-plans records baseline, drift, rulings and completed tasks in `## Progress`; only `## Plan` has checkboxes.
+  - `/new-task` writes the same file with only the description; `tasks/<NN>-<slug>.md` is gone.
+- No roadmap. Several independent subsystems become separate tasks: one now, the others one line each in its Follow-ups, each later with its own task file, branch and PR. When a task finishes, its Follow-ups go to the user and the file is deleted. Big coherent work is not cut to fit a size.
+- The rules for task files are the same as for the old working documents: they live only on the work branch. The guard, the agent_end gate and the `working-docs` CI job now watch `docs/tasks/` (the `workDocs` default is `["docs/tasks"]`). A task file counts as implemented when every checkbox in its Plan section is ticked.
+
 ## 0.10.0
 
 - New skill `ui-motion` for web, Android, iOS and desktop. It decides first whether something should move at all: frequent and keyboard-triggered actions get no motion except press feedback, and every animation needs a named purpose. Then it covers easing by movement type (no ease-in on UI), budgets under 300 ms, physical origin, interruptibility, cheap properties only, reduced motion as "gentler, not zero", and gesture physics (velocity handoff, momentum projection, rubber-banding). It includes review and audit procedures. `references/` holds the exact values and formulas and the per-platform APIs.

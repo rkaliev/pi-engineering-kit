@@ -29,7 +29,7 @@ In an existing codebase the stack is already chosen. Use what is there (changing
    - operational cost;
    - lock-in.
 3. **Verify facts at the source.** Check the current LTS or stable versions, support windows and SDK requirements in the official docs or release pages. Never state them from memory.
-4. **Recommend one**, with its trade-offs and what would change the decision. Record the decision (a decision record, see writing-documentation, or the spec) with the date and pinned versions.
+4. **Recommend one**, with its trade-offs and what would change the decision. Record the decision (a decision record, see writing-documentation) with the date and pinned versions.
 5. **Scaffold with the official tool** for the chosen stack, and set up CI from the start (ci-quality-gates). For web and API products, offer BDD as the acceptance layer; the user decides. Pin exact versions, commit the lockfile, and add formatter, linter, typecheck and test commands from the start. Write them into AGENTS.md (`../../templates/AGENTS.md`) and `.pi/verify.json`.
 
 ## Reliable defaults (starting points, not rules)

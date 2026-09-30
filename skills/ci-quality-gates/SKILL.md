@@ -27,7 +27,7 @@ Propose the layers that fit the stack, explain what each catches, and add each o
 4. **Security:** secret scanning (gitleaks) and a dependency audit (osv-scanner or the ecosystem's tool) on every change.
 5. **Database** (database-changes): migrations applied, and rolled back where the project supports it, on a throwaway database, plus a schema drift check.
 6. **Contracts:** regenerate OpenAPI, protobuf or generated types from the source of truth, and fail if they differ from what is committed.
-7. **Docs:** link check, when the project keeps docs, and the `working-docs` job, so specs, plans and ledgers never reach the base branch from any author.
+7. **Docs:** link check, when the project keeps docs, and the `working-docs` job, so task files never reach the base branch from any author.
 8. **Commits:** the project's commit linter, if it uses one.
 9. **Coverage:** a report on every change, and a floor checked on a schedule. It never blocks a merge: it is a floor, not a target.
 10. **BDD scenarios**, when the project has them (`../test-driven-development/references/bdd.md`).

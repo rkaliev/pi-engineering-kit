@@ -1,5 +1,5 @@
 /**
- * Guard: blocks irreversible or secret-leaking tool calls and working documents reaching the base
+ * Guard: blocks irreversible or secret-leaking tool calls and task files reaching the base
  * branch, and asks the human before outward-facing ones. Tightening rules from `.pi/guard.json`
  * always apply; `allow` and `workDocs` (which relax the defaults) apply only in trusted projects.
  */

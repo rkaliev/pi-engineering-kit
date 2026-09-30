@@ -23,7 +23,7 @@ Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING,
 | API reference | Exact contract of an interface | generated from the source of truth (OpenAPI from schemas or code, typedoc, KDoc, DocC); never hand-maintained in parallel |
 | Code comments | Why this code is the way it is | next to the code |
 
-**Working** documents (specs, plans, ledgers, roadmaps) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Every document keeps only its current version, so context stays small and consistent. Personal notes go in the agent's memory, not the repo.
+**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Every document keeps only its current version, so context stays small and consistent. Personal notes go in the agent's memory, not the repo.
 
 Templates: `references/templates.md`.
 
@@ -67,5 +67,5 @@ Report which of these you did. To enforce these rules mechanically, propose chec
 |---|---|
 | "I'll update the docs later" | Later means never; the next reader gets the stale version. Same change. |
 | "I'll copy that section here too" | Two copies drift. Link to one. |
-| "Describe how it will work" | Docs describe what exists. Plans go in a spec or plan file. |
+| "Describe how it will work" | Docs describe what exists. Plans go in the task file. |
 | "The comment explains the code" | If it restates the code, delete it. |

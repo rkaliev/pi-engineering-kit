@@ -19,7 +19,7 @@ Precedence: the user's direct instructions, then project files (AGENTS.md, CLAUD
 |---|---|---|
 | Spike | "can we…", a feasibility question, throwaway code | State the question and the probe, get a nod, investigate, report a recommendation |
 | Bounded | A small change to a flow that already exists in this repo | Short design in chat → approval → test-driven-development → verification-before-completion |
-| Architectural | A new project, subsystem or interface, or a change across components | brainstorming → spec → writing-plans → executing-plans → requesting-code-review |
+| Architectural | A new project, subsystem or interface, or a change across components | brainstorming → task file → writing-plans → executing-plans → requesting-code-review |
 
 When unsure, take the heavier path. If hidden complexity shows up mid-task, stop, say so, and move up a path. Never move down mid-task.
 
@@ -33,7 +33,7 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 | Bug, failing test, unexpected behavior | systematic-debugging |
 | Unfamiliar or legacy repo, no AGENTS.md | onboarding-existing-codebase |
 | New project, or a technology choice | choosing-a-stack |
-| Continuing a large project | its `docs/specs/*-roadmap.md`: next unchecked piece |
+| Continuing work | the branch's `docs/tasks/*.md`: its Plan and Progress |
 | About to say done, fixed or passing | verification-before-completion |
 | Web, mobile or desktop code | the platform skill: web-frontend, mobile-development, desktop-development |
 | Money, payments, POS or fiscal, auth and other security-sensitive code | the domain skill: payments-and-money, pos-systems, security-review |
@@ -54,7 +54,7 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 - Built-in tools: `read`, `write`, `edit`, `bash` (and optionally `grep`, `find`, `ls`).
 - `run_verification` runs the project's checks. Prefer it for completion evidence.
 - **Delegation:** if a `subagent` tool is available, use it where a skill asks for a subagent. If only `subagents_enable` is visible, call it first; a skill that calls for delegation authorizes it. If neither exists, do the work inline, and never invent a tool call.
-- **Task tracking:** use a todo tool if one exists. Otherwise use checkboxes in the plan file, or `TODO.md` in the repo.
+- **Task tracking:** use a todo tool if one exists. Otherwise use the checkboxes in the task file's Plan.
 
 ## Red flags
 
