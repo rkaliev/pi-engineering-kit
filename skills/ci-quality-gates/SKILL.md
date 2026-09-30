@@ -38,6 +38,11 @@ Mobile and desktop add their own jobs: a release build, signing with secrets fro
 
 Requiring `gate`, requiring an up-to-date branch and blocking direct pushes to the main branch are repository settings: outward-facing. Write the exact instruction or command (`gh api …`, GitLab protected branches) and run it only after the user's yes.
 
+For a team repository, offer two more, also only on the user's yes:
+
+- **One required human approval.** An AI review (the kit's reviewer, a review bot) supplements it and never replaces it.
+- **Code owners** (`CODEOWNERS` on GitHub and GitLab) for the files that steer every other change: the agent manifest and the agent's config folder, path rules, `.github/` or the CI config, `docs/decisions/`, and the lint and type configs. With "require review from code owners" on, a change to the rules needs its owner's approval. Template in `references/ci-templates.md`.
+
 ## Keeping it in sync
 
 - When a verification command is added or changed, change the CI in the same commit.

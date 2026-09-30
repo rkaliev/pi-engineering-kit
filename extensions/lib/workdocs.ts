@@ -49,6 +49,17 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 	return undefined;
 }
 
+/** The refs a command would land on the base branch (a PR/MR from HEAD, a merge into it, a push to it), or undefined. */
+export function landingRefs(command: string, projectDir: string): { base: string; refs: string[] } | undefined {
+	const landings = splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined && l.kind !== "commit");
+	if (landings.length === 0 || git(projectDir, ["rev-parse", "--git-dir"]) === undefined) return undefined;
+	const base = baseBranch(projectDir);
+	if (!base) return undefined;
+	const onBase = currentBranch(projectDir) === base;
+	const refs = landings.flatMap((l) => (l.kind === "pr" ? ["HEAD"] : l.kind === "merge" ? (onBase ? l.refs : []) : l.kind === "push" ? pushedToBase(l, base, onBase) : []));
+	return refs.length > 0 ? { base, refs } : undefined;
+}
+
 /** Task files whose Plan section has every checkbox ticked: implemented, so due for deletion. */
 export function finishedWorkDocs(projectDir: string, dirs = WORK_DOC_DIRS): string[] {
 	const files: string[] = [];

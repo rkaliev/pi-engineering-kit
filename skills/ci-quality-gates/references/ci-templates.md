@@ -88,6 +88,25 @@ gate:
 
 Protect the main branch and require the pipeline to succeed before merge (Settings → Merge requests), with the user's agreement.
 
+## Code owners
+
+`.github/CODEOWNERS` (GitHub) or `CODEOWNERS` (GitLab). The last matching line wins, so the catch-all goes first. Keep only the lines for files the project has, and use real team handles; never guess them.
+
+```
+*                     @org/maintainers
+/CLAUDE.md            @org/maintainers
+/AGENTS.md            @org/maintainers
+/.claude/             @org/maintainers
+/.pi/                 @org/maintainers
+/.github/             @org/platform
+/.gitlab-ci.yml       @org/platform
+/docs/decisions/      @org/architects
+/eslint.config.*      @org/maintainers
+/tsconfig*.json       @org/maintainers
+```
+
+Then turn on "Require review from Code Owners" (GitHub branch protection) or "Code owner approval" (GitLab protected branches), with the user's agreement.
+
 ## Tools by stack
 
 | Stack | Test hygiene | Dependency audit | Notes |

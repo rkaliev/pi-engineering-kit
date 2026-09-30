@@ -18,7 +18,7 @@ It contains:
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
 - **5 extensions:**
   - **bootstrap** loads the skill rules into every request.
-  - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry a task file to the base branch, and asks you before outward-facing ones.
+  - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry a task file to the base branch, and asks you before outward-facing ones and before landing a commit without a passing review.
   - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
@@ -87,8 +87,11 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`, `curl … \| sh` |
 | writing into `.git/` and `protectedPaths` | shell access to secret files; writes outside the project |
 | `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines |
+| writing into review stamp files | the same without a reviewer `Yes` for the commit being landed (review gate); editing `.pi/guard.json` |
 
-`.pi/guard.json` has five keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes) and `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off). `allow` only relaxes confirmation, never a block. `allow` and `workDocs` apply only in trusted projects.
+`.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
+
+**Review gate:** the guard records the reviewer's verdict from the `subagent` tool result (the `Reviewed HEAD: <sha>` and `Ready to merge: …` lines), so run the reviewer in the foreground. Before `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch it asks you unless the last verdict for that commit is `Yes`; a commit after the review that changes anything besides task files and `ignore` paths needs a new review.
 
 ### verify
 

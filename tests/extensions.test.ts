@@ -441,3 +441,36 @@ test("/kit-init without UI and without --yes only reports the plan", async () =>
 	assert.equal(existsSync(join(dir, ".pi")), false);
 	assert.match(sent.at(-1)!.message.content, /--yes/);
 });
+
+test("review gate: a subagent report stamps the verdict; without one the guard asks before a PR", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const head = git("rev-parse", "HEAD");
+
+	const g = fakePi();
+	guard(g.pi);
+	const bash = (command: string, c = ctx(dir)) => g.emit("tool_call", { toolName: "bash", input: { command } }, c);
+	const result = (toolName: string, text: string) => g.emit("tool_result", { toolName, input: {}, content: [{ type: "text", text }], isError: false }, ctx(dir));
+
+	const asking = ctx(dir);
+	assert.equal((await bash("gh pr create --fill", asking))?.block, true, "declined");
+	assert.match(asking.asked[0]!, /Review gate: no reviewer verdict/);
+	assert.equal((await bash("gh pr create --fill", ctx(dir, { hasUI: false })))?.block, true, "no UI: blocked");
+	const push = ctx(dir);
+	await bash("git push origin feat/a:main", push);
+	assert.match(push.asked[0]!, /Review gate: .* Also: This command pushes to a remote/, "one confirmation names both reasons");
+
+	await result("bash", `Reviewed HEAD: ${head}\nReady to merge: Yes`);
+	assert.equal((await bash("gh pr create --fill"))?.block, true, "only a subagent result stamps");
+	await result("subagent", `Reviewed HEAD: ${head.slice(0, 9)}\nReady to merge: Yes`);
+	assert.equal(await bash("gh pr create --fill"), undefined);
+});
