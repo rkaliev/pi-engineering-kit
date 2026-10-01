@@ -257,8 +257,11 @@ test("task files: guard blocks a PR while they exist; agent_end reminds once to 
 
 	mkdirSync(join(dir, ".pi"), { recursive: true });
 	writeFileSync(join(dir, ".pi/guard.json"), JSON.stringify({ workDocs: [] }));
-	assert.equal((await bash("gh pr create", ctx(dir, { trusted: false })))?.block, true, "an untrusted project cannot turn the rule off");
-	assert.equal(await bash("gh pr create", ctx(dir, { trusted: true })), undefined, "a trusted project can");
+	const untrusted = await bash("gh pr create", ctx(dir, { trusted: false }));
+	assert.match(untrusted.reason, /Task files would reach/, "an untrusted project cannot turn the rule off");
+	const trusted = await bash("gh pr create", ctx(dir, { trusted: true }));
+	assert.doesNotMatch(trusted.reason, /Task files/, "a trusted project can");
+	assert.match(trusted.reason, /Review gate: no reviewer verdict/, "the branch still needs a review, like any branch");
 
 	const v = fakePi();
 	verify(v.pi);

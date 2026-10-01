@@ -53,8 +53,10 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 
 ## Finish
 
-1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the rulings in Progress.
-2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite, then re-review the fixes' range until the verdict is `Yes`: the review gate lands nothing else without asking the user. Record Minor findings in Progress.
-3. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
-4. **Task file:** move what lasts out of it: behavior into the topic chapter, decisions and lasting rulings into `docs/decisions/` (writing-documentation). Show the user its Follow-ups and offer to start the next one. Then delete the task file in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists; git keeps it.
-5. Apply verification-before-completion, then use the finishing section of git-workflow.
+The final review is the last step before landing, because a verdict covers exactly the commit it reviewed.
+1. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
+2. **Task file:** move what lasts into the topic chapter and `docs/decisions/` (writing-documentation), show the user its Follow-ups, then delete it in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists.
+3. If the branch must be rebased onto a newer base, do it now.
+4. Apply verification-before-completion.
+5. Review the whole branch on this HEAD with requesting-code-review, with the plan's Review focus and the rulings from the task file's last commit. Fix Critical and Important findings with RED→GREEN, and re-review until `Yes` for the current HEAD. Report Minor findings.
+6. Use the finishing section of git-workflow. Any change after the `Yes` (a commit, an amend, a rebase) needs a new review first.

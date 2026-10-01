@@ -27,7 +27,7 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 - Respect hooks. **Never** use `--no-verify`, `-n`, or `commit --amend` on pushed commits. Never rewrite shared history: no `push --force`. On your own branch after the user agrees, use `--force-with-lease`.
 - Follow the project's rules on trailers (some forbid AI co-author lines) and on issue IDs in messages.
 - If the repo has a commit linter (commitlint, a `commit-msg` hook), follow its config and fix the message rather than bypass it. When one change becomes several commits, order them so each one is green: build and config, then code, then tests, then docs.
-- Resolve conflicts by rebasing onto the base branch, not by merging it into a PR branch, unless the repo prefers merging. Rebasing your own pushed branch uses `--force-with-lease=<branch>:<sha before the rebase>`, after the user agrees.
+- Resolve conflicts by rebasing onto the base branch, not by merging it into a PR branch, unless the repo prefers merging. A rebase, like any change, makes the last review stale: rebase before the final review, or review again after it. Rebasing your own pushed branch uses `--force-with-lease=<branch>:<sha before the rebase>`, after the user agrees.
 
 ## Finishing a branch
 

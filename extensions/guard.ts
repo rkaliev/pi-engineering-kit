@@ -51,7 +51,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
 			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
-				const gate = { workDocs, missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
+				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				decision = join(decision, review);
 			}

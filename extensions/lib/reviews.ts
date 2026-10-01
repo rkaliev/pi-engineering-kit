@@ -1,8 +1,8 @@
 /**
  * Review gate: code reaches the base branch (a PR/MR, a merge into it or a push to it) only after
- * a reviewer passed it. Verdicts are recorded from the reviewer's own report (never by the main
- * agent), one file per reviewer run, and match a commit by the branch's own change: deleting task
- * files, changing docs or rebasing onto a newer base keeps a review valid; changing code doesn't.
+ * a reviewer passed exactly the commit being landed. Verdicts are recorded from the reviewer's own
+ * report (never by the main agent), one file per reviewer run. Any change after the review (a new
+ * commit, an amend, a rebase, a docs edit) is a different commit and needs a new review.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -24,8 +24,6 @@ export interface ReviewRecord {
 }
 
 export interface ReviewGateOptions {
-	/** Task-file directories: deleting task files after a review doesn't invalidate it. */
-	workDocs: string[];
 	/** What happens when no passing review covers the commit: deny, or ask the human. */
 	missing: "block" | "confirm";
 	/** How the user turns the gate off, named in the reason. */
@@ -38,18 +36,12 @@ const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2
 // A verdict word followed by `/` or `|` is the unfilled template line, not a verdict.
 const VERDICT = /Ready to merge[*_]*:[*_\s]*(Yes|No|With fixes|Inconclusive)\b(?![*_\s]*[/|])/gi;
 const HEAD = /Reviewed HEAD[*_]*:[*_\s`]*([0-9a-f]{7,40})\b/gi;
-/** Markdown in these steers the agent (manifests, rules, skills, prompts), so it is code for the gate. Lower case. */
-const RULE_FILES = new Set(["claude.md", "claude.local.md", "agents.md", "agents.override.md", "skill.md"]);
-const RULE_DIRS = new Set([".claude", ".pi", "rules", "skills", "agents", "prompts"]);
-/** What `docs/` may hold without review: prose and pictures, not a docs site's code or config. */
-const DOC_FILE = /\.(mdx?|rst|adoc|png|jpe?g|gif|svg|webp|pdf|drawio|excalidraw)$/i;
 /** Segments that may run before a landing in one command: they neither commit nor move a ref. */
 const SAFE_COMMANDS = new Set(["cd", "pushd", "echo", "printf", "true", "sleep", "pwd"]);
 const SAFE_GIT = new Set(["status", "diff", "log", "show", "rev-parse", "add", "fetch", "remote", "branch"]);
 const READ_ONLY = new Set(["cat", "less", "head", "tail", "grep", "rg", "ls", "wc", "diff", "stat", "file", "jq"]);
 const READ_ONLY_GIT = new Set(["diff", "show", "log", "status", "blame"]);
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const CANDIDATES = 10;
 
 /** The verdict and SHA in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
 export function parseReview(text: string): { sha: string; verdict: Verdict } | undefined {
@@ -173,7 +165,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 			if (ref === undefined) {
 				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
 			}
-			const problem = uncovered(where, projectDir, base, ref, options, root);
+			const problem = uncovered(where, projectDir, base, ref, root);
 			if (problem) return decision(options.missing, problem, options);
 		}
 	}
@@ -305,73 +297,25 @@ function targets(l: Exclude<Landing, { kind: "commit" }>, where: string, base: s
 	return refs.length === 0 ? [undefined] : refs;
 }
 
-function uncovered(where: string, projectDir: string, base: string, ref: string, options: ReviewGateOptions, root?: string): string | undefined {
+function uncovered(where: string, projectDir: string, base: string, ref: string, root?: string): string | undefined {
 	const sha = git(where, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
 	if (!sha) return `can't resolve ${ref}.`;
+	// Already on the remote base (or the base itself): nothing new lands, so there is nothing to review.
 	const upstream = git(where, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${base}`]) ? `refs/remotes/origin/${base}` : base;
-	const prefix = git(projectDir, ["rev-parse", "--show-prefix"]) ?? "";
-	const own = ownChange(where, upstream, sha, prefix, options.workDocs);
-	if (own === undefined) return `can't compare ${short(sha)} with ${upstream}.`;
-	if (own === "") return undefined;
+	if (spawnSync("git", ["merge-base", "--is-ancestor", sha, upstream], { cwd: where, timeout: 5000 }).status === 0) return undefined;
 
-	const reviews = readReviews(projectDir, root).slice(0, CANDIDATES);
-	// The newest review of the same change decides, whether it saw this exact commit or not.
-	const match = reviews.find((r) => r.sha === sha || ownChange(where, upstream, r.sha, prefix, options.workDocs) === own);
+	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see.
+	const reviews = readReviews(projectDir, root);
+	const match = reviews.find((r) => r.sha === sha);
 	if (!match) {
 		const last = reviews[0];
-		return last ? `the last review covers ${short(last.sha)}; ${short(sha)} changes code it didn't see.` : `no reviewer verdict recorded for ${short(sha)}.`;
+		return last
+			? `no reviewer verdict recorded for ${short(sha)}; the last reviewed commit is ${short(last.sha)}, and the branch changed after it (a new commit, an amend or a rebase), so it needs a new review.`
+			: `no reviewer verdict recorded for ${short(sha)}.`;
 	}
 	// "With fixes" passes only after the fixes and a re-review of them, which gives a new verdict.
 	if (match.verdict !== "Yes") return `the review of ${short(match.sha)} returned "${match.verdict}".`;
 	return undefined;
-}
-
-/**
- * The branch's own change to reviewable files, from where it forked off the base: the diff text with one line
- * of context but without line numbers (so the same change on a newer base matches, even in a file the base also
- * changed elsewhere, while a moved line doesn't), and the new content hash of each binary file. "" when it
- * changes no reviewable file, undefined when git fails. Every byte of a changed line counts, whitespace included.
- */
-function ownChange(where: string, upstream: string, sha: string, prefix: string, workDocs: string[]): string | undefined {
-	const fork = git(where, ["merge-base", upstream, sha]);
-	if (!fork) return undefined;
-	const listing = gitRaw(where, ["diff", "-z", "--raw", "--numstat", "--no-renames", "--no-abbrev", fork, sha]);
-	if (listing === undefined) return undefined;
-	const blobs = new Map<string, string>();
-	const binary = new Set<string>();
-	const fields = listing.split("\0");
-	for (let i = 0; i < fields.length; i++) {
-		const field = fields[i]!;
-		if (field.startsWith(":")) blobs.set(fields[++i] ?? "", field.split(" ")[3] ?? "");
-		else if (field.startsWith("-\t-\t")) binary.add(field.slice(4));
-	}
-	const files = [...blobs.keys()].filter((p) => p && !exempt(p, prefix, workDocs)).sort();
-	if (files.length === 0) return "";
-	const text = files.filter((f) => !binary.has(f));
-	let diff = "";
-	if (text.length > 0) {
-		const args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=1", fork, sha, "--", ...text.map((f) => `:(top,literal)${f}`)];
-		const out = gitRaw(where, args);
-		if (out === undefined) return undefined;
-		diff = out
-			.split("\n")
-			.filter((l) => !l.startsWith("index "))
-			.map((l) => (l.startsWith("@@") ? "@@" : l))
-			.join("\n");
-	}
-	const bins = files.filter((f) => binary.has(f)).map((f) => `${f} ${blobs.get(f)}`);
-	return hash(`${diff}\0${bins.join("\n")}`);
-}
-
-/** Task files, prose and pictures in `docs/`, and other markdown need no review, except markdown that steers the agent. */
-export function exempt(repoPath: string, prefix: string, workDocs: string[]): boolean {
-	if (!repoPath.startsWith(prefix)) return false;
-	const path = repoPath.slice(prefix.length);
-	if (workDocs.some((d) => path.startsWith(`${d.replace(/\/+$/, "")}/`))) return true;
-	const parts = path.split("/");
-	const name = parts[parts.length - 1]!;
-	if (RULE_FILES.has(name.toLowerCase()) || parts.slice(0, -1).some((d) => RULE_DIRS.has(d.toLowerCase()))) return false;
-	return (parts[0] === "docs" && DOC_FILE.test(name)) || /\.mdx?$/i.test(name);
 }
 
 /** Where a project's review records live. Needs no environment, so every hook process agrees. */
