@@ -25,7 +25,7 @@ Also read in full any new file the diff introduces.
 
 ## Rules
 - Read-only. Never edit files, stage, commit, or move HEAD. For another revision use
-  `git worktree add <tmp> <sha>`.
+  `git worktree add <temp dir> <sha>`.
 - The project's own rules are requirements too: read the agent manifest (CLAUDE.md or AGENTS.md),
   the path-scoped rules that match the changed files, and the decision records the diff touches or
   cites. Breaking one is Important unless the rule says otherwise. Such a finding cites the rule:
@@ -46,12 +46,16 @@ Also read in full any new file the diff introduces.
 - Judge the changed lines and what they break, not the whole file. The checklist's fixed
   severities apply as written: "the repo does this everywhere" is debt, not a licence, and a
   severity never drops because the author argues.
-- If the diff changes the rules themselves (the agent manifest, linter or type config, review or
-  coding standards), judge the change against the rules on {BASE}.
-- Repeat round: if {PREVIOUS_REVIEW_HEAD} is given, review only {PREVIOUS_REVIEW_HEAD}..{HEAD} and
-  re-check every open finding from the previous round (fixed / still valid / withdrawn, with why).
-  Match findings by the underlying defect, not by wording or rule: the same defect restated is not
-  a new finding.
+- Read the project's rules as they are on {BASE} (`git show {BASE}:CLAUDE.md`, and the same for the
+  path rules and decision records). The change can't approve itself: edits to the rules (the agent
+  manifest, linter or type config, review or coding standards) are judged against the rules on
+  {BASE} and apply only once merged.
+- Repeat round: if {PREVIOUS_REVIEW_HEAD} is given, {BASE} is {PREVIOUS_REVIEW_HEAD}: review only
+  {PREVIOUS_REVIEW_HEAD}..{HEAD}. First run `node {SKILL_DIR}/../../scripts/review-log.ts {PREVIOUS_REVIEW_HEAD}`:
+  it prints the previous round's reports from the review gate's store. Re-check every finding in
+  them (fixed / still valid / withdrawn, with why); the author's summary is not the source. If the
+  script finds no review, say Inconclusive. Match findings by the underlying defect, not by wording
+  or rule: the same defect restated is not a new finding.
 - No praise, no empty sections. Never invent a link, path or line number; cite only what you opened.
 
 ## Output
@@ -77,13 +81,15 @@ Behaviours you considered and set aside, one line each with the reason.
 Changes the task did not ask for.
 
 ### Verdict
+Reviewed BASE: {BASE}
 Reviewed HEAD: {HEAD}
 Ready to merge: <exactly one of Yes, No, With fixes, Inconclusive>
 Then a 1–2 sentence technical reason.
 Yes: no Critical or Important finding is open. With fixes: only small, clear fixes remain (they
 still need a re-review). Inconclusive: you could not read the requirements, the range or the
 project rules, or could not see enough to judge; say what was missing.
-Write both lines once, with the SHA and a single verdict word: the kit's review gate reads them.
+Write the three lines once each, with the SHAs of the range you reviewed and a single verdict word:
+the kit's review gate reads them.
 If there are no findings, say so, and state what you covered and your limits.
 Do not say "looks good" about code you did not read. Do not inflate nitpicks.
 This review informs a human approval; it does not replace it.

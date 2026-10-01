@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, parseReview, readReviews, recordReview, recordVerdict, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, recordVerdict, rememberPr, reviewsDir, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
@@ -39,46 +39,49 @@ function repo() {
 	git("remote", "add", "origin", remote);
 	git("push", "-q", "origin", "main");
 	git("remote", "set-head", "origin", "main");
+	const base = git("rev-parse", "HEAD");
 	git("switch", "-qc", "feat/a");
 	const head = commit({ "src/a.ts": "export const a = 1;\n", "docs/tasks/2026-01-01-a.md": "# A\n" });
 	let prompt = 0;
 	const check = (command: string, options = OPTIONS, cwd = dir) => checkReview(command, cwd, dir, options, root);
 	const review = (text: string, promptId = `p${++prompt}`, runId = "r1") => recordReview(dir, text, { promptId, run: runId }, root);
-	return { dir, root, git, run, commit, head, check, review };
+	return { dir, root, git, run, commit, head, base, check, review };
 }
 
-const report = (sha: string, verdict: string) => `### Verdict\nReviewed HEAD: ${sha.slice(0, 10)}\nReady to merge: ${verdict}, one sentence.`;
+const report = (sha: string, verdict: string, base: string) => `### Verdict\nReviewed BASE: ${base.slice(0, 10)}\nReviewed HEAD: ${sha.slice(0, 10)}\nReady to merge: ${verdict}, one sentence.`;
 const action = (d: ReturnType<typeof checkReview>) => d?.action ?? "allow";
 
 test("parseReview reads the SHA and the worst verdict; ambiguous reports and the template line give nothing", () => {
-	assert.deepEqual(parseReview(report("abc1234def", "Yes")), { sha: "abc1234def", verdict: "Yes" });
-	assert.deepEqual(parseReview("**Reviewed HEAD:** `abc1234`\n**Ready to merge:** With fixes"), { sha: "abc1234", verdict: "With fixes" });
-	assert.equal(parseReview(`${report("abc1234", "Yes")}\n${report("abc1234", "No")}`)?.verdict, "No", "parallel reports: the worst wins");
+	assert.deepEqual(parseReview(report("abc1234def", "Yes", "0000aaa")), { base: "0000aaa", sha: "abc1234def", verdict: "Yes" });
+	assert.deepEqual(parseReview("**Reviewed BASE:** `0000aaa`\n**Reviewed HEAD:** `abc1234`\n**Ready to merge:** With fixes"), { base: "0000aaa", sha: "abc1234", verdict: "With fixes" });
+	assert.equal(parseReview("Reviewed HEAD: abc1234\nReady to merge: Yes"), undefined, "no BASE: the range is unknown");
+	assert.equal(parseReview(`${report("abc1234", "Yes", "0000aaa")}\n${report("abc1234", "Yes", "1111bbb")}`), undefined, "two BASEs");
+	assert.equal(parseReview(`${report("abc1234", "Yes", "0000aaa")}\n${report("abc1234", "No", "0000aaa")}`)?.verdict, "No", "parallel reports: the worst wins");
 	assert.equal(parseReview("Ready to merge: Yes"), undefined, "no SHA");
-	assert.equal(parseReview(`${report("abc1234", "Yes")}\n${report("def5678", "Yes")}`), undefined, "two SHAs");
+	assert.equal(parseReview(`${report("abc1234", "Yes", "0000aaa")}\n${report("def5678", "Yes", "0000aaa")}`), undefined, "two SHAs");
 	assert.equal(parseReview("Reviewed HEAD: abc1234\nReady to merge: Yes / No / With fixes / Inconclusive"), undefined, "an echoed template is not a verdict");
 	assert.equal(parseReview("Reviewed HEAD: abc1234\nReady to merge: Yes | No"), undefined);
 });
 
 test("no review, or a failing one, blocks a PR; a passing review of HEAD allows it", () => {
-	const { head, check, review } = repo();
+	const { head, check, review, base } = repo();
 	assert.match(check("gh pr create --fill")!.reason!, /no reviewer verdict recorded .* Only the user can waive the gate \(reviewGate: false\)/);
 	for (const verdict of ["No", "With fixes", "Inconclusive"]) {
-		assert.equal(typeof review(report(head, verdict)), "object");
+		assert.equal(typeof review(report(head, verdict, base)), "object");
 		assert.match(check("gh pr create --fill")!.reason!, new RegExp(`returned "${verdict}"`));
 	}
-	review(report(head, "Yes"));
+	review(report(head, "Yes", base));
 	assert.equal(check("gh pr create --fill"), undefined);
 	assert.equal(check("git push -u origin feat/a"), undefined, "pushing a work branch is not a landing");
 	assert.equal(check("gh pr create --fill", { ...OPTIONS, missing: "confirm" }), undefined);
 });
 
 test("on the base branch: pushing local commits is a landing; merging what is already upstream is not", () => {
-	const { git, commit, head, check, review } = repo();
+	const { git, commit, head, check, review, base } = repo();
 	assert.equal(action(check("git push origin feat/a:main")), "block");
 	git("switch", "-q", "main");
 	assert.equal(action(check("git merge feat/a")), "block");
-	review(report(head, "Yes"));
+	review(report(head, "Yes", base));
 	assert.equal(check("git merge feat/a"), undefined);
 
 	commit({ "src/hotfix.ts": "export const fix = 1;\n" });
@@ -88,33 +91,33 @@ test("on the base branch: pushing local commits is a landing; merging what is al
 });
 
 test("gh pr merge: a named branch is checked, a number or URL asks; --head names the branch", () => {
-	const { git, head, check, review } = repo();
+	const { git, head, check, review, base } = repo();
 	git("switch", "-q", "main");
 	assert.equal(action(check("gh pr merge feat/a --squash")), "block");
 	assert.equal(check("gh pr merge 12 --squash")?.action, "confirm");
 	assert.equal(check("gh pr merge https://github.com/o/r/pull/12")?.action, "confirm");
 	assert.equal(action(check("gh pr create --head feat/a --fill")), "block");
 	assert.equal(action(check("glab mr create --source-branch=feat/a")), "block");
-	review(report(head, "Yes"));
+	review(report(head, "Yes", base));
 	assert.equal(check("gh pr merge feat/a --squash"), undefined);
 	assert.equal(check("gh pr create --head feat/a --fill"), undefined);
 });
 
 test("a commit or HEAD move chained before a landing is refused: land it as its own command", () => {
-	const { head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	assert.match(check("git commit -am fix && gh pr create --fill")!.reason!, /Run the landing as its own command/);
 	assert.equal(action(check("git switch main && git merge feat/a")), "block");
 	assert.equal(check("git add -A && git commit -m x && git push -u origin feat/a"), undefined, "no landing: nothing to refuse");
 });
 
 test("cd and git -C are followed: a worktree's branch is checked where the command runs", () => {
-	const { dir, git, run, commit, check, review } = repo();
+	const { dir, git, run, commit, check, review, base } = repo();
 	const wt = join(dir, ".worktrees", "b");
 	git("worktree", "add", "-q", "-b", "feat/b", wt, "main");
 	const b = commit({ "src/b.ts": "export const b = 1;\n" }, wt);
 	assert.match(check(`cd ${wt} && gh pr create --fill`)!.reason!, new RegExp(`no reviewer verdict recorded for ${b.slice(0, 7)}`));
-	review(report(b, "Yes"));
+	review(report(b, "Yes", base));
 	assert.equal(check(`cd .worktrees/b && gh pr create --fill`), undefined, "relative cd from the project");
 	assert.equal(check(`git -C ${wt} push origin HEAD:main`), undefined);
 	assert.equal(check("gh pr create --fill", OPTIONS, wt), undefined, "the session cwd is the worktree");
@@ -123,16 +126,16 @@ test("cd and git -C are followed: a worktree's branch is checked where the comma
 });
 
 test("parallel reviewers of one prompt combine to the worst verdict; a later prompt replaces it", () => {
-	const { dir, root, head, review } = repo();
-	review(report(head, "Yes"), "p1", "a1");
-	review(report(head, "No"), "p1", "a2");
+	const { dir, root, head, review, base } = repo();
+	review(report(head, "Yes", base), "p1", "a1");
+	review(report(head, "No", base), "p1", "a2");
 	assert.equal(readReviews(dir, root)[0]?.verdict, "No", "no run overwrites another");
-	review(report(head, "Yes"), "p1", "a3");
+	review(report(head, "Yes", base), "p1", "a3");
 	assert.equal(readReviews(dir, root)[0]?.verdict, "No", "the same prompt can't overturn it");
-	review(report(head, "Yes"), "p2", "a1");
+	review(report(head, "Yes", base), "p2", "a1");
 	assert.equal(readReviews(dir, root)[0]?.verdict, "Yes");
 	assert.equal(readReviews(dir, root)[0]?.sha, head, "the SHA is stored in full");
-	assert.match(String(review(report("0000000", "Yes"))), /not a commit/);
+	assert.match(String(review(report("0000000", "Yes", base))), /not a commit/);
 });
 
 test("shell writes to the gate's own files: records are blocked, the guard config asks, reads pass", () => {
@@ -153,15 +156,15 @@ test("shell writes to the gate's own files: records are blocked, the guard confi
 });
 
 test("HEAD pushes, whitespace and binary changes, and directories the guard can't follow", () => {
-	const { dir, git, commit, head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { dir, git, commit, head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	const pyReviewed = commit({ "src/job.py": "if ok:\n    run()\nclean()\n" });
-	review(report(pyReviewed, "Yes"));
+	review(report(pyReviewed, "Yes", base));
 	assert.equal(check("gh pr create --fill"), undefined);
 	commit({ "src/job.py": "if ok:\n    run()\n    clean()\n" });
 	assert.equal(action(check("gh pr create --fill")), "block", "an indentation change is a code change");
 	const binReviewed = commit({ "src/job.py": "if ok:\n    run()\nclean()\n", "bin/tool.bin": "\u0000\u0001" });
-	review(report(binReviewed, "Yes"));
+	review(report(binReviewed, "Yes", base));
 	commit({ "bin/tool.bin": "\u0000\u0002" });
 	assert.equal(action(check("gh pr create --fill")), "block", "a changed binary is a code change");
 
@@ -178,20 +181,20 @@ test("HEAD pushes, whitespace and binary changes, and directories the guard can'
 });
 
 test("a failed run spoils only its commit; merge -m values are not refs", () => {
-	const { dir, root, git, commit, head, check, review } = repo();
-	review(report(head, "Yes"), "p3", "a");
+	const { dir, root, git, commit, head, check, review, base } = repo();
+	review(report(head, "Yes", base), "p3", "a");
 	recordVerdict(dir, head, "Inconclusive", { promptId: "p3", run: "b" }, root);
 	assert.equal(readReviews(dir, root)[0]?.verdict, "Inconclusive", "a parallel run that failed on the same commit counts against it");
 	const fixed = commit({ "src/a.ts": "export const a = 3;\n" });
-	review(report(fixed, "Yes"), "p3", "c");
+	review(report(fixed, "Yes", base), "p3", "c");
 	assert.equal(readReviews(dir, root)[0]?.verdict, "Yes", "a re-review of a later commit in the same prompt is unaffected");
 	git("switch", "-q", "main");
 	assert.equal(check("git merge -m 'land a' feat/a"), undefined, "the -m value is not a ref");
 });
 test("a PR merge checks the remote head too; glab -s names the branch", () => {
-	const { dir, git, run, commit, head, check, review } = repo();
+	const { dir, git, run, commit, head, check, review, base } = repo();
 	git("push", "-q", "origin", "feat/a");
-	review(report(head, "Yes"));
+	review(report(head, "Yes", base));
 	const clone = mkdtempSync(join(tmpdir(), "reviews-clone-"));
 	run(clone, "clone", "-q", "-b", "feat/a", git("remote", "get-url", "origin"), ".");
 	run(clone, "config", "user.email", "o@example.com");
@@ -208,8 +211,8 @@ test("a PR merge checks the remote head too; glab -s names the branch", () => {
 });
 
 test("before a landing: read-only steps and the project's verify commands may run; anything else may not", () => {
-	const { head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	for (const ok of ["npm test && gh pr create --fill", "npm run lint && npm test && gh pr create", "git log --oneline | head -5 && gh pr create --fill", "(cd src && ls) && gh pr create --fill", `(cd ${tmpdir()} && ls) && gh pr create --fill`]) {
 		assert.equal(check(ok), undefined, ok);
 	}
@@ -227,8 +230,8 @@ test("gate files: reads with stderr redirects, jq and unrelated mentions pass; t
 });
 
 test("redirected verify commands may precede a landing; a nested subshell fails closed", () => {
-	const { head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	for (const ok of ["npm test 2>&1 && gh pr create --fill", "npm test 2>&1 | tail -20 && gh pr create --fill", "npm test >/dev/null && gh pr create"]) assert.equal(check(ok), undefined, ok);
 	assert.equal(action(check("(cd src && (cd .. && ls)) && gh pr create")), "block");
 });
@@ -251,8 +254,8 @@ test("redirections are stripped outside quotes only: a > in a commit message is 
 });
 
 test("a verdict covers exactly the reviewed commit: any change after it needs a new review", () => {
-	const { git, commit, head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { git, commit, head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	assert.equal(check("gh pr create --fill"), undefined);
 	const changes: Array<[string, () => void]> = [
 		["deleting the task file", () => commit({ "docs/tasks/2026-01-01-a.md": null })],
@@ -270,26 +273,26 @@ test("a verdict covers exactly the reviewed commit: any change after it needs a 
 });
 
 test("a rebase onto a newer base needs a new review", () => {
-	const { git, commit, head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { git, commit, head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	git("switch", "-q", "main");
 	commit({ "src/base.ts": "export const base = 2;\n" });
 	git("push", "-q", "origin", "main");
 	git("switch", "-q", "feat/a");
 	git("rebase", "-q", "main");
 	assert.equal(action(check("gh pr create --fill")), "block");
-	review(report(git("rev-parse", "HEAD"), "Yes"));
+	review(report(git("rev-parse", "HEAD"), "Yes", base));
 	assert.equal(check("gh pr create --fill"), undefined, "the rebased commit, reviewed");
 });
 
 test("a docs-only branch is reviewed like any other; reviewing another branch doesn't forget this one", () => {
-	const { git, commit, head, check, review } = repo();
-	review(report(head, "Yes"));
+	const { git, commit, head, check, review, base } = repo();
+	review(report(head, "Yes", base));
 	git("switch", "-qc", "docs/b", "main");
 	const docs = commit({ "docs/guide.md": "x\n" });
 	assert.equal(action(check("gh pr create --fill")), "block");
 	assert.equal(check("gh pr create --fill", { ...OPTIONS, missing: "confirm" })?.action, "confirm");
-	review(report(docs, "Yes"));
+	review(report(docs, "Yes", base));
 	assert.equal(check("gh pr create --fill"), undefined);
 	git("switch", "-q", "feat/a");
 	assert.equal(check("gh pr create --fill"), undefined, "feat/a's own review still stands");
@@ -314,4 +317,136 @@ test("commits on the base count as landed only against the push remote's trackin
 	assert.equal(check("git push github main"), undefined, "already on github/main");
 	assert.equal(action(check("git push origin main")), "block", "not on origin/main yet");
 	assert.ok(dir);
+});
+
+test("a Yes whose BASE is not on the remote base and has no covered record of its own does not cover HEAD", () => {
+	const { commit, head, check, review } = repo();
+	const second = commit({ "src/a2.ts": "export const a2 = 1;\n" });
+	review(report(second, "Yes", head));
+	for (const landing of ["gh pr create --fill", "git push origin feat/a:main"]) {
+		assert.match(String(check(landing)?.reason), /does not cover/, landing);
+	}
+});
+
+test("a repeat round chains to a covered earlier round at any verdict", () => {
+	const { commit, head, base, check, review } = repo();
+	review(report(head, "No", base));
+	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(report(fixed, "Yes", head));
+	assert.equal(check("gh pr create --fill"), undefined);
+});
+
+test("a rebase breaks the chain: the earlier round's commit is no longer an ancestor", () => {
+	const { git, commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	git("switch", "-q", "main");
+	commit({ "src/base.ts": "export const base = 2;\n" });
+	git("push", "-q", "origin", "main");
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	review(report(git("rev-parse", "HEAD"), "Yes", head));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
+});
+
+test("an empty range covers nothing", () => {
+	const { head, check, review } = repo();
+	review(report(head, "Yes", head));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
+});
+
+test("records written before Reviewed BASE existed cover nothing", () => {
+	const { dir, root, head, check } = repo();
+	const folder = reviewsDir(dir, root);
+	mkdirSync(folder, { recursive: true, mode: 0o700 });
+	writeFileSync(join(folder, `${head}.old.r.json`), JSON.stringify({ sha: head, verdict: "Yes", promptId: "old", at: Date.now() }));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
+});
+
+test("a chain of 20 rounds covers the branch; a 21st link is refused", () => {
+	const { commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	let previous = head;
+	for (let i = 2; i <= 20; i++) {
+		const next = commit({ "src/a.ts": `export const a = ${i};\n` });
+		review(report(next, "Yes", previous));
+		previous = next;
+	}
+	assert.equal(check("gh pr create --fill"), undefined, "20 rounds");
+	const last = commit({ "src/a.ts": "export const a = 21;\n" });
+	review(report(last, "Yes", previous));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/, "21 rounds");
+});
+
+test("without a tracking ref the local base anchors the chain; with one, the local base does not", () => {
+	const { git, commit, head, check, review } = repo();
+	git("switch", "-q", "main");
+	const local = commit({ "src/local.ts": "export const l = 1;\n" });
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	const rebased = git("rev-parse", "HEAD");
+	review(report(rebased, "Yes", local));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/, "origin/main exists: an unpushed local main is not reviewed code");
+	git("remote", "remove", "origin");
+	assert.equal(check("git merge feat/a", OPTIONS), undefined, "on feat/a: merging into feat/a itself lands nothing");
+	git("switch", "-q", "main");
+	assert.equal(check("git merge feat/a"), undefined, "no remote: the local base is all there is");
+	assert.ok(head);
+});
+
+test("after the agent opens a PR, pushing a new unreviewed commit to its branch is refused until it is reviewed", () => {
+	const { dir, root, commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	assert.equal(check("git push -u origin feat/a"), undefined, "no PR yet: a work-branch push");
+	rememberPr(dir, "gh pr create --fill", dir, root);
+	const next = commit({ "src/a.ts": "export const a = 2;\n" });
+	for (const push of ["git push", "git push -u origin feat/a", "git push origin HEAD"]) assert.match(String(check(push)?.reason), /no reviewer verdict recorded/, push);
+	review(report(next, "Yes", head));
+	assert.equal(check("git push"), undefined, "the new commit, reviewed");
+});
+
+test("a PR branch named with --head is remembered; a merged PR branch is forgotten", () => {
+	const { dir, root, git, commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	git("push", "-q", "origin", "feat/a");
+	git("switch", "-q", "main");
+	rememberPr(dir, "gh pr create --head feat/a --fill", dir, root);
+	git("switch", "-q", "feat/a");
+	const second = commit({ "src/a.ts": "export const a = 2;\n" });
+	assert.equal(action(check("git push origin feat/a")), "block");
+	review(report(second, "Yes", head));
+	git("push", "-q", "origin", "feat/a");
+	git("switch", "-q", "main");
+	git("merge", "-q", "--ff-only", "feat/a");
+	git("push", "-q", "origin", "main");
+	git("switch", "-q", "feat/a");
+	commit({ "src/a.ts": "export const a = 3;\n" });
+	assert.equal(check("git push origin feat/a"), undefined, "its PR was merged: a plain work-branch push again");
+});
+
+test("shell writes to the open-PR list are blocked like the verdict records", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	assert.equal(checkGateFiles(`echo '{}' > ${records}/h/prs.json`, project, project, ".pi/guard.json")?.action, "block");
+});
+
+test("the reviewer's shell runs only inspection, temp worktrees, the verify commands and review-log", () => {
+	// A checkout outside the temp folder, so `../w` leaves it.
+	const project = resolve(import.meta.dirname, "..");
+	const check = (command: string) => checkReviewerCommand(command, project, ["npm test", "npm run lint"])?.action ?? "allow";
+	const tmp = join(tmpdir(), "r");
+	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", `git worktree add ${tmp} abc`, "git worktree add $TMPDIR/r abc", `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "cat f | grep x", "rg -n foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd sub && git status", "node /kit/scripts/review-log.ts abc"]) {
+		assert.equal(check(ok), "allow", ok);
+	}
+	for (const bad of ["git commit -m x", "git checkout main", "git switch -c x", "git stash", "git add -A", "git worktree add ../w abc", `git worktree add -b x ${tmp} abc`, "git diff --output=x a..b", "git -c core.pager=sh log", "rm f", "echo x > f", "cat a >> b", "grep x f | tee out", "git diff; rm f", "cat $(echo f)", "cat `echo f`", "sed -i s/a/b/ f", "npm run build", "node -e 'require(\"fs\").writeFileSync(\"x\", \"\")'"]) {
+		assert.equal(check(bad), "block", bad);
+	}
+	assert.match(String(checkReviewerCommand("rm f", project, [])?.reason), /reviewer is read-only/);
+});
+
+test("a project reached through a symlink keeps its review records", () => {
+	const { dir, root, head, base, review } = repo();
+	review(report(head, "Yes", base));
+	const link = join(mkdtempSync(join(tmpdir(), "reviews-link-")), "project");
+	symlinkSync(dir, link);
+	assert.equal(readReviews(link, root)[0]?.sha, head);
 });

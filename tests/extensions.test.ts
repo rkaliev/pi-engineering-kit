@@ -463,7 +463,7 @@ test("review gate: a reviewer run's report records the verdict; without one the 
 	const g = fakePi();
 	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
 	const bash = (command: string, c = ctx(dir)) => g.emit("tool_call", { toolName: "bash", input: { command } }, c);
-	const verdict = (v: string) => `Reviewed HEAD: ${head.slice(0, 9)}\nReady to merge: ${v}`;
+	const verdict = (v: string) => `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${head.slice(0, 9)}\nReady to merge: ${v}`;
 	const result = (toolName: string, results: unknown[], isError = false) =>
 		g.emit("tool_result", { toolName, toolCallId: `c${Math.random()}`, input: {}, content: [{ type: "text", text: "summary" }], details: { mode: "single", results }, isError }, ctx(dir));
 	const pr = async () => (await bash("gh pr create --fill"))?.block;
@@ -545,7 +545,7 @@ test("review gate: a review that ran on unverified edits counts as Inconclusive"
 	const head = git("rev-parse", "HEAD");
 	const g = fakePi();
 	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
-	const review = () => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
+	const review = () => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
 	const pr = async () => (await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block;
 	try {
 		verifyState.unverified = true;
@@ -582,4 +582,89 @@ test("/kit-init completes the last flag and keeps the earlier ones", () => {
 	assert.deepEqual(complete("--yes --te")?.map((o) => o.value), ["--yes --test-hygiene"]);
 	assert.deepEqual(complete("--yes ")?.map((o) => o.value), ["--yes --test-hygiene"], "a flag already given isn't offered again");
 	assert.equal(complete("--nope"), null);
+});
+
+test("review gate: a reviewer report without Reviewed BASE counts as Inconclusive", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const head = git("rev-parse", "HEAD");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const c = ctx(dir);
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, c);
+	assert.match(c.notes.join("\n"), /no verdict recorded .*Reviewed BASE/);
+	const asking = ctx(dir);
+	await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, asking);
+	assert.match(asking.asked[0]!, /returned "Inconclusive"/);
+});
+
+test("review gate: after a successful gh pr create, a push of a new unreviewed commit to that branch asks", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	const remote = mkdtempSync(join(tmpdir(), "guard-remote-"));
+	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("remote", "add", "origin", remote);
+	git("push", "-q", "origin", "main");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const bashResult = (command: string, isError: boolean) => g.emit("tool_result", { toolName: "bash", toolCallId: `b${Math.random()}`, input: { command }, content: [], details: {}, isError }, ctx(dir));
+	const pushAsked = async () => {
+		const c = ctx(dir);
+		await g.emit("tool_call", { toolName: "bash", input: { command: "git push" } }, c);
+		return c.asked.join("\n");
+	};
+	await bashResult("gh pr create --fill", true);
+	assert.doesNotMatch(await pushAsked(), /Review gate/, "a failed PR creation opened nothing");
+	await bashResult("gh pr create --fill", false);
+	assert.match(await pushAsked(), /Review gate: no reviewer verdict recorded/);
+});
+
+test("guard: a check that throws asks instead of letting the call through", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const broken = { ...ctx(dir), isProjectTrusted: () => { throw new Error("boom"); } };
+	const result = await g.emit("tool_call", { toolName: "bash", input: { command: "ls" } }, broken);
+	assert.equal(result?.block, true, "declined");
+	assert.match(broken.asked[0]!, /eng-kit guard failed: boom/);
+});
+
+test("review-log prints the reports a reviewer run left for a commit", async () => {
+	const dir = project({ "README.md": "x\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const finalOutput = `#### Important\n\`a.ts:1\` · no input check\nReviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: No`;
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput }] }, isError: false }, ctx(dir));
+	const log = spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), "HEAD"], { cwd: dir, encoding: "utf8", env: { ...process.env, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	assert.equal(log.status, 0, log.stderr);
+	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
 });
