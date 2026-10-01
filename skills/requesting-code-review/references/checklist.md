@@ -51,7 +51,7 @@ These don't move with the author's arguments or with how common the pattern is i
 ## Tests
 Check the diff against `../../test-driven-development/references/test-standard.md`, the single source of the test rules; the fixed severities above rate what it finds. In particular:
 - each criterion is verified as "Criteria and levels" says, and its new tests were seen failing first as the standard defines it (the PR or report says how);
-- layers don't repeat each other: a unit test restating a scenario's happy path is a finding;
+- layers don't repeat each other: a unit test asserting the user-level outcome a scenario already proves (the same journey, the same entry point) is a finding; unit tests of a unit's own contract are not, even on the happy path;
 - determinism and isolation: controlled clock and randomness, own data per test, cleanup registered where data is created, no shared mutable state;
 - external side effects (payment, email, device) are verified at the boundary that matters.
 

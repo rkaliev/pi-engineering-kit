@@ -132,9 +132,9 @@ const LINE_RULES: LineRule[] = [
 	{ id: "focused", langs: ["go"], re: /(?<![\w.$])F(?:It|Describe|Context|When|Entry|DescribeTable|Specify)\(/, message: FOCUSED },
 	{ id: "focused", langs: ["feature"], re: /(?:^|\s)@(?:only|focus)\b/, message: FOCUSED },
 
-	{ id: "skip-without-reason", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.(?:skip|todo|fixme|skipIf|runIf)\b${CALL_AFTER}|(?<![\w.$])(?:xit|xdescribe|xtest)\(`), message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["py"], re: /@pytest\.mark\.skip(?:if)?\b|\bpytest\.skip\(|@unittest\.skip(?:If|Unless)?\b/, message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["jvm"], re: /@(?:Disabled|Ignore)\b/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.(?:skip|todo|fixme|skipIf|runIf)\b${CALL_AFTER}|(?<![\w.$])(?:xit|xdescribe|xtest)\(|\bthis\.skip\(`), message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["py"], re: /@pytest\.mark\.skip(?:if)?\b|\bpytest\.(?:skip|importorskip)\(|@unittest\.skip(?:If|Unless)?\b/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["jvm"], re: /@(?:Disabled\w*|EnabledIf\w*|EnabledOn\w*|Ignore)\b/, message: SKIPPED, issue: true },
 	{ id: "skip-without-reason", langs: ["go"], re: /\bt\.Skip(?:f|Now)?\(/, message: SKIPPED, issue: true },
 	{ id: "skip-without-reason", langs: ["swift"], re: /XCTSkip(?:If|Unless)?\(|[(,]\s*\.disabled\(/, message: SKIPPED, issue: true },
 	{ id: "skip-without-reason", langs: ["cs"], re: /\[(?:Fact|Theory)\b[^\]]*\bSkip\b|\[[^\]]*\bIgnore\b[^\]]*\]/, message: SKIPPED, issue: true },
@@ -180,7 +180,10 @@ const RETRY_RULES: RetryRule[] = [
 	{ file: /\.ya?ml$|\.xcconfig$/, re: /-retry-tests-on-failure|-test-iterations\b.*retry|retry.*-test-iterations\b/ },
 ];
 
-const ISSUE_REF = /#\d+|https?:\/\/|\b[A-Z][A-Z0-9]+-\d+/;
+/** An issue: `#123`, a URL, or a tracker key like `PAY-12` (not a standard name such as `UTF-8` or `SHA-256`). */
+const ISSUE_REF = /#\d+|https?:\/\/|\b(?!(?:UTF|UCS|SHA|MD|ISO|IEC|RFC|HTTP|TLS|SSL|AES|RSA|DES|ECMA|ES|IEEE|IPV|BASE|X|PEP|CVE)-\d)[A-Z][A-Z0-9]+-\d+/;
+/** Comment-only lines: the line above a skip counts for its issue only when it is one. */
+const COMMENT_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
 
 /** `test-hygiene: allow <reason>` on a line: undefined when absent, "" when the reason is empty. */
 function allowReason(line: string): string | undefined {
@@ -265,7 +268,11 @@ function mask(line: string, style: Style, inBlock: boolean): View {
 /** A line that opens an `if` / `else` branch or is a one-line guard (`if (x) return;`). */
 const GUARD = /^\s*(?:\}\s*)?(?:if|else)\b/;
 
-/** The line, plus the following lines while its parentheses are still open (an annotation spread over several lines). */
+/**
+ * Where a skip's issue may be: the line above when it is a comment, then the line itself plus the following
+ * lines while its parentheses are still open (an annotation spread over several lines), up to the test's body
+ * (`=>`, `function`), so a URL inside the skipped test doesn't count.
+ */
 function issueWindow(lines: string[], i: number): string {
 	let text = lines[i];
 	let depth = 0;
@@ -274,7 +281,11 @@ function issueWindow(lines: string[], i: number): string {
 		depth += (lines[k].match(/\(/g) ?? []).length - (lines[k].match(/\)/g) ?? []).length;
 		if (depth <= 0) break;
 	}
-	return text;
+	const body = text.search(/=>|\bfunction\b/);
+	const above = i > 0 && COMMENT_LINE.test(lines[i - 1]) ? `${lines[i - 1]}\n` : "";
+	// A trailing comment after the body opens still names the issue (`this.skip(); // #12`).
+	const trailing = /(?:\/\/|#)\s.*$/.exec(lines[i])?.[0] ?? "";
+	return above + (body === -1 ? text : text.slice(0, body)) + trailing;
 }
 
 const LOOP = /(?<![\w.$])(?:while|for|loop|repeat)\b|\bdo\s*\{/;
@@ -316,7 +327,7 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 			const m = hit(r.re, i);
 			if (!m) continue;
 			if (r.context && !r.context.test(`${prev}\n${line}`)) continue;
-			if (r.issue && ISSUE_REF.test(`${prev}\n${issueWindow(lines, i)}`)) continue;
+			if (r.issue && ISSUE_REF.test(issueWindow(lines, i))) continue;
 			if (r.id === "sleep") {
 				// polling is a condition wait: a loop opens in the 4 lines above, or an `if` guards the sleep
 				const loop = bare.slice(Math.max(0, i - 4), i).some((l) => LOOP.test(l));
@@ -442,10 +453,9 @@ function featureBlocks(text: string): Block[] {
 	let pending = fresh();
 	const st: { current: Block | undefined; last: Block | undefined } = { current: undefined, last: undefined };
 	const close = () => {
-		if (st.current) {
-			blocks.push(st.current);
-			st.last = st.current;
-		}
+		// An outline reopened by its Examples is already listed: one outline is one scenario.
+		if (st.current && !blocks.includes(st.current)) blocks.push(st.current);
+		if (st.current) st.last = st.current;
 		st.current = undefined;
 	};
 	const lines = text.split(/\r?\n/);
@@ -464,6 +474,7 @@ function featureBlocks(text: string): Block[] {
 		} else if (/^(?:Examples|Scenarios):/.test(t) && (st.current ?? st.last)) {
 			const target = (st.current ?? st.last) as Block;
 			target.lines.push(...pending.lines, ln);
+			target.tags.push(...pending.tags);
 			st.current = target;
 			pending = fresh();
 		} else if (/^(?:Rule|Background):/.test(t)) {
@@ -477,7 +488,7 @@ function featureBlocks(text: string): Block[] {
 
 /**
  * Cross-check `@C<n>` scenario tags against the success-criteria tables in task files, looking only at
- * what the branch changed: scenarios (header, tag, step or example lines added) and task files with added lines.
+ * what the branch changed: tag lines it adds or changes, and task files with added lines.
  * `added` maps a path to its added line numbers. Old scenarios and old tags never produce a violation.
  */
 export function checkCriteria(tasks: Source[], features: Source[], added: Map<string, Set<number>>): Violation[] {
@@ -488,9 +499,10 @@ export function checkCriteria(tasks: Source[], features: Source[], added: Map<st
 	for (const f of features) {
 		const touched = added.get(f.path);
 		if (!touched?.size) continue;
+		// A tag counts only where the branch writes its tag line (a new scenario or a deliberate retag), so
+		// editing a step of an old scenario never re-checks a finished task's tag.
 		for (const b of featureBlocks(f.text)) {
-			if (!b.lines.some((l) => touched.has(l))) continue;
-			for (const t of b.tags) tags.set(t.n, [...(tags.get(t.n) ?? []), { path: f.path, line: t.line }]);
+			for (const t of b.tags) if (touched.has(t.line)) tags.set(t.n, [...(tags.get(t.n) ?? []), { path: f.path, line: t.line }]);
 		}
 	}
 	const out: Violation[] = [];

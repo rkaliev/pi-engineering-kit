@@ -90,5 +90,5 @@ Baselines are produced only in CI, on the image that checks them (in Git LFS whe
 ## Make it mechanical
 
 With the user's agreement, ci-quality-gates adds two layers that check these rules on every change, on any stack:
-- the kit's `test-hygiene` script (focused and unexplained skipped tests, sleeps, retries in configs, the number of tests that ran, criterion tags), which checks only added lines in an existing project, so old debt doesn't block;
+- the kit's `test-hygiene` script (focused tests, skips without a linked issue, sleeps, retries in runner configs and test code, the number of tests that ran, criterion tags on the tag lines a branch adds or changes), which checks only added lines in an existing project, so old debt doesn't block;
 - the stack's own linters where it has them (for example `no-focused-tests`, `expect-expect`, no conditional assertions, small snapshots, `go test -race`, randomized order).

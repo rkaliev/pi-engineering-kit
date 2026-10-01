@@ -74,6 +74,17 @@ const RULE_CASES: Case[] = [
 	c("js only", "src/a.test.ts", `it.only("x", () => {});\n`, "src/a.test.ts:1 focused"),
 	c("js describe.only and fit", "src/a.spec.js", `ok();\ndescribe.only("x");\nfit("y");\n`, "src/a.spec.js:2 focused", "src/a.spec.js:3 focused"),
 	c("js only outside a test file", "src/a.ts", `it.only("x");\n`),
+	c("mocha this.skip without issue", "test/a.js", `it("x", function () {\n  this.skip();\n});\n`, "test/a.js:2 skip-without-reason"),
+	c("mocha this.skip with issue", "test/a.js", `it("x", function () {\n  this.skip(); // #12\n});\n`),
+	c("junit DisabledOnOs without issue", "src/test/java/AT.java", `@DisabledOnOs(OS.WINDOWS)\nvoid t() {}\n`, "src/test/java/AT.java:1 skip-without-reason"),
+	c("junit DisabledIf with issue", "src/test/java/AT.java", `@DisabledIf("x") // PROJ-4\nvoid t() {}\n`),
+	c("a standard name is not an issue key", "tests/test_a.py", `@pytest.mark.skip(reason="UTF-8 decoding broken")\ndef test_a(): pass\n`, "tests/test_a.py:1 skip-without-reason"),
+	c("pytest importorskip", "tests/test_b.py", `np = pytest.importorskip("numpy")\n`, "tests/test_b.py:1 skip-without-reason"),
+	c("a URL in the skipped test's body is not its issue", "e2e/a.spec.ts", `test.skip("login", async ({ page }) => {\n  await page.goto("http://localhost:3000/login");\n});\n`, "e2e/a.spec.ts:1 skip-without-reason"),
+	c("code on the line above is not an issue", "src/a.test.ts", `const BASE = "https://app.test";\nit.skip("x");\n`, "src/a.test.ts:2 skip-without-reason"),
+	c("a comment on the line above is", "src/a.test.ts", `// broken until #41 lands\nit.skip("x");\n`),
+	c("SHA-256 is not an issue key", "src/a.test.ts", `it.skip("SHA-256 slow");\n`, "src/a.test.ts:1 skip-without-reason"),
+	c("a real key in the title is", "src/a.test.ts", `it.skip("PAY-12 refund race");\n`),
 	c("js skip", "src/a.test.ts", `it.skip("x", () => {});\n`, "src/a.test.ts:1 skip-without-reason"),
 	c("js xit and todo", "src/a.test.ts", `xit("x");\ntest.todo("y");\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason"),
 	c("js skip with issue on the line", "src/a.test.ts", `it.skip("x"); // #123\n`),
@@ -372,8 +383,13 @@ test("criteria: old tags never fail a run, and --all skips the tag check", () =>
 	assert.equal(r.run("--all").status, 0);
 });
 
-test("criteria: changing a step line counts as changing the scenario", () => {
+test("criteria: editing a step of an old scenario doesn't re-check its finished task's tag", () => {
 	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then b\n\n@C1\nScenario: ok\n  Given z\n` }, { "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then B\n\n@C1\nScenario: ok\n  Given z\n` });
+	assert.equal(r.run().status, 0);
+});
+
+test("criteria: a tag line the branch adds or changes is checked", () => {
+	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C8\nScenario: old\n  Given a\n` }, { "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n` });
 	assert.deepEqual(r.run().hits, ["features/a.feature:2 tag-without-criterion"]);
 });
 
@@ -468,4 +484,9 @@ test("cli: runs from a subdirectory and prints a summary line", () => {
 	assert.match(out.stdout, /^sub\/a\.test\.ts:1 {2}focused {2}/m);
 	assert.match(out.stdout, /test-hygiene: 1 violation/);
 	assert.match(repo().run("--all").stdout, /test-hygiene: 0 violation/);
+});
+
+test("criteria: a Scenario Outline with tagged Examples is one scenario", () => {
+	const r = branch({ [TASK_PATH]: TASK }, { "features/a.feature": `Feature: f\n@C1\nScenario Outline: o\n  Given <x>\n  @smoke\n  Examples:\n    | x |\n    | 1 |\n  @slow\n  Examples:\n    | x |\n    | 2 |\n` });
+	assert.equal(r.run().status, 0, r.run().stdout);
 });

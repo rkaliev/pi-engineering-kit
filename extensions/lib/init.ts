@@ -24,7 +24,7 @@ const hygieneScript = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..
 export const HYGIENE_TARGET = ".ci/test-hygiene.mts";
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
-/** Everything /kit-init would do in `cwd`. Existing files are only ever merged (settings) or left alone. */
+/** Everything /kit-init would do in `cwd`. Existing files are only ever merged (settings), replaced on request (an older test-hygiene copy), or left alone. */
 export function planInit(cwd: string, options: { copyHygiene?: boolean } = {}): InitItem[] {
 	const has = (rel: string) => existsSync(join(cwd, rel));
 	const items: InitItem[] = [];

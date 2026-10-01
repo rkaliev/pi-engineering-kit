@@ -20,7 +20,7 @@ Propose the layers that fit the stack, explain what each catches, and add each o
 
 1. **Verification commands:** tests, typecheck, lint and build, exactly as locally. Always.
 2. **Test hygiene**, on any stack (the rules are `../test-driven-development/references/test-standard.md`):
-   - the kit's `test-hygiene` script, copied into the project by kit-init with the user's agreement: focused tests, skips without a linked issue, sleeps, retries in runner configs, the number of tests that ran (from JUnit XML), and criterion tags. In an existing project it checks only lines the change adds, so old debt doesn't block; the report shows how much there is;
+   - the kit's `test-hygiene` script, copied into the project by kit-init with the user's agreement: focused tests, skips without a linked issue, sleeps, retries in runner configs and test code, the number of tests that ran (from JUnit XML), and criterion tags on the tag lines a branch adds or changes. In an existing project it checks only lines the change adds, so old debt doesn't block; the report shows how much there is;
    - the stack's own linters where it has them (table in `references/ci-templates.md`).
 3. **End-to-end:**
    - retries off;

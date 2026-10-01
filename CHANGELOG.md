@@ -22,7 +22,7 @@
   - fixed sleeps;
   - retries in runner configs and test code;
   - with `--junit`, only the reports: missing, empty, or counts that don't add up (a crashed shard);
-  - criterion tags (`@C<n>`) on the scenarios the branch adds or changes, against the task file; tags of finished tasks never fail a run.
+  - criterion tags (`@C<n>`) on the tag lines the branch adds or changes, against the task file; tags of finished tasks never fail a run.
 
   In an existing project it checks only the lines a change adds (renames followed); old debt is counted, not blocking. Without a merge base it stops with a message. `test-hygiene: allow <reason>` marks a line where the pattern is the behavior under test; hiding a forbidden skip, retry or sleep with it needs the user's agreement. ci-quality-gates gets `test-hygiene` and `e2e` CI jobs and a per-stack table of native linters and JUnit reporters.
 - A review counts only for verified code: one recorded while edits were unverified is Inconclusive.

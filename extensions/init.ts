@@ -3,7 +3,7 @@
  *
  * Creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or
  * build tools), `.pi/guard.json`, `.pi/model-routing.json`, and adds pi-subagents to
- * `.pi/settings.json`. Never overwrites an existing file. AGENTS.md is left to /onboard, which
+ * `.pi/settings.json`. Never overwrites an existing file, except an older `.ci/test-hygiene.mts` with `--test-hygiene`. AGENTS.md is left to /onboard, which
  * writes it from the code; /kit-init offers to start it.
  *
  * `/kit-init` asks per file; `/kit-init --yes` creates everything missing without asking.
