@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, recordVerdict, rememberPr, reviewsDir, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
@@ -216,7 +216,7 @@ test("before a landing: read-only steps and the project's verify commands may ru
 	for (const ok of ["npm test && gh pr create --fill", "npm run lint && npm test && gh pr create", "git log --oneline | head -5 && gh pr create --fill", "(cd src && ls) && gh pr create --fill", `(cd ${tmpdir()} && ls) && gh pr create --fill`]) {
 		assert.equal(check(ok), undefined, ok);
 	}
-	for (const bad of ["npm run build && gh pr create", "npm version patch && gh pr create", "popd && gh pr create"]) assert.equal(action(check(bad)), "block", bad);
+	for (const bad of ["npm run build && gh pr create", "npm version patch && gh pr create", "popd && gh pr create", "rg --pre ./commit.sh x . && gh pr create", "rg --pre=sh x . && gh pr create"]) assert.equal(action(check(bad)), "block", bad);
 });
 
 test("gate files: reads with stderr redirects, jq and unrelated mentions pass; the records folder is matched exactly", () => {
@@ -320,12 +320,14 @@ test("commits on the base count as landed only against the push remote's trackin
 });
 
 test("a Yes whose BASE is not on the remote base and has no covered record of its own does not cover HEAD", () => {
-	const { commit, head, check, review } = repo();
+	const { git, commit, head, check, review } = repo();
 	const second = commit({ "src/a2.ts": "export const a2 = 1;\n" });
 	review(report(second, "Yes", head));
 	for (const landing of ["gh pr create --fill", "git push origin feat/a:main"]) {
 		assert.match(String(check(landing)?.reason), /does not cover/, landing);
 	}
+	git("switch", "-q", "main");
+	assert.match(String(check("git merge feat/a")?.reason), /does not cover/, "a merge into the base");
 });
 
 test("a repeat round chains to a covered earlier round at any verdict", () => {
@@ -397,19 +399,21 @@ test("after the agent opens a PR, pushing a new unreviewed commit to its branch 
 	const { dir, root, commit, head, base, check, review } = repo();
 	review(report(head, "Yes", base));
 	assert.equal(check("git push -u origin feat/a"), undefined, "no PR yet: a work-branch push");
-	rememberPr(dir, "gh pr create --fill", dir, root);
+	notePr(dir, "t1", "gh pr create --fill", dir, root);
+	settlePr(dir, "t1", true, root);
 	const next = commit({ "src/a.ts": "export const a = 2;\n" });
 	for (const push of ["git push", "git push -u origin feat/a", "git push origin HEAD"]) assert.match(String(check(push)?.reason), /no reviewer verdict recorded/, push);
 	review(report(next, "Yes", head));
 	assert.equal(check("git push"), undefined, "the new commit, reviewed");
 });
 
-test("a PR branch named with --head is remembered; a merged PR branch is forgotten", () => {
+test("a PR branch named with --head (fork syntax too) is remembered; a merged PR branch is forgotten", () => {
 	const { dir, root, git, commit, head, base, check, review } = repo();
 	review(report(head, "Yes", base));
 	git("push", "-q", "origin", "feat/a");
 	git("switch", "-q", "main");
-	rememberPr(dir, "gh pr create --head feat/a --fill", dir, root);
+	notePr(dir, "t1", "gh pr create --head octo:feat/a --fill", dir, root);
+	settlePr(dir, "t1", true, root);
 	git("switch", "-q", "feat/a");
 	const second = commit({ "src/a.ts": "export const a = 2;\n" });
 	assert.equal(action(check("git push origin feat/a")), "block");
@@ -432,15 +436,24 @@ test("shell writes to the open-PR list are blocked like the verdict records", ()
 test("the reviewer's shell runs only inspection, temp worktrees, the verify commands and review-log", () => {
 	// A checkout outside the temp folder, so `../w` leaves it.
 	const project = resolve(import.meta.dirname, "..");
-	const check = (command: string) => checkReviewerCommand(command, project, ["npm test", "npm run lint"])?.action ?? "allow";
+	const kit = "/kit";
+	const check = (command: string) => checkReviewerCommand(command, project, ["npm test", "npm run lint"], kit)?.action ?? "allow";
 	const tmp = join(tmpdir(), "r");
-	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", `git worktree add ${tmp} abc`, "git worktree add $TMPDIR/r abc", `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "cat f | grep x", "rg -n foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd sub && git status", "node /kit/scripts/review-log.ts abc"]) {
+	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git log --oneline -5", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", `git worktree add ${tmp} abc`, `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "git diff a..b | head -50", "cat f | grep x", "grep -rn foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd tests && git status", `node ${kit}/scripts/review-log.ts abc`]) {
 		assert.equal(check(ok), "allow", ok);
 	}
-	for (const bad of ["git commit -m x", "git checkout main", "git switch -c x", "git stash", "git add -A", "git worktree add ../w abc", `git worktree add -b x ${tmp} abc`, "git diff --output=x a..b", "git -c core.pager=sh log", "rm f", "echo x > f", "cat a >> b", "grep x f | tee out", "git diff; rm f", "cat $(echo f)", "cat `echo f`", "sed -i s/a/b/ f", "npm run build", "node -e 'require(\"fs\").writeFileSync(\"x\", \"\")'"]) {
-		assert.equal(check(bad), "block", bad);
-	}
-	assert.match(String(checkReviewerCommand("rm f", project, [])?.reason), /reviewer is read-only/);
+	const bad = [
+		"git commit -m x", "git checkout main", "git switch -c x", "git stash", "git add -A", "git grep x", "git -c core.pager=sh log",
+		"git diff --output=x a..b", "git log --ou=x", "git diff --ext-diff",
+		"git worktree add ../w abc", `git worktree add -b x ${tmp} abc`, `git worktree add ${tmp}`, "git worktree add $TMPDIR/r abc", "git worktree remove --force .worktrees/x",
+		"rm f", "echo x > f", "cat a >> b", "echo x >| cat", "echo hi >&ls", "grep x f | tee out", "git diff; rm f", "ls &",
+		"cat $(echo f)", "cat `echo f`", "echo \\' ; rm f ; echo \\'", "echo $'x'",
+		"rg --pre rm x .", "sort -o f x", "uniq a b", "file -C -m x", "sed -i s/a/b/ f", "npm run build",
+		"cd /tmp && cd - && ls", "cd no-such-dir-xyz && ls", "pushd /tmp", "( cd /tmp ) && ls", "cd",
+		"node examples/scripts/review-log.ts x", "node -e 'require(\"fs\").writeFileSync(\"x\", \"\")'",
+	];
+	for (const command of bad) assert.equal(check(command), "block", command);
+	assert.match(String(checkReviewerCommand("rm f", project, [], kit)?.reason), /reviewer is read-only/);
 });
 
 test("a project reached through a symlink keeps its review records", () => {
@@ -449,4 +462,75 @@ test("a project reached through a symlink keeps its review records", () => {
 	const link = join(mkdtempSync(join(tmpdir(), "reviews-link-")), "project");
 	symlinkSync(dir, link);
 	assert.equal(readReviews(link, root)[0]?.sha, head);
+});
+
+test("a backslash-escaped quote doesn't hide a landing from the gate", () => {
+	const { check } = repo();
+	for (const sneaky of ["echo \\' ; gh pr create --fill ; echo \\'", 'echo "a\\\\" ; gh pr create --fill',"echo $'\\'' ; gh pr create --fill ; echo '"]) {
+		assert.equal(action(check(sneaky)), "block", sneaky);
+	}
+	assert.equal(stripRedirects("echo \\' > f").replace(/\s+/g, " ").trim(), "echo \\'", "an escaped quote opens no quote");
+});
+
+test("a push to a remote with no tracking ref still anchors the chain on the remote base, not the local one", () => {
+	const { git, run, commit, check, review } = repo();
+	const fork = mkdtempSync(join(tmpdir(), "reviews-fork-"));
+	run(fork, "init", "-q", "--bare", "-b", "main");
+	git("remote", "add", "fork", fork);
+	git("switch", "-q", "main");
+	commit({ "src/u1.ts": "export const u1 = 1;\n" });
+	const u2 = commit({ "src/u2.ts": "export const u2 = 1;\n" });
+	const c3 = commit({ "src/c3.ts": "export const c3 = 1;\n" });
+	review(report(c3, "Yes", u2));
+	assert.equal(action(check("git push origin main")), "block");
+	assert.match(String(check("git push fork main")?.reason), /does not cover/, "fork has no fork/main: origin/main is still the remote base");
+});
+
+test("a repeat round can't skip a newer reviewed commit and its findings", () => {
+	const { commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	const c2 = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(report(c2, "No", head));
+	const c3 = commit({ "src/a.ts": "export const a = 3;\n" });
+	review(report(c3, "Yes", head));
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/, "c2's round is skipped");
+	review(report(c3, "Yes", c2));
+	assert.equal(check("gh pr create --fill"), undefined, "the round after c2");
+});
+
+test("many parallel bases per round are checked in bounded time", () => {
+	const { git, commit, check, review } = repo();
+	const orphan = git("rev-parse", "HEAD");
+	const shas = [orphan];
+	for (let i = 1; i <= 16; i++) shas.push(commit({ "src/chain.ts": `export const c = ${i};\n` }));
+	// Every round has two reviewers with different bases; the chain's root never reaches the remote base.
+	for (let i = 2; i < shas.length; i++) {
+		review(report(shas[i]!, "Yes", shas[i - 1]!), `p${i}`, "r1");
+		review(report(shas[i]!, "Yes", shas[i - 2]!), `p${i}`, "r2");
+	}
+	const started = Date.now();
+	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
+	assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
+});
+
+test("a PR opened but not confirmed by the tool result isn't registered; an old entry expires after 30 days", () => {
+	const { dir, root } = repo();
+	notePr(dir, "t1", "gh pr create --fill", dir, root);
+	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root), [], "pending only");
+	settlePr(dir, "t1", false, root);
+	settlePr(dir, "t1", true, root);
+	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root), [], "a failed call is forgotten");
+	notePr(dir, "t2", "gh pr create --fill", dir, root);
+	settlePr(dir, "t2", true, root);
+	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root), ["feat/a"]);
+	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root, Date.now() + 31 * 24 * 60 * 60 * 1000), []);
+});
+
+test("gate files: >| and >&file are writes too", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	for (const write of [`echo x >| ${records}/h/a.json`, `echo x >&${records}/h/a.json`]) {
+		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", write);
+	}
+	assert.equal(checkGateFiles("cat .pi/guard.json >&2", project, project, ".pi/guard.json"), undefined, ">&2 is not a file");
 });

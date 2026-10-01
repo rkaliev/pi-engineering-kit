@@ -173,11 +173,14 @@ function isOutside(target: string, cwd: string): boolean {
 
 const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
-/** Minimal shell tokenizer: honours quotes and splits out control operators. */
+/**
+ * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$'…'`) and backslash escapes, and splits out
+ * control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows `cmd`.
+ */
 export function tokenize(command: string): string[] {
 	const tokens: string[] = [];
 	let current = "";
-	let quote: string | null = null;
+	let quote: "'" | '"' | "$'" | null = null;
 	let has = false;
 	const push = () => {
 		if (has) tokens.push(current);
@@ -186,9 +189,30 @@ export function tokenize(command: string): string[] {
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i]!;
-		if (quote) {
-			if (ch === quote) quote = null;
+		if (quote === "'") {
+			if (ch === "'") quote = null;
 			else current += ch;
+			continue;
+		}
+		if (quote) {
+			// In "…" a backslash escapes only " \ $ ` and a newline; in $'…' it escapes anything.
+			const next = command[i + 1];
+			if (ch === "\\" && next !== undefined && (quote === "$'" || /["\\$`\n]/.test(next))) {
+				current += next;
+				i++;
+			} else if (ch === (quote === "$'" ? "'" : '"')) quote = null;
+			else current += ch;
+			continue;
+		}
+		if (ch === "\\") {
+			if (i + 1 < command.length) current += command[++i];
+			has = true;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === "'") {
+			quote = "$'";
+			has = true;
+			i++;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {

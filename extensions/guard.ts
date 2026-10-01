@@ -6,8 +6,8 @@
  *
  * The review verdict comes from a `subagent` tool result: each child run of the `reviewer` agent
  * whose final output carries `Reviewed BASE:`, `Reviewed HEAD:` and `Ready to merge:`; a failed
- * reviewer run counts as Inconclusive. A successful `gh pr create` makes later pushes to its branch
- * landings. A check that throws asks instead of letting the call through. A background run may never report back here, so a missing verdict asks the
+ * reviewer run counts as Inconclusive, and so does a report without one of the three lines. A successful
+ * `gh pr create` makes later pushes to its branch landings. A check that throws makes pi block the call. A background run may never report back here, so a missing verdict asks the
  * human rather than blocking.
  */
 import { randomUUID } from "node:crypto";
@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
-import { checkGateFiles, checkReview, parseReview, recordReview, recordVerdict, rememberPr, reviewedHead } from "./lib/reviews.ts";
+import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
@@ -41,16 +41,12 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 
 	pi.on("tool_call", async (event, ctx) => {
 		const input = event.input as Record<string, unknown>;
-		let decision: GuardDecision;
-		let subject = String(input.command ?? input.path ?? "");
-		try {
-			const checked = check(event.toolName, input, ctx);
-			if (!checked) return undefined;
-			({ decision, subject } = checked);
-		} catch (err) {
-			// A crash in a check must not let the call through: ask instead.
-			decision = { action: "confirm", reason: `eng-kit guard failed: ${(err as Error).message ?? err}. It could not check this call, so it asks instead of letting it through.` };
-		}
+		// Where the command starts decides a PR's branch; the result only confirms it (see tool_result).
+		if (event.toolName === "bash" || event.toolName === "powershell") notePr(ctx.cwd, event.toolCallId, String(input.command ?? ""), ctx.cwd, options.reviewsRoot);
+		// A check that throws makes pi block the call ("Extension failed, blocking execution"): no try/catch here.
+		const checked = check(event.toolName, input, ctx);
+		if (!checked) return undefined;
+		const { decision, subject } = checked;
 
 		if (decision.action === "allow") return undefined;
 		if (decision.action === "block") return { block: true, reason: `Guard: ${decision.reason}` };
@@ -90,8 +86,8 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 
 	pi.on("tool_result", async (event, ctx) => {
 		// A PR/MR the agent opened makes later pushes to its branch landings (review gate).
-		if ((event.toolName === "bash" || event.toolName === "powershell") && !event.isError) {
-			rememberPr(ctx.cwd, String((event.input as Record<string, unknown>).command ?? ""), ctx.cwd, options.reviewsRoot);
+		if (event.toolName === "bash" || event.toolName === "powershell") {
+			settlePr(ctx.cwd, event.toolCallId, !event.isError, options.reviewsRoot);
 			return undefined;
 		}
 		if (event.toolName !== "subagent") return undefined;

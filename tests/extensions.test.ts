@@ -625,10 +625,15 @@ test("review gate: after a successful gh pr create, a push of a new unreviewed c
 	git("commit", "-qm", "feat: a");
 	const g = fakePi();
 	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
-	const bashResult = (command: string, isError: boolean) => g.emit("tool_result", { toolName: "bash", toolCallId: `b${Math.random()}`, input: { command }, content: [], details: {}, isError }, ctx(dir));
+	// The call is seen before it runs (its branch is noted) and its result confirms it.
+	const bashResult = async (command: string, isError: boolean) => {
+		const toolCallId = `b${Math.random()}`;
+		await g.emit("tool_call", { toolName: "bash", toolCallId, input: { command } }, ctx(dir, { confirm: true }));
+		await g.emit("tool_result", { toolName: "bash", toolCallId, input: { command }, content: [], details: {}, isError }, ctx(dir));
+	};
 	const pushAsked = async () => {
 		const c = ctx(dir);
-		await g.emit("tool_call", { toolName: "bash", input: { command: "git push" } }, c);
+		await g.emit("tool_call", { toolName: "bash", toolCallId: `p${Math.random()}`, input: { command: "git push" } }, c);
 		return c.asked.join("\n");
 	};
 	await bashResult("gh pr create --fill", true);
@@ -637,14 +642,13 @@ test("review gate: after a successful gh pr create, a push of a new unreviewed c
 	assert.match(await pushAsked(), /Review gate: no reviewer verdict recorded/);
 });
 
-test("guard: a check that throws asks instead of letting the call through", async () => {
+test("guard: a check that throws rejects the handler, which pi turns into a blocked call", async () => {
 	const dir = project({ "README.md": "x\n" });
 	const g = fakePi();
 	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
 	const broken = { ...ctx(dir), isProjectTrusted: () => { throw new Error("boom"); } };
-	const result = await g.emit("tool_call", { toolName: "bash", input: { command: "ls" } }, broken);
-	assert.equal(result?.block, true, "declined");
-	assert.match(broken.asked[0]!, /eng-kit guard failed: boom/);
+	await assert.rejects(g.emit("tool_call", { toolName: "bash", toolCallId: "t1", input: { command: "ls" } }, broken), /boom/);
+	assert.deepEqual(broken.asked, [], "never turned into a question the user could approve");
 });
 
 test("review-log prints the reports a reviewer run left for a commit", async () => {
@@ -662,9 +666,15 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
 	const g = fakePi();
 	guard(g.pi, { reviewsRoot });
+	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
+	const run = () => spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), "HEAD"], { cwd: dir, encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	const none = run();
+	assert.equal(none.status, 1, "no review recorded yet");
+	assert.equal(none.stdout, "");
+	assert.match(none.stderr, /no recorded review for/);
 	const finalOutput = `#### Important\n\`a.ts:1\` · no input check\nReviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: No`;
 	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput }] }, isError: false }, ctx(dir));
-	const log = spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), "HEAD"], { cwd: dir, encoding: "utf8", env: { ...process.env, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	const log = run();
 	assert.equal(log.status, 0, log.stderr);
 	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
 });

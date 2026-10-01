@@ -6,7 +6,6 @@
  *   node <kit>/scripts/review-log.ts <rev>
  */
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
 import { readReports } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
@@ -20,8 +19,8 @@ if (!sha) {
 	console.error(`${rev} is not a commit in this repository`);
 	process.exit(1);
 }
-const projectDir = resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
-const reports = readReports(projectDir, sha, process.env.ENG_KIT_REVIEWS_ROOT || undefined);
+// Records are keyed by the repository, so any folder or worktree of it finds them.
+const reports = readReports(process.cwd(), sha, process.env.ENG_KIT_REVIEWS_ROOT || undefined);
 if (reports.length === 0) {
 	console.error(`no recorded review for ${sha.slice(0, 7)}`);
 	process.exit(1);
