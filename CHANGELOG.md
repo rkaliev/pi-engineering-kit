@@ -8,7 +8,7 @@
   - with BDD a user-visible criterion has exactly one scenario; every other criterion has at least one test at the cheapest level; end-to-end without BDD covers critical flows only;
   - **outside-in TDD with BDD:** the scenario is written first and seen failing, unit cycles drive the code, and the scenario passing closes the criterion. Unit tests test their unit's own contract and stay; only a unit test asserting the user-level outcome the scenario proves is left out;
   - characterization tests are `*.char.test.*` and pass on first run by design; golden data in a port is an acceptance test that fails first; every other new test is seen failing first;
-  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough);
+  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough), except a skip conditioned on the platform or test mode, with the condition explicit and a reason;
   - provider-sandbox tests are a separate suite and CI job;
   - tests never retry; waits are on a condition with one ceiling, never a fixed sleep;
   - missing test infrastructure fails the run instead of skipping;

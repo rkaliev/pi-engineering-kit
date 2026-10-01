@@ -84,7 +84,7 @@ Baselines are produced only in CI, on the image that checks them (in Git LFS whe
 ## Changing tests
 
 - **Allowed with the reason in the commit:** deleting a test together with the behavior it protected (the feature is removed), and deleting a test that never protected anything (it breaks "A test earns its keep").
-- **Everything else needs the user's agreement and its own commit:** editing an assertion, deleting a test whose behavior still exists, adding a skip or quarantine. A skip names a linked issue (`#123`, a URL or `ABC-123`) on its line or the line above; a reason in words alone ("flaky", "needs docker") is not enough. Never in the same commit as the code change it would hide.
+- **Everything else needs the user's agreement and its own commit:** editing an assertion, deleting a test whose behavior still exists, adding a skip or quarantine. A skip names a linked issue (`#123`, a URL or `ABC-123`) on its line, in its annotation or in a comment just above; a reason in words alone ("flaky", "needs docker") is not enough. The one exception is a skip conditioned on the platform or the test mode (OS, architecture, runtime version, short mode), with the condition explicit and a reason in words: it describes where the test applies, not a gap. Missing infrastructure is never such a condition. Never in the same commit as the code change it would hide.
 - **`test-hygiene: allow <reason>`** marks a line where a checked pattern is the behavior under test (a test of the retry logic itself, a sleep that is the subject). It is not a way around these rules: an allow that hides a skip, a retry or a sleep that this standard forbids needs the user's agreement like the change it hides.
 
 ## Make it mechanical

@@ -182,6 +182,13 @@ const RETRY_RULES: RetryRule[] = [
 
 /** An issue: `#123`, a URL, or a tracker key like `PAY-12` (not a standard name such as `UTF-8` or `SHA-256`). */
 const ISSUE_REF = /#\d+|https?:\/\/|\b(?!(?:UTF|UCS|SHA|MD|ISO|IEC|RFC|HTTP|TLS|SSL|AES|RSA|DES|ECMA|ES|IEEE|IPV|BASE|X|PEP|CVE)-\d)[A-Z][A-Z0-9]+-\d+/;
+/**
+ * The one exception to "a skip needs an issue": a skip conditioned on the platform or the test mode (OS,
+ * architecture, runtime version, short mode, CI), with a reason in words. Missing infrastructure is not one.
+ */
+const PLATFORM = /\btesting\.Short\(\)|\bruntime\.(?:GOOS|GOARCH)\b|\bsys\.(?:platform|version_info)\b|\bplatform\.(?:system|machine)\(\)|\bos\.name\b|\bprocess\.(?:platform|arch)\b|@(?:Disabled|Enabled)On(?:Os|Jre)\b|\bOperatingSystem\.Is\w+\(|\bRuntimeInformation\.IsOSPlatform\b|#(?:if|available)\s*\(?\s*os\(/;
+/** A string literal with at least two words in it: a reason someone wrote, not a value like "win32". */
+const WORDS = /(["'`])[^"'`\n]*\w[^"'`\n]*\s\w[^"'`\n]*\1/;
 /** Comment-only lines: the line above a skip counts for its issue only when it is one. */
 const COMMENT_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
 
@@ -328,6 +335,7 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 			if (!m) continue;
 			if (r.context && !r.context.test(`${prev}\n${line}`)) continue;
 			if (r.issue && ISSUE_REF.test(issueWindow(lines, i))) continue;
+			if (r.issue && PLATFORM.test(lines.slice(Math.max(0, i - 2), i + 1).join("\n") + issueWindow(lines, i)) && WORDS.test(issueWindow(lines, i))) continue;
 			if (r.id === "sleep") {
 				// polling is a condition wait: a loop opens in the 4 lines above, or an `if` guards the sleep
 				const loop = bare.slice(Math.max(0, i - 4), i).some((l) => LOOP.test(l));
