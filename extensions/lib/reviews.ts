@@ -193,7 +193,9 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	for (const raw of splitSegments(tokenize(command))) {
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		if (isCd(tokens)) {
-			dir = follow(dir, tokens[1]) ?? dir;
+			// A write may create the folder, so it need not exist yet; a variable keeps the last known one.
+			const arg = tokens[1];
+			if (arg !== undefined && !/[$`(]/.test(arg)) dir = resolve(dir, arg.replace(/^~(?=\/|$)/, homedir()));
 			continue;
 		}
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
