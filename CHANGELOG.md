@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.13.0
+
+- One source for the test rules. test-driven-development's `references/test-standard.md` now holds every test rule. TDD, BDD, writing-plans, the review checklist and the other skills link to it instead of restating it, and the wording that contradicted itself is gone:
+  - the plan template's expected RED is an assertion failure after a stub, never "not defined";
+  - a manual check verifies a criterion only where automation is impossible (hardware, a store review, a fiscal device, a signature), with the reason in the task file and the user's agreement;
+  - with BDD a user-visible criterion has exactly one scenario; every other criterion has at least one test at the cheapest level; end-to-end without BDD covers critical flows only;
+  - **outside-in TDD with BDD:** the scenario is written first and seen failing, unit cycles drive the code, and the scenario passing closes the criterion. Unit tests test their unit's own contract and stay; only a unit test asserting the user-level outcome the scenario proves is left out;
+  - characterization tests are `*.char.test.*` and pass on first run by design; golden data in a port is an acceptance test that fails first; every other new test is seen failing first;
+  - deleting a test together with its behavior, or one that never protected anything, needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough), except a platform or test-mode skip whose reason starts with `platform:` or `mode:`;
+  - provider-sandbox tests are a separate suite and CI job;
+  - tests never retry; waits are on a condition with one ceiling, never a fixed sleep;
+  - missing test infrastructure fails the run instead of skipping;
+  - flake fixes meet five criteria;
+  - isolation rules for parallel tests, uncached state-dependent tests, test data kept out of production builds, CI-only visual baselines, small inline snapshots.
+- Criterion tags are checked in review against the task file (the checklist's Tests section); finished tasks' tags stay as history.
+- The review checklist adds fixed severities:
+  - Critical: a focused test committed; a CI check removed, skipped or retried, or retries in a runner config;
+  - Important: a manual check that isn't agreed or isn't necessary; a Review focus line without a test; a test without an assertion or asserting mock echo; an expected value copied from or recomputed like the code; a test-only helper in production code; a fixed sleep or real network call outside the sandbox suite; payments without a sandbox test; POS without a list of what ran on real hardware.
+- **Test hygiene on any stack.** A new dependency-free `scripts/test-hygiene.ts`, run with Node ≥22.18, checks:
+  - focused tests, and skips without a linked issue (JS/TS including Playwright and Cypress, Python, JVM, Go, Swift, .NET, Gherkin);
+  - fixed sleeps;
+  - retries in runner configs and test code;
+  - with `--junit`, only the reports: missing, empty, or counts that don't add up (a crashed shard);
+
+  In an existing project it checks only the lines a change adds (renames followed); old debt is counted, not blocking. Without a merge base it stops with a message. `test-hygiene: allow <reason>` marks a line where the pattern is the behavior under test; hiding a forbidden skip, retry or sleep with it needs the user's agreement. ci-quality-gates gets `test-hygiene` and `e2e` CI jobs and a per-stack table of native linters and JUnit reporters.
+- **Review gate: a verdict covers exactly the commit reviewed.** Any change after it needs a new review: a new commit, an amend, a rebase onto a newer base, a docs edit, deleting the task file. Documentation-only branches are reviewed too, and only commits already on the push remote's base branch land nothing new. The change identity and the exempt list are gone. executing-plans' Finish and `/finish` run the final review last, after docs, the task-file removal and any rebase, and a fix pushed to an open PR needs a new review.
+- A review counts only for verified code: one recorded while edits were unverified is Inconclusive.
+- The PR body says how each new test was seen failing first; executing-plans' completion contract includes it.
+- `/kit-init --test-hygiene` copies the script into `.ci/test-hygiene.mts` (an ES module whatever `package.json` says). `/kit-init` reports an older copy, and a CI that doesn't run it. The package now ships `scripts/`.
+- The `worker` dispatched per task gets the same reporting contract as an implementer: each new test seen failing first, with the commands run. Fixes go back to the same worker.
+
 ## 0.12.0
 
 - Review gate. Before `gh pr create/merge`, `glab mr create/merge`, `git merge` into the base or `git push` to the base, the guard asks the user unless the reviewer's last verdict is `Yes` for the commit being landed (no UI: blocked).

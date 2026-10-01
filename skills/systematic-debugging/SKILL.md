@@ -35,7 +35,7 @@ State one hypothesis: "X is the cause because Y." Test it with the smallest chan
 3. Verify: the new test passes, the full suite passes, and the original symptom is gone (verification-before-completion).
 4. **If three fixes have failed, stop.** When each fix reveals a new problem somewhere else, the architecture is wrong, not the hypothesis. Present what you learned and discuss with the user before a fourth attempt.
 
-If the cause really is external (network, vendor, timing), document what you investigated, add appropriate handling (a timeout, a retry with idempotency, a clear error), and add logging for next time. Most "no root cause" conclusions are incomplete investigations.
+If the cause really is external (network, vendor, timing), document what you investigated, add appropriate handling in the product code (a timeout, a retry with idempotency, a clear error) with a test for it, and add logging for next time. Tests themselves never retry (test-standard, "Retries"). Most "no root cause" conclusions are incomplete investigations.
 
 ## Signals you're off track
 
@@ -46,4 +46,4 @@ The user asks "is that actually happening?", "stop guessing", or "we're stuck?".
 | "It's obviously X" | Seeing a symptom isn't understanding the cause. Prove it. |
 | "Several fixes at once saves time" | Then you can't tell which one worked, and they cause new bugs. |
 | "One more attempt" (after 2+) | That's an architecture question. Stop. |
-| "Flaky, just rerun it" | Flaky means there's a race or shared state. Find it. Replace sleeps with condition-based waits. |
+| "Flaky, just rerun it" | Flaky means there's a race or shared state. Find it, and fix it by test-standard's "Flaky tests" criteria. |

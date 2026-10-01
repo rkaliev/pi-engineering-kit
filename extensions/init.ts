@@ -3,10 +3,11 @@
  *
  * Creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or
  * build tools), `.pi/guard.json`, `.pi/model-routing.json`, and adds pi-subagents to
- * `.pi/settings.json`. Never overwrites an existing file. AGENTS.md is left to /onboard, which
+ * `.pi/settings.json`. Never overwrites an existing file, except an older `.ci/test-hygiene.mts` with `--test-hygiene`. AGENTS.md is left to /onboard, which
  * writes it from the code; /kit-init offers to start it.
  *
  * `/kit-init` asks per file; `/kit-init --yes` creates everything missing without asking.
+ * `--test-hygiene` also offers the stack-independent test-hygiene script for CI (`.ci/test-hygiene.mts`).
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -16,10 +17,21 @@ import { planInit, type InitItem } from "./lib/init.ts";
 export default function initExtension(pi: ExtensionAPI) {
 	pi.registerCommand("kit-init", {
 		description: "Set this project up for pi-engineering-kit (.pi/verify.json, guard, model routing, subagents)",
-		getArgumentCompletions: (prefix) => ("--yes".startsWith(prefix) ? [{ value: "--yes", label: "--yes", description: "create all missing files without asking" }] : null),
+		getArgumentCompletions: (prefix) => {
+			// pi replaces the whole argument text: complete the last word and keep the earlier ones.
+			const words = prefix.split(/\s+/);
+			const last = words.pop() ?? "";
+			const head = words.length > 0 ? `${words.join(" ")} ` : "";
+			const options = [
+				{ value: "--yes", description: "create all missing files without asking" },
+				{ value: "--test-hygiene", description: "also offer the test-hygiene script for CI" },
+			].filter((o) => o.value.startsWith(last) && !words.includes(o.value));
+			return options.length > 0 ? options.map((o) => ({ value: `${head}${o.value}`, label: o.value, description: o.description })) : null;
+		},
 		handler: async (args, ctx) => {
-			const yes = args.split(/\s+/).includes("--yes");
-			const plan = planInit(ctx.cwd);
+			const words = args.split(/\s+/);
+			const yes = words.includes("--yes");
+			const plan = planInit(ctx.cwd, { copyHygiene: words.includes("--test-hygiene") });
 			const pending = plan.filter((i) => i.status === "create" || i.status === "merge");
 
 			if (!yes && !ctx.hasUI) {

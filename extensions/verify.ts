@@ -16,6 +16,7 @@ import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { verifyState } from "./lib/verify-state.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -40,7 +41,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	const markGreen = (commands: string[], all: string[], ctx: ExtensionContext) => {
 		for (const c of commands) greenSinceEdit.add(c);
-		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) unverified = false;
+		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) unverified = verifyState.unverified = false;
 		setStatus(ctx);
 	};
 
@@ -79,7 +80,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		unverified = false;
+		unverified = verifyState.unverified = false;
 		greenSinceEdit = new Set();
 		remindedThisPrompt = false;
 		approvalRemindedThisPrompt = false;
@@ -99,7 +100,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
 			if (!countsAsEdit(String(event.input.path ?? ""), ctx.cwd)) return undefined;
-			unverified = true;
+			unverified = verifyState.unverified = true;
 			greenSinceEdit = new Set();
 			setStatus(ctx);
 			return undefined;

@@ -25,7 +25,7 @@ Links: <issue · decision records · legacy map · or None>
 
 | # | Criterion (observable, testable) | How it is verified |
 |---|---|---|
-| 1 | <"Search ignores case and surrounding spaces"; include empty, error and limit cases> | <test name or level: unit / API / UI / load; or manual check> |
+| 1 | <"Search ignores case and surrounding spaces"; include empty, error and limit cases> | <test name and level (unit / API / UI / scenario @C1); "manual: <step> — <why it can't be automated>, agreed <date>" only where automation is impossible> |
 
 ## Scope
 

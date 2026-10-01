@@ -22,6 +22,7 @@ It contains:
   - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
+- **A test-hygiene script** for the project's CI on any stack (`scripts/test-hygiene.ts`, Node only, no dependencies): focused tests, skips without a linked issue, fixed sleeps, retries in runner configs and test code, JUnit test counts. In an existing project it checks only the lines a change adds, so old debt doesn't block.
 
 How it works and why: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A step-by-step guide with a demo project is in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). Both are also available in Russian: [ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md), [GETTING-STARTED.ru.md](docs/GETTING-STARTED.ru.md). The demo project itself is [examples/demo](examples/demo): a dependency-free cart library with one task, so you can try the whole loop in a minute.
 
@@ -42,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.8.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.13.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.8.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.13.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -58,7 +59,7 @@ Without `pi-subagents`, the skills fall back to doing that work inline.
 
 ## Set up a project
 
-1. Run `/kit-init`. It creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or build tools), `.pi/guard.json` and `.pi/model-routing.json`, and adds `pi-subagents` to `.pi/settings.json`. It never overwrites existing files, and `--yes` skips the questions.
+1. Run `/kit-init`. It creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or build tools), `.pi/guard.json` and `.pi/model-routing.json`, and adds `pi-subagents` to `.pi/settings.json`. It never overwrites existing files other than an older copy of the kit's test-hygiene script, and `--yes` skips the questions. `/kit-init --test-hygiene` also copies the test-hygiene script into `.ci/test-hygiene.mts` for CI (an ES module whatever `package.json` says) and replaces an older copy; without the flag it is only offered. It reports an older copy and a CI that doesn't run it.
 2. Run `/onboard`. It maps the repo, proves the build and test commands, and proposes `AGENTS.md` and `.pi/verify.json`. For new projects, start from [templates/AGENTS.md](templates/AGENTS.md).
 3. Tune `.pi/guard.json` ([example](templates/guard.json)) and `.pi/model-routing.json` if needed.
 4. Each piece of work gets one task file, `docs/tasks/YYYY-MM-DD-<slug>.md`, from [templates/task.md](templates/task.md): description, criteria, plan and progress in one place, standing in for a tracker issue (`/new-task` writes the description for you).
@@ -91,7 +92,7 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 
 `.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
 
-**Review gate:** the guard records the verdict of each `reviewer` run in the `subagent` tool result (the `Reviewed HEAD: <sha>` and `Ready to merge: <one of Yes, No, With fixes, Inconclusive>` lines), so run the reviewer in the foreground; a failed reviewer run counts as `Inconclusive`. Before `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch it asks you unless the last verdict for that commit is `Yes`. A review covers the branch's own change compared with `origin/<base>`: deleting task files, changing docs or rebasing onto a newer base keeps it valid; any other change needs a new review. Exempt are task files, prose and pictures in `docs/` and other markdown, except markdown that steers the agent (AGENTS.md, SKILL.md, anything under `.pi/`, `rules/`, `skills/`, `agents/`, `prompts/`); the list is fixed. `cd <dir>` and `git -C <dir>` are followed, so a worktree's branch is checked. Land in a command of its own: a landing chained after anything but read-only steps and the project's verification commands asks, and so does `gh pr merge <number>`.
+**Review gate:** the guard records the verdict of each `reviewer` run in the `subagent` tool result (the `Reviewed HEAD: <sha>` and `Ready to merge: <one of Yes, No, With fixes, Inconclusive>` lines), so run the reviewer in the foreground; a failed reviewer run counts as `Inconclusive`, and so does a review that ran while edits were unverified. Before `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch it asks you unless the last verdict for that commit is `Yes`. A verdict covers exactly the commit the reviewer reviewed: any change after it (a new commit, an amend, a rebase onto a newer base, a docs edit, deleting the task file) needs a new review, and a branch that changes only documentation is reviewed the same way, so the final review comes last, after docs, the task-file removal and any rebase. Commits already on the remote base land nothing new. `cd <dir>` and `git -C <dir>` are followed, so a worktree's branch is checked. Land in a command of its own: a landing chained after anything but read-only steps and the project's verification commands asks, and so does `gh pr merge <number>`.
 
 ### verify
 
@@ -129,7 +130,7 @@ Built into pi without this extension: `defaultModel`, `enabledModels` (`Ctrl+P` 
 
 ```bash
 npm install
-npm test          # extension unit tests + skill linter (frontmatter, budgets, links)
+npm test          # extension unit tests, test-hygiene, skill linter (frontmatter, budgets, links)
 npm run typecheck
 ```
 

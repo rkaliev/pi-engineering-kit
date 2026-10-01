@@ -12,10 +12,15 @@ export interface CiCoverage {
 	missing: string[];
 	/** A CI file has the `working-docs` job from the ci-quality-gates templates. */
 	workDocsCheck: boolean;
+	/** A CI file runs the kit's `test-hygiene` script. */
+	hygieneCheck: boolean;
 }
 
 /** The CI job that fails when task files reach the base branch, found by its YAML key. */
 export const WORK_DOCS_MARKER = "working-docs:";
+
+/** The kit's test-hygiene script, as CI runs it. */
+export const HYGIENE_MARKER = "test-hygiene.mts";
 
 export function findCiFiles(cwd: string): string[] {
 	const files = CI_FILES.filter((f) => existsSync(join(cwd, f)));
@@ -38,5 +43,6 @@ export function ciCoverage(cwd: string, commands: string[]): CiCoverage {
 		files,
 		missing: files.length === 0 ? [...commands] : commands.filter((c) => !text.includes(norm(c).trim())),
 		workDocsCheck: text.includes(WORK_DOCS_MARKER),
+		hygieneCheck: text.includes(HYGIENE_MARKER),
 	};
 }

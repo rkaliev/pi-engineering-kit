@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DEFAULT_IGNORE } from "../extensions/lib/commands.ts";
-import { detectVerifyCommands, planInit } from "../extensions/lib/init.ts";
+import { detectVerifyCommands, HYGIENE_TARGET, planInit } from "../extensions/lib/init.ts";
 
 function project(files: Record<string, string>) {
 	const dir = mkdtempSync(join(tmpdir(), "init-"));
@@ -106,4 +106,18 @@ test("kit-init reports whether CI runs every verification command", async () => 
 
 	const optedOut = project({ ".pi/verify.json": verify, ".pi/guard.json": JSON.stringify({ workDocs: [] }), ".gitlab-ci.yml": "test:\n  script:\n    - npm run typecheck\n    - npm test\n" });
 	assert.equal(ciOf(optedOut).status, "exists", "workDocs: [] turns the check off");
+});
+
+test("test-hygiene: offered without the flag, the package's own script with it, and an older copy is reported", () => {
+	const script = readFileSync(resolve(import.meta.dirname, "..", "scripts", "test-hygiene.ts"), "utf8");
+	const item = (dir: string, copy = false) => planInit(dir, { copyHygiene: copy }).find((i) => i.target === HYGIENE_TARGET)!;
+	const fresh = project({ "package.json": "{}" });
+	assert.equal(item(fresh).status, "missing", "never written without the user's agreement");
+	assert.match(item(fresh).why, /\/kit-init --test-hygiene/);
+	assert.deepEqual([item(fresh, true).status, item(fresh, true).content], ["create", script]);
+	assert.equal(item(project({ [HYGIENE_TARGET]: script })).status, "exists");
+	const olderDir = project({ [HYGIENE_TARGET]: 'export const VERSION = "0";\n' });
+	assert.match(item(olderDir).why, /v0 is older/);
+	assert.equal(item(olderDir, true).status, "merge", "--test-hygiene replaces an older copy");
+	assert.equal(item(project({ [HYGIENE_TARGET]: 'export const VERSION = "999";\n' })).status, "exists", "a newer copy is not called older");
 });

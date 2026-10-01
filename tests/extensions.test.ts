@@ -9,6 +9,7 @@ import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
 import verify from "../extensions/verify.ts";
+import { verifyState } from "../extensions/lib/verify-state.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -256,8 +257,11 @@ test("task files: guard blocks a PR while they exist; agent_end reminds once to 
 
 	mkdirSync(join(dir, ".pi"), { recursive: true });
 	writeFileSync(join(dir, ".pi/guard.json"), JSON.stringify({ workDocs: [] }));
-	assert.equal((await bash("gh pr create", ctx(dir, { trusted: false })))?.block, true, "an untrusted project cannot turn the rule off");
-	assert.equal(await bash("gh pr create", ctx(dir, { trusted: true })), undefined, "a trusted project can");
+	const untrusted = await bash("gh pr create", ctx(dir, { trusted: false }));
+	assert.match(untrusted.reason, /Task files would reach/, "an untrusted project cannot turn the rule off");
+	const trusted = await bash("gh pr create", ctx(dir, { trusted: true }));
+	assert.doesNotMatch(trusted.reason, /Task files/, "a trusted project can");
+	assert.match(trusted.reason, /Review gate: no reviewer verdict/, "the branch still needs a review, like any branch");
 
 	const v = fakePi();
 	verify(v.pi);
@@ -524,4 +528,58 @@ test("review gate: reviewGate: false only in a trusted project; the guard config
 	assert.match(asked.asked[0]!, /guard config decides/);
 	assert.equal((await call("write", { path: join(tmpdir(), "eng-kit", "reviews", "x.json") }))?.block, true);
 	assert.equal((await call("bash", { command: `echo '{}' > .pi/guard.json` }))?.block, true, "declined confirmation");
+});
+
+test("review gate: a review that ran on unverified edits counts as Inconclusive", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const head = git("rev-parse", "HEAD");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const review = () => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
+	const pr = async () => (await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block;
+	try {
+		verifyState.unverified = true;
+		await g.emit("input", { text: "review", source: "interactive" }, ctx(dir));
+		await review();
+		assert.equal(await pr(), true);
+		verifyState.unverified = false;
+		await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
+		await review();
+		assert.equal(await pr(), undefined, "after a green run the review counts");
+	} finally {
+		verifyState.unverified = false;
+	}
+});
+
+test("verify state is shared across separately loaded module graphs, as pi loads extensions", async () => {
+	const url = new URL("../extensions/lib/verify-state.ts", import.meta.url).href;
+	const a = (await import(`${url}?graph=a`)) as { verifyState: { unverified: boolean } };
+	const b = (await import(`${url}?graph=b`)) as { verifyState: { unverified: boolean } };
+	try {
+		a.verifyState.unverified = true;
+		assert.equal(b.verifyState.unverified, true, "one state, whichever copy of the module wrote it");
+		assert.equal(verifyState.unverified, true);
+	} finally {
+		a.verifyState.unverified = false;
+	}
+});
+
+test("/kit-init completes the last flag and keeps the earlier ones", () => {
+	const g = fakePi();
+	init(g.pi);
+	const complete = g.commands.get("kit-init").getArgumentCompletions as (prefix: string) => Array<{ value: string }> | null;
+	assert.deepEqual(complete("--te")?.map((o) => o.value), ["--test-hygiene"]);
+	assert.deepEqual(complete("--yes --te")?.map((o) => o.value), ["--yes --test-hygiene"]);
+	assert.deepEqual(complete("--yes ")?.map((o) => o.value), ["--yes --test-hygiene"], "a flag already given isn't offered again");
+	assert.equal(complete("--nope"), null);
 });

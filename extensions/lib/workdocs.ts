@@ -22,7 +22,7 @@ const DONE_BOX = /^\s*[-*]\s+\[[xX]\]/m;
 export type Landing =
 	| { kind: "pr"; merge: boolean; target?: string; repo?: boolean }
 	| { kind: "merge"; refs: string[]; dir?: string }
-	| { kind: "push"; refspecs: string[]; all: boolean; dir?: string }
+	| { kind: "push"; remote?: string; refspecs: string[]; all: boolean; dir?: string }
 	| { kind: "commit"; dir?: string };
 
 /** `git merge` options that take a value, so the value is not a ref. */
@@ -139,7 +139,7 @@ export function landing(tokens: string[]): Landing | undefined {
 		case "merge":
 			return { kind: "merge", refs: args.filter((t, i) => !t.startsWith("-") && !MERGE_VALUE_FLAGS.has(args[i - 1] ?? "")), dir };
 		case "push":
-			return { kind: "push", refspecs: positional.slice(1), all: args.includes("--all"), dir };
+			return { kind: "push", remote: positional[0], refspecs: positional.slice(1), all: args.includes("--all"), dir };
 		default:
 			return undefined;
 	}

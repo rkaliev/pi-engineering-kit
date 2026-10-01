@@ -14,7 +14,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
-import { checkGateFiles, checkReview, recordReview, recordVerdict, reviewedHead } from "./lib/reviews.ts";
+import { checkGateFiles, checkReview, parseReview, recordReview, recordVerdict, reviewedHead } from "./lib/reviews.ts";
+import { verifyState } from "./lib/verify-state.ts";
 import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
 /** The part of a pi-subagents result the review gate reads. */
@@ -50,7 +51,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
 			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
-				const gate = { workDocs, missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
+				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				decision = join(decision, review);
 			}
@@ -79,6 +80,13 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (run.agent !== "reviewer") return;
 			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
 			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
+			// A review counts only for code that passed the checks: one that ran on unverified edits is Inconclusive.
+			const parsed = failed ? undefined : parseReview(run.finalOutput!);
+			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd).commands.length > 0) {
+				recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot);
+				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
+				return;
+			}
 			const result = failed ? "the reviewer run failed" : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
 			if (typeof result === "string") {
 				// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel

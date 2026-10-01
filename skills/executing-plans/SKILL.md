@@ -27,7 +27,7 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
    - **The plan is wrong:** choose the smallest change that satisfies the description, add `Ruling: <what> — <why> — <cost if wrong>` to Progress, and continue.
 3. Commit as the plan says.
 4. **Completion contract**, with evidence from this session:
-   - every named test exists and ran;
+   - every named test exists and ran, and was seen failing first as test-standard defines it (with BDD, the criterion's scenario failed first and passes now);
    - the full suite is green;
    - every `Expected` was compared;
    - every deviation has a ruling.
@@ -44,17 +44,19 @@ Keep long command output out of context: redirect it to a file and read the tail
 ## With a subagent tool (when the user chose "subagent per task")
 
 For each task:
-1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and the instruction "follow TDD; report DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED with the commands you ran".
+1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and these instructions: "Work test-first (test-driven-development): watch each new test fail for the right reason before writing its code (characterization tests excepted). Change only what the task needs; never weaken, skip or delete a test to get green, and change tests only as test-standard's \"Changing tests\" allows. Run the verification commands in full and unpiped. Finish with DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, then: Changed (files), Tests (each new test and that you saw it fail first), Checks run (command → result), Concerns."
 2. Don't trust the report. Check `git diff BASE..HEAD` and run the tests yourself.
 3. Dispatch a fresh reviewer (`reviewer`) using `../requesting-code-review/reviewer-prompt.md` on `BASE..HEAD`.
-4. Have the implementer fix Critical and Important findings, then re-review. After 3 rounds without convergence, stop and ask the user.
+4. Have the implementer fix Critical and Important findings (give the same worker its own report and the findings, so it keeps its context), then re-review. After 3 rounds without convergence, stop and ask the user.
 
 Run implementers **sequentially**, one at a time on the same tree. For independent read-only work, see dispatching-parallel-agents.
 
 ## Finish
 
-1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the rulings in Progress.
-2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite, then re-review the fixes' range until the verdict is `Yes`: the review gate lands nothing else without asking the user. Record Minor findings in Progress.
-3. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
-4. **Task file:** move what lasts out of it: behavior into the topic chapter, decisions and lasting rulings into `docs/decisions/` (writing-documentation). Show the user its Follow-ups and offer to start the next one. Then delete the task file in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists; git keeps it.
-5. Apply verification-before-completion, then use the finishing section of git-workflow.
+The final review is the last step before landing, because a verdict covers exactly the commit it reviewed.
+1. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
+2. **Task file:** move what lasts into the topic chapter and `docs/decisions/` (writing-documentation), show the user its Follow-ups, then delete it in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists.
+3. If the branch must be rebased onto a newer base, do it now.
+4. Apply verification-before-completion.
+5. Review the whole branch on this HEAD with requesting-code-review, with the plan's Review focus and the rulings from the task file's last commit. Fix Critical and Important findings with RED→GREEN, and re-review until `Yes` for the current HEAD. Report Minor findings.
+6. Use the finishing section of git-workflow. Any change after the `Yes` (a commit, an amend, a rebase) needs a new review first.

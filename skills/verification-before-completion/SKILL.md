@@ -35,7 +35,7 @@ Long-running processes you need (dev server, watcher, emulator) run in the backg
 The final message lists:
 - **Changed:** files, one line each.
 - **Checks run:** command → result, only those actually run in this session.
-- **Criteria:** each requirement or criterion → how it was verified (test name, or manual step).
+- **Criteria:** each requirement or criterion → how it was verified: the test name, or the agreed manual step from the task file and that it ran.
 - **Docs:** the docs updated in this change, or "none affected" and why.
 - **Not verified:** anything skipped or impossible here, and why. Examples: no emulator, no credentials, a production-only integration.
 - **State:** local only / committed / pushed / CI green / deployed. Never merge these together.
