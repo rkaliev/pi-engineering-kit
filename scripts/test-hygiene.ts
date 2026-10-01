@@ -117,7 +117,7 @@ function langOf(path: string): Lang | undefined {
 type LineRule = { id: string; langs: Lang[]; re: RegExp; message: string; issue?: boolean; context?: RegExp };
 
 const FOCUSED = "focused test: nothing else in the suite runs; remove it";
-const SKIPPED = "skipped test without a linked issue: add #123, a URL or ABC-123 to its reason or a comment just above \u2014 or, for a platform or test-mode skip, a reason marked `platform:` or `mode:`";
+const SKIPPED = "skipped test without a linked issue: add #123, a URL or ABC-123 to the skip's own reason argument, a comment on its line or a comment line just above \u2014 or, for a platform or test-mode skip, start that reason with `platform:` or `mode:`";
 const SLEEP = "fixed sleep in a test: wait for a condition or event instead";
 
 /** The JS test API with its modifiers: `it`, `test.concurrent`, `describe.each`, `test.describe.serial`, ... */
@@ -181,8 +181,8 @@ const RETRY_RULES: RetryRule[] = [
 
 /** An issue: `#123`, a URL, or a tracker key like `PAY-12` (not a standard name such as `UTF-8` or `SHA-256`). */
 const ISSUE_REF = /#\d+|https?:\/\/|\b(?!(?:UTF|UCS|SHA|MD|ISO|IEC|RFC|HTTP|TLS|SSL|AES|RSA|DES|ECMA|ES|IEEE|IPV|BASE|X|PEP|CVE)-\d)[A-Z][A-Z0-9]+-\d+/;
-/** An explicit exception marker: a platform or test-mode skip says so, with at least one word after it. */
-const MARKER = /(?<![\w-])(?:platform|mode):[ \t]*\w/;
+/** An explicit exception marker at the start of a reason string or a comment: `"platform: …"`, `// mode: …`. */
+const MARKER = /(?:^|["'`]|\/\/|#|\/\*|--)[ \t]*(?:platform|mode):[ \t]*[^\s"'`]/m;
 /** Comment-only lines: the line above a skip counts for its issue only when it is one. */
 const COMMENT_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
 

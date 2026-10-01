@@ -151,7 +151,7 @@ export function planHygiene(cwd: string, script: string, copy: boolean, flag: st
 		return { target: HYGIENE_TARGET, status: "missing", why: `test-hygiene v${theirs} is older than the kit's v${ours}; replace it by re-running with ${flag} after the user agrees` };
 	}
 	if (!copy) return { target: HYGIENE_TARGET, status: "missing", why: `optional: the stack-independent test-hygiene check for CI (ci-quality-gates); add it by re-running with ${flag} after the user agrees` };
-	return create("test-hygiene check for CI: focused tests, skips without a linked issue, sleeps, retries, test counts, criterion tags");
+	return create("test-hygiene check for CI: focused tests, skips without a linked issue, sleeps, retries, test counts");
 }
 
 /** CI is the second line of defence: it must run at least the verification commands. Reported, never written here. */
