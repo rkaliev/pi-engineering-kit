@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { checkGateFiles, checkReview, exempt, parseReview, readReviews, recordReview, recordVerdict, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
-const OPTIONS: ReviewGateOptions = { workDocs: ["docs/tasks"], missing: "block", waiver: "reviewGate: false" };
+const OPTIONS: ReviewGateOptions = { workDocs: ["docs/tasks"], missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
 /** A repo with a remote: `main` pushed, then a work branch with one code commit and a task file. */
 function repo() {
@@ -199,7 +199,7 @@ test("shell writes to the gate's own files: records are blocked, the guard confi
 	for (const read of ["cat .pi/guard.json", "git diff .pi/guard.json", "git log -p .pi/guard.json", "npm test"]) assert.equal(check(read), "allow", read);
 });
 
-test("round 2: HEAD pushes, whitespace and binary changes, unknown directories", () => {
+test("HEAD pushes, whitespace and binary changes, and directories the guard can't follow", () => {
 	const { dir, git, commit, head, check, review } = repo();
 	review(report(head, "Yes"));
 	const pyReviewed = commit({ "src/job.py": "if ok:\n    run()\nclean()\n" });
@@ -224,7 +224,7 @@ test("round 2: HEAD pushes, whitespace and binary changes, unknown directories",
 	assert.ok(dir);
 });
 
-test("round 2: the newest review of a change decides; a failed run spoils its prompt; merge -m and agent rules", () => {
+test("the newest review of a change decides; a failed run spoils only its commit; merge -m and agent rules", () => {
 	const { dir, root, git, commit, head, check, review } = repo();
 	review(report(head, "Yes"), "p1", "a");
 	const docs = commit({ "docs/more.md": "x\n" });
@@ -234,16 +234,18 @@ test("round 2: the newest review of a change decides; a failed run spoils its pr
 
 	git("switch", "-q", "feat/a");
 	review(report(docs, "Yes"), "p3", "a");
-	recordVerdict(dir, undefined, "Inconclusive", { promptId: "p3", run: "b" }, root);
-	assert.equal(readReviews(dir, root)[0]?.verdict, "Inconclusive", "a parallel run that failed counts against the prompt");
-	review(report(docs, "Yes"), "p4", "a");
+	recordVerdict(dir, docs, "Inconclusive", { promptId: "p3", run: "b" }, root);
+	assert.equal(readReviews(dir, root)[0]?.verdict, "Inconclusive", "a parallel run that failed on the same commit counts against it");
+	const fixed = commit({ "src/a.ts": "export const a = 3;\n" });
+	review(report(fixed, "Yes"), "p3", "c");
+	assert.equal(readReviews(dir, root)[0]?.verdict, "Yes", "a re-review of a later commit in the same prompt is unaffected");
 	git("switch", "-q", "main");
 	assert.equal(check("git merge -m 'land a' feat/a"), undefined, "the -m value is not a ref");
 
-	for (const rule of ["agents.md", "AGENTS.override.md", "CLAUDE.MD", "docs/conf.py", "docs/.vitepress/config.ts"]) assert.equal(exempt(rule, "", []), false, rule);
+	for (const rule of ["agents.md", "AGENTS.override.md", "CLAUDE.MD", "docs/conf.py", "docs/.vitepress/config.ts", "docs/requirements.txt"]) assert.equal(exempt(rule, "", []), false, rule);
 });
 
-test("round 2: a PR merge checks the remote head too; glab -s names the branch", () => {
+test("a PR merge checks the remote head too; glab -s names the branch", () => {
 	const { dir, git, run, commit, head, check, review } = repo();
 	git("push", "-q", "origin", "feat/a");
 	review(report(head, "Yes"));
@@ -260,4 +262,54 @@ test("round 2: a PR merge checks the remote head too; glab -s names the branch",
 	git("switch", "-q", "feat/a");
 	assert.equal(action(check("gh pr merge")), "block", "no argument: the current branch, local and remote");
 	assert.ok(dir);
+});
+
+test("a rebase over another edit to a file the branch changes keeps the review", () => {
+	const { git, commit, check, review } = repo();
+	const lines = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
+	git("switch", "-q", "main");
+	commit({ "src/big.ts": `${lines.join("\n")}\n` });
+	git("push", "-q", "origin", "main");
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	const branchLines = [...lines];
+	branchLines[1] = "export const v1 = 100;";
+	const reviewed = commit({ "src/big.ts": `${branchLines.join("\n")}\n` });
+	review(report(reviewed, "Yes"));
+	git("switch", "-q", "main");
+	const baseLines = ["// header added on main", ...lines];
+	baseLines[39] = "export const v38 = 380;";
+	commit({ "src/big.ts": `${baseLines.join("\n")}\n` });
+	git("push", "-q", "origin", "main");
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	assert.equal(check("gh pr create --fill"), undefined, "the branch's own hunk is unchanged, though its line moved");
+	commit({ "src/big.ts": `${["// header added on main", ...branchLines].map((l, i) => (i === 39 ? "export const v38 = 380;" : i === 2 ? "export const v1  = 100;" : l)).join("\n")}\n` });
+	assert.equal(action(check("gh pr create --fill")), "block", "whitespace inside the branch's own line still counts");
+});
+
+test("before a landing: read-only steps and the project's verify commands may run; anything else may not", () => {
+	const { head, check, review } = repo();
+	review(report(head, "Yes"));
+	for (const ok of ["npm test && gh pr create --fill", "npm run lint && npm test && gh pr create", "git log --oneline | head -5 && gh pr create --fill", "(cd src && ls) && gh pr create --fill", `(cd ${tmpdir()} && ls) && gh pr create --fill`]) {
+		assert.equal(check(ok), undefined, ok);
+	}
+	for (const bad of ["npm run build && gh pr create", "npm version patch && gh pr create", "popd && gh pr create"]) assert.equal(action(check(bad)), "block", bad);
+});
+
+test("gate files: reads with stderr redirects, jq and unrelated mentions pass; the records folder is matched exactly", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	mkdirSync(join(project, ".pi"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".pi/guard.json")?.action ?? "allow";
+	for (const read of ["grep -rn eng-kit/reviews src 2>/dev/null", "cat .pi/guard.json 2>&1", "jq . .pi/guard.json", "git commit -m 'eng-kit/reviews: tidy'"]) assert.equal(check(read), "allow", read);
+	assert.equal(check("echo x > $TMPDIR/eng-kit/reviews/h/a.json"), "block");
+	assert.equal(check("rm -rf ${TMPDIR}/eng-kit/reviews"), "block");
+	assert.equal(check("cat .pi/guard.json | jq . > /tmp/x.json && cp /tmp/x.json .pi/guard.json"), "confirm");
+});
+
+test("non-ASCII doc names are recognized as docs", () => {
+	const { git, commit, check } = repo();
+	git("switch", "-qc", "docs/ru", "main");
+	commit({ "docs/архитектура.md": "текст\n" });
+	assert.equal(check("gh pr create --fill"), undefined);
 });

@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
@@ -14,7 +14,7 @@ import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
 
-/** One reviewer run's verdict on one commit. `sha` is `*` for a run that failed: it spoils its whole prompt. */
+/** One reviewer run's verdict on one commit. A run that failed counts as Inconclusive for the commit it reviewed. */
 export interface ReviewRecord {
 	sha: string;
 	verdict: Verdict;
@@ -30,6 +30,8 @@ export interface ReviewGateOptions {
 	missing: "block" | "confirm";
 	/** How the user turns the gate off, named in the reason. */
 	waiver: string;
+	/** The project's verification commands: they may run before a landing in the same command. */
+	verify: string[];
 }
 
 const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2, No: 3 };
@@ -40,15 +42,14 @@ const HEAD = /Reviewed HEAD[*_]*:[*_\s`]*([0-9a-f]{7,40})\b/gi;
 const RULE_FILES = new Set(["claude.md", "claude.local.md", "agents.md", "agents.override.md", "skill.md"]);
 const RULE_DIRS = new Set([".claude", ".pi", "rules", "skills", "agents", "prompts"]);
 /** What `docs/` may hold without review: prose and pictures, not a docs site's code or config. */
-const DOC_FILE = /\.(mdx?|txt|rst|adoc|png|jpe?g|gif|svg|webp|pdf|drawio|excalidraw)$/i;
+const DOC_FILE = /\.(mdx?|rst|adoc|png|jpe?g|gif|svg|webp|pdf|drawio|excalidraw)$/i;
 /** Segments that may run before a landing in one command: they neither commit nor move a ref. */
-const SAFE_COMMANDS = new Set(["cd", "pushd", "popd", "echo", "printf", "true", "sleep", "pwd", "ls", "cat"]);
+const SAFE_COMMANDS = new Set(["cd", "pushd", "echo", "printf", "true", "sleep", "pwd"]);
 const SAFE_GIT = new Set(["status", "diff", "log", "show", "rev-parse", "add", "fetch", "remote", "branch"]);
-const READ_ONLY = new Set(["cat", "less", "head", "tail", "grep", "rg", "ls", "wc", "diff", "stat", "file"]);
+const READ_ONLY = new Set(["cat", "less", "head", "tail", "grep", "rg", "ls", "wc", "diff", "stat", "file", "jq"]);
 const READ_ONLY_GIT = new Set(["diff", "show", "log", "status", "blame"]);
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CANDIDATES = 10;
-const FAILED = "*";
 
 /** The verdict and SHA in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
 export function parseReview(text: string): { sha: string; verdict: Verdict } | undefined {
@@ -56,6 +57,12 @@ export function parseReview(text: string): { sha: string; verdict: Verdict } | u
 	const shas = new Set([...text.matchAll(HEAD)].map((m) => m[1]!.toLowerCase()));
 	if (verdicts.length === 0 || shas.size !== 1) return undefined;
 	return { sha: [...shas][0]!, verdict: worst(verdicts) };
+}
+
+/** The SHA a report names, even when its verdict line is missing: a failed run is charged to that commit. */
+export function reviewedHead(text: string): string | undefined {
+	const shas = new Set([...text.matchAll(HEAD)].map((m) => m[1]!.toLowerCase()));
+	return shas.size === 1 ? [...shas][0] : undefined;
 }
 
 /**
@@ -68,16 +75,16 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root);
 }
 
-/** Record a verdict for a commit, or with `rev` undefined a failed run, which makes its prompt Inconclusive. */
-export function recordVerdict(projectDir: string, rev: string | undefined, verdict: Verdict, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
-	const sha = rev === undefined ? FAILED : git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+/** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
+export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
+	const sha = git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
 	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
 	const record: ReviewRecord = { sha, verdict, promptId: ids.promptId, at: Date.now() };
 	const dir = reviewsDir(projectDir, root);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		if (!ownDir(dir)) return `${dir} belongs to another user`;
-		writeAtomic(join(dir, `${sha === FAILED ? "failed" : sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
+		writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
 		prune(dir);
 	} catch (err) {
 		return `could not write ${dir}: ${(err as Error).message}`;
@@ -100,13 +107,10 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
 		const record = readRecord(join(dir, name));
 		if (record) bySha.set(record.sha, [...(bySha.get(record.sha) ?? []), record]);
 	}
-	const failedPrompts = new Set((bySha.get(FAILED) ?? []).map((r) => r.promptId));
-	bySha.delete(FAILED);
 	const combined: ReviewRecord[] = [];
 	for (const records of bySha.values()) {
 		const latest = records.reduce((a, b) => (b.at > a.at ? b : a));
 		const prompt = records.filter((r) => r.promptId === latest.promptId).map((r) => r.verdict);
-		if (failedPrompts.has(latest.promptId)) prompt.push("Inconclusive");
 		combined.push({ ...latest, verdict: worst(prompt) });
 	}
 	return combined.sort((a, b) => b.at - a.at);
@@ -119,15 +123,25 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	let dir: string | undefined = cwd;
+	let outside: string | undefined;
+	let inSubshell = false;
 	let unsafeBefore = false;
 	for (const raw of splitSegments(tokenize(command))) {
-		// A subshell's directory is its own: the guard doesn't track it.
-		if (raw[0]?.startsWith("(")) dir = undefined;
+		// A `cd` inside a subshell ends with it: restore the directory after the closing parenthesis.
+		if (raw[0]?.startsWith("(")) {
+			inSubshell = true;
+			outside = dir;
+		}
+		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
 		if (!l || l.kind === "commit") {
 			if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
-			else if (!isSafe(tokens)) unsafeBefore = true;
+			else if (!isSafe(tokens, options.verify)) unsafeBefore = true;
+			if (closes) {
+				inSubshell = false;
+				dir = outside;
+			}
 			continue;
 		}
 		// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
@@ -151,7 +165,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		const refs = targets(l, where, base);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
-			return decision(options.missing, "this command runs something before it lands (a commit, a switch, a ref update), so the guard can't see what it lands. Run the landing as its own command.", options);
+			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
 		}
 		for (const ref of refs) {
 			if (ref === undefined) {
@@ -169,8 +183,10 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
  * The path rules cover Edit/Write; this covers the shell, following `cd`. An interpreter one-liner can still hide a path.
  */
 export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string): GuardDecision | undefined {
-	const redirects = /[>]|\btee\b/.test(command);
+	// Writing redirections and `tee` make any command a writer; `2>/dev/null` and `2>&1` don't.
+	const redirects = [...command.matchAll(/\d*>>?\s*(&\d+|[^\s;&|]+)/g)].some((m) => m[1] !== "/dev/null" && !m[1]!.startsWith("&")) || /\btee\b/.test(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
+	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
 	let dir = cwd;
 	for (const raw of splitSegments(tokenize(command))) {
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -182,7 +198,8 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
 		const paths = tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/"));
-		if (paths.some((p) => p.includes("/eng-kit/reviews"))) {
+		const named = tokens.some((t) => /^\$\{?TMPDIR\}?\/+eng-kit\/reviews(\/|$)/.test(t));
+		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
@@ -203,7 +220,9 @@ function follow(dir: string, arg: string | undefined): string | undefined {
 	return existsSync(target) ? target : undefined;
 }
 
-function isSafe(tokens: string[]): boolean {
+function isSafe(tokens: string[], verify: string[]): boolean {
+	if (READ_ONLY.has(tokens[0] ?? "")) return true;
+	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
 	if (tokens[0] === "git") {
 		const sub = tokens.slice(1).find((t, i, all) => !t.startsWith("-") && all[i - 1] !== "-C" && all[i - 1] !== "-c") ?? "";
 		if (sub === "fetch") return !tokens.some((t) => t.includes(":"));
@@ -256,24 +275,39 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 }
 
 /**
- * The branch's own change to reviewable files: each changed path with its new mode and content hash, from
- * where the branch forked off the base. "" when it changes none, undefined when git fails. The same change
- * on a newer base, or with docs and task files changed around it, gives the same value; any byte of
- * reviewable content that differs, whitespace and binaries included, gives another.
+ * The branch's own change to reviewable files, from where it forked off the base: the diff text without
+ * positions (so the same change on a newer base matches, even in a file the base also changed), and the new
+ * content hash of each binary file. "" when it changes no reviewable file, undefined when git fails. Every
+ * byte of a changed line counts, whitespace included.
  */
 function ownChange(where: string, upstream: string, sha: string, prefix: string, workDocs: string[]): string | undefined {
 	const fork = git(where, ["merge-base", upstream, sha]);
 	if (!fork) return undefined;
-	const raw = git(where, ["diff", "--raw", "--no-renames", "--no-abbrev", fork, sha]);
+	const raw = git(where, ["-c", "core.quotePath=false", "diff", "--raw", "--numstat", "--no-renames", "--no-abbrev", fork, sha]);
 	if (raw === undefined) return undefined;
-	const entries: string[] = [];
+	const blobs = new Map<string, string>();
+	const binary = new Set<string>();
 	for (const line of raw.split("\n").filter(Boolean)) {
-		const [meta = "", path = ""] = line.split("\t");
-		if (exempt(path, prefix, workDocs)) continue;
-		const [, newMode = "", , newBlob = ""] = meta.split(" ");
-		entries.push(`${path} ${newMode} ${newBlob}`);
+		if (line.startsWith(":")) {
+			const [meta = "", path = ""] = line.split("\t");
+			blobs.set(path, meta.split(" ")[3] ?? "");
+		} else if (line.startsWith("-\t-\t")) binary.add(line.slice(4));
 	}
-	return entries.length === 0 ? "" : hash(entries.sort().join("\n"));
+	const files = [...blobs.keys()].filter((p) => !exempt(p, prefix, workDocs)).sort();
+	if (files.length === 0) return "";
+	const text = files.filter((f) => !binary.has(f));
+	let diff = "";
+	if (text.length > 0) {
+		const out = git(where, ["-c", "core.quotePath=false", "diff", "--no-renames", "--no-ext-diff", "--unified=0", fork, sha, "--", ...text.map((f) => `:(top)${f}`)]);
+		if (out === undefined) return undefined;
+		diff = out
+			.split("\n")
+			.filter((l) => !l.startsWith("index "))
+			.map((l) => (l.startsWith("@@") ? "@@" : l))
+			.join("\n");
+	}
+	const bins = files.filter((f) => binary.has(f)).map((f) => `${f} ${blobs.get(f)}`);
+	return hash(`${diff}\n${bins.join("\n")}`);
 }
 
 /** Task files, prose and pictures in `docs/`, and other markdown need no review, except markdown that steers the agent. */
@@ -338,6 +372,14 @@ function short(sha: string): string {
 
 function safe(id: string): string {
 	return id.replace(/[^\w-]/g, "_").slice(0, 80) || "none";
+}
+
+function safeRealpath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
 }
 
 function hash(text: string): string {
