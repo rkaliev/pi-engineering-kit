@@ -11,7 +11,7 @@ Use BDD when acceptance criteria should read in the domain's language and be che
 
 ## Link to the criteria
 
-Every user-visible criterion in the task file's success criteria table maps to exactly one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and the kit's `test-hygiene` check reports a criterion without a scenario, two scenarios for one criterion, or a tag with no criterion. Criteria the user doesn't see are verified by tests at a lower level (`test-standard.md`, "Criteria and levels").
+Every user-visible criterion in the task file's success criteria table maps to exactly one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and review checks it against the task file: a criterion without a scenario, two scenarios for one criterion, or a new tag with no criterion is a finding. Tags of finished tasks stay as history. Criteria the user doesn't see are verified by tests at a lower level (`test-standard.md`, "Criteria and levels").
 
 **Order: outside-in.** The scenario is written and run before the code it needs, and it must fail on the step that needs the missing behavior. Unit-level TDD cycles then drive the code until the scenario passes (test-driven-development, "With BDD scenarios").
 

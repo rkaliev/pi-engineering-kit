@@ -53,6 +53,7 @@ Check the diff against `../../test-driven-development/references/test-standard.m
 - each criterion is verified as "Criteria and levels" says, and its new tests were seen failing first as the standard defines it (the PR or report says how);
 - layers don't repeat each other: a unit test asserting the user-level outcome a scenario already proves (the same journey, the same entry point) is a finding; unit tests of a unit's own contract are not, even on the happy path;
 - determinism and isolation: controlled clock and randomness, own data per test, cleanup registered where data is created, no shared mutable state;
+- with BDD, each scenario-verified criterion of the task has exactly one scenario tagged with it among the scenarios the branch adds, and no new tag lacks a criterion (`bdd.md`);
 - external side effects (payment, email, device) are verified at the boundary that matters.
 
 ## Security

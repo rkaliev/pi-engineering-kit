@@ -1,6 +1,6 @@
 /**
  * Stack-independent test hygiene check: focused tests, skips without a linked issue, sleeps, retries,
- * JUnit report sanity and success-criterion to scenario tags. One self-contained file with no
+ * and JUnit report sanity. One self-contained file with no
  * imports from the repo, so it can be copied verbatim into any project and run in its CI.
  *
  *   node .ci/test-hygiene.mts [--all] [--base <ref>] [--junit <file-or-dir> ...] [--config <path>]
@@ -8,7 +8,6 @@
  * Default (PR mode) is a ratchet: only violations on lines added since the merge-base with the
  * base branch fail the run; older ones are only counted as "pre-existing". --all checks every line
  * of every tracked file. `--junit` alone checks only the reports (no source scan, no diff).
- * Criterion tags (@C<n>) are checked only for scenarios changed in the branch, never with --all;
  * JUnit checks are never ratcheted.
  *
  * A line opts out with an inline comment `test-hygiene: allow <reason>`; an allow without a reason
@@ -16,7 +15,7 @@
  * --config): { "testFiles": [glob], "ignore": [glob], "patterns": [{ id, files, regex, message }] }.
  * Exit 0: no new violation, 1: violations, 2: usage, config or git error.
  */
-export const VERSION = "2";
+export const VERSION = "3";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -118,7 +117,7 @@ function langOf(path: string): Lang | undefined {
 type LineRule = { id: string; langs: Lang[]; re: RegExp; message: string; issue?: boolean; context?: RegExp };
 
 const FOCUSED = "focused test: nothing else in the suite runs; remove it";
-const SKIPPED = "skipped test without a linked issue: add an issue reference (#123, URL or ABC-123) on this line or the line above, or delete the test";
+const SKIPPED = "skipped test without a linked issue: add #123, a URL or ABC-123 to its reason or a comment just above \u2014 or, for a platform or test-mode skip, a reason marked `platform:` or `mode:`";
 const SLEEP = "fixed sleep in a test: wait for a condition or event instead";
 
 /** The JS test API with its modifiers: `it`, `test.concurrent`, `describe.each`, `test.describe.serial`, ... */
@@ -182,13 +181,8 @@ const RETRY_RULES: RetryRule[] = [
 
 /** An issue: `#123`, a URL, or a tracker key like `PAY-12` (not a standard name such as `UTF-8` or `SHA-256`). */
 const ISSUE_REF = /#\d+|https?:\/\/|\b(?!(?:UTF|UCS|SHA|MD|ISO|IEC|RFC|HTTP|TLS|SSL|AES|RSA|DES|ECMA|ES|IEEE|IPV|BASE|X|PEP|CVE)-\d)[A-Z][A-Z0-9]+-\d+/;
-/**
- * The one exception to "a skip needs an issue": a skip conditioned on the platform or the test mode (OS,
- * architecture, runtime version, short mode, CI), with a reason in words. Missing infrastructure is not one.
- */
-const PLATFORM = /\btesting\.Short\(\)|\bruntime\.(?:GOOS|GOARCH)\b|\bsys\.(?:platform|version_info)\b|\bplatform\.(?:system|machine)\(\)|\bos\.name\b|\bprocess\.(?:platform|arch)\b|@(?:Disabled|Enabled)On(?:Os|Jre)\b|\bOperatingSystem\.Is\w+\(|\bRuntimeInformation\.IsOSPlatform\b|#(?:if|available)\s*\(?\s*os\(/;
-/** A string literal with at least two words in it: a reason someone wrote, not a value like "win32". */
-const WORDS = /(["'`])[^"'`\n]*\w[^"'`\n]*\s\w[^"'`\n]*\1/;
+/** An explicit exception marker: a platform or test-mode skip says so, with at least one word after it. */
+const MARKER = /(?<![\w-])(?:platform|mode):[ \t]*\w/;
 /** Comment-only lines: the line above a skip counts for its issue only when it is one. */
 const COMMENT_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
 
@@ -275,24 +269,72 @@ function mask(line: string, style: Style, inBlock: boolean): View {
 /** A line that opens an `if` / `else` branch or is a one-line guard (`if (x) return;`). */
 const GUARD = /^\s*(?:\}\s*)?(?:if|else)\b/;
 
-/**
- * Where a skip's issue may be: the line above when it is a comment, then the line itself plus the following
- * lines while its parentheses are still open (an annotation spread over several lines), up to the test's body
- * (`=>`, `function`), so a URL inside the skipped test doesn't count.
- */
-function issueWindow(lines: string[], i: number): string {
-	let text = lines[i];
-	let depth = 0;
-	for (let k = i; k < Math.min(lines.length, i + 4); k++) {
-		if (k > i) text += `\n${lines[k]}`;
-		depth += (lines[k].match(/\(/g) ?? []).length - (lines[k].match(/\)/g) ?? []).length;
-		if (depth <= 0) break;
+/** `text` with string contents replaced by spaces (same length), so brackets and keywords inside strings are not seen. */
+function blankStrings(text: string): string {
+	let quote = "";
+	let out = "";
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (quote) {
+			if (ch === "\\" && i + 1 < text.length) {
+				out += "  ";
+				i++;
+			} else if (ch === quote) {
+				quote = "";
+				out += ch;
+			} else out += ch === "\n" ? "\n" : " ";
+		} else {
+			if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+			out += ch;
+		}
 	}
-	const body = text.search(/=>|\bfunction\b/);
-	const above = i > 0 && COMMENT_LINE.test(lines[i - 1]) ? `${lines[i - 1]}\n` : "";
-	// A trailing comment after the body opens still names the issue (`this.skip(); // #12`).
-	const trailing = /(?:\/\/|#)\s.*$/.exec(lines[i])?.[0] ?? "";
-	return above + (body === -1 ? text : text.slice(0, body)) + trailing;
+	return out;
+}
+
+/** Index of the bracket closing the one opened at `open` (string-aware via `blank`), or -1. */
+function closing(blank: string, open: number): number {
+	const pair = blank[open] === "(" ? [")", "("] : ["}", "{"];
+	let depth = 0;
+	for (let i = open; i < blank.length; i++) {
+		if (blank[i] === pair[1]) depth++;
+		else if (blank[i] === pair[0] && --depth === 0) return i;
+	}
+	return -1;
+}
+
+/** Drop function bodies (`=> { … }`, `function (…) { … }`) from an argument list; expression-bodied arrows stay. */
+function stripBodies(text: string): string {
+	for (;;) {
+		const blank = blankStrings(text);
+		const m = /=>\s*\{|\bfunction\b[^({]*\([^)]*\)\s*\{/.exec(blank);
+		if (!m) return text;
+		const open = m.index + m[0].length - 1;
+		const end = closing(blank, open);
+		text = text.slice(0, open) + (end < 0 ? "" : text.slice(end + 1));
+	}
+}
+
+/**
+ * Where a skip's reason is read from, and nowhere else: its own argument list (to the balanced closing
+ * parenthesis, up to 6 lines, without function bodies), a trailing comment on its line, and a comment-only
+ * line directly above. A Gherkin tag carries its reason on the tag line itself.
+ */
+function skipReason(lines: string[], views: View[], i: number, m: RegExpMatchArray, lang: Lang | undefined): string {
+	const line = lines[i];
+	const trailing = views[i].comment < line.length ? line.slice(views[i].comment) : "";
+	const above = i > 0 && COMMENT_LINE.test(lines[i - 1]) ? lines[i - 1] : "";
+	if (lang === "feature") return `${above}\n${line}`;
+	const end = m.index! + m[0].length;
+	const inside = m[0].indexOf("(");
+	const open = inside >= 0 ? m.index! + inside : /^\s*\(/.test(line.slice(end)) ? end + line.slice(end).indexOf("(") : -1;
+	let args = "";
+	if (open >= 0) {
+		const text = lines.slice(i, i + 6).join("\n");
+		const blank = blankStrings(text);
+		const close = closing(blank, open);
+		args = stripBodies(text.slice(open, close < 0 ? undefined : close + 1));
+	}
+	return `${above}\n${args}\n${trailing}`;
 }
 
 const LOOP = /(?<![\w.$])(?:while|for|loop|repeat)\b|\bdo\s*\{/;
@@ -334,8 +376,10 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 			const m = hit(r.re, i);
 			if (!m) continue;
 			if (r.context && !r.context.test(`${prev}\n${line}`)) continue;
-			if (r.issue && ISSUE_REF.test(issueWindow(lines, i))) continue;
-			if (r.issue && PLATFORM.test(lines.slice(Math.max(0, i - 2), i + 1).join("\n") + issueWindow(lines, i)) && WORDS.test(issueWindow(lines, i))) continue;
+			if (r.issue) {
+				const reason = skipReason(lines, views, i, m, lang);
+				if (ISSUE_REF.test(reason) || MARKER.test(reason)) continue;
+			}
 			if (r.id === "sleep") {
 				// polling is a condition wait: a loop opens in the 4 lines above, or an `if` guards the sleep
 				const loop = bare.slice(Math.max(0, i - 4), i).some((l) => LOOP.test(l));
@@ -427,105 +471,6 @@ export function checkJunit(inputs: string[], cwd: string, root: string): Violati
 		cases += r.totals.cases;
 	}
 	if (cases === 0) out.push({ path: shown(files[0]), line: 1, rule: "junit-empty", message: "reports contain 0 test cases" });
-	return out;
-}
-
-// ---------------------------------------------------------------- criterion tags
-
-type Source = { path: string; text: string };
-type Criterion = { n: number; path: string; line: number; scenario: boolean };
-
-const cells = (line: string): string[] => line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-
-/** Criteria from the first markdown table whose header row has a `Criterion` column. */
-function parseCriteria(file: Source): Criterion[] {
-	const lines = file.text.split(/\r?\n/);
-	const start = lines.findIndex((l) => l.trim().startsWith("|") && /criterion/i.test(l));
-	if (start < 0) return [];
-	const out: Criterion[] = [];
-	for (let i = start + 1; i < lines.length && lines[i].trim().startsWith("|"); i++) {
-		const [num, , how = ""] = cells(lines[i]);
-		if (!/^\d+$/.test(num ?? "")) continue;
-		const n = Number(num);
-		out.push({ n, path: file.path, line: i + 1, scenario: /scenario/i.test(how) || new RegExp(`@C${n}\\b`).test(how) });
-	}
-	return out;
-}
-
-type Block = { tags: { n: number; line: number }[]; lines: number[]; feature: boolean };
-
-/** Feature and scenario blocks of a .feature file: their tags and the lines that belong to them (tags, header, steps, examples). */
-function featureBlocks(text: string): Block[] {
-	const blocks: Block[] = [];
-	const fresh = (): Block => ({ tags: [], lines: [], feature: false });
-	let pending = fresh();
-	const st: { current: Block | undefined; last: Block | undefined } = { current: undefined, last: undefined };
-	const close = () => {
-		// An outline reopened by its Examples is already listed: one outline is one scenario.
-		if (st.current && !blocks.includes(st.current)) blocks.push(st.current);
-		if (st.current) st.last = st.current;
-		st.current = undefined;
-	};
-	const lines = text.split(/\r?\n/);
-	for (let i = 0; i < lines.length; i++) {
-		const t = lines[i].trim();
-		const ln = i + 1;
-		if (!t || t.startsWith("#")) continue;
-		if (t.startsWith("@")) {
-			close();
-			for (const m of t.matchAll(/@C(\d+)\b/g)) pending.tags.push({ n: Number(m[1]), line: ln });
-			pending.lines.push(ln);
-		} else if (/^(?:Feature|Scenario|Scenario Outline|Scenario Template|Example):/.test(t)) {
-			close();
-			st.current = { tags: pending.tags, lines: [...pending.lines, ln], feature: t.startsWith("Feature:") };
-			pending = fresh();
-		} else if (/^(?:Examples|Scenarios):/.test(t) && (st.current ?? st.last)) {
-			const target = (st.current ?? st.last) as Block;
-			target.lines.push(...pending.lines, ln);
-			target.tags.push(...pending.tags);
-			st.current = target;
-			pending = fresh();
-		} else if (/^(?:Rule|Background):/.test(t)) {
-			close();
-			pending = fresh();
-		} else if (st.current && !st.current.feature) st.current.lines.push(ln);
-	}
-	close();
-	return blocks;
-}
-
-/**
- * Cross-check `@C<n>` scenario tags against the success-criteria tables in task files, looking only at
- * what the branch changed: tag lines it adds or changes, and task files with added lines.
- * `added` maps a path to its added line numbers. Old scenarios and old tags never produce a violation.
- */
-export function checkCriteria(tasks: Source[], features: Source[], added: Map<string, Set<number>>): Violation[] {
-	const criteria = tasks.flatMap(parseCriteria);
-	const known = new Set(criteria.map((c) => c.n));
-	const changedTasks = new Set(tasks.filter((t) => (added.get(t.path)?.size ?? 0) > 0).map((t) => t.path));
-	const tags = new Map<number, { path: string; line: number }[]>();
-	for (const f of features) {
-		const touched = added.get(f.path);
-		if (!touched?.size) continue;
-		// A tag counts only where the branch writes its tag line (a new scenario or a deliberate retag), so
-		// editing a step of an old scenario never re-checks a finished task's tag.
-		for (const b of featureBlocks(f.text)) {
-			for (const t of b.tags) if (touched.has(t.line)) tags.set(t.n, [...(tags.get(t.n) ?? []), { path: f.path, line: t.line }]);
-		}
-	}
-	const out: Violation[] = [];
-	for (const c of criteria) {
-		if (changedTasks.has(c.path) && c.scenario && !tags.has(c.n)) {
-			out.push({ path: c.path, line: c.line, rule: "criterion-without-scenario", message: `criterion ${c.n} is scenario-verified but no scenario changed in this branch is tagged @C${c.n}` });
-		}
-	}
-	for (const [n, where] of tags) {
-		if (!known.has(n)) {
-			for (const w of where) out.push({ ...w, rule: "tag-without-criterion", message: `@C${n} matches no criterion in docs/tasks/*.md` });
-		} else if (where.length > 1) {
-			out.push({ ...where[1], rule: "criterion-many-scenarios", message: `criterion ${n} has ${where.length} changed scenarios tagged @C${n}; one criterion maps to one scenario` });
-		}
-	}
 	return out;
 }
 
@@ -708,12 +653,6 @@ export function run(argv: string[], cwd: string, out: (s: string) => void, err: 
 
 		const extra: Violation[] = [];
 		if (o.junit.length) extra.push(...checkJunit(o.junit, cwd, root));
-		const features = tracked.filter((p) => p.endsWith(".feature"));
-		const tasks = tracked.filter((p) => /^docs\/tasks\/[^/]+\.md$/.test(p));
-		if (added && features.length && tasks.length) {
-			const load = (p: string): Source => ({ path: p, text: readText(resolve(root, p)) ?? "" });
-			extra.push(...checkCriteria(tasks.map(load), features.map(load), added));
-		}
 
 		return report([...counted, ...extra], added, preExisting, out);
 	} catch (e) {

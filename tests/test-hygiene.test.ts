@@ -48,13 +48,13 @@ function hits(stdout: string): string[] {
 
 test("the version is on one of the first lines, before the imports", () => {
 	const src = readFileSync(SCRIPT, "utf8").split("\n");
-	const v = src.indexOf('export const VERSION = "2";');
+	const v = src.indexOf('export const VERSION = "3";');
 	assert.ok(v >= 0 && v < 25, "VERSION line");
 	assert.ok(v < src.findIndex((l) => l.startsWith("import ")));
 });
 
 test("exports a version and pure helpers", () => {
-	assert.equal(VERSION, "2");
+	assert.equal(VERSION, "3");
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("a/b/c.spec.ts"));
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("c.test.ts"));
 	assert.ok(!globToRegExp("*.ts").test("a/c.ts"));
@@ -85,11 +85,19 @@ const RULE_CASES: Case[] = [
 	c("a comment on the line above is", "src/a.test.ts", `// broken until #41 lands\nit.skip("x");\n`),
 	c("SHA-256 is not an issue key", "src/a.test.ts", `it.skip("SHA-256 slow");\n`, "src/a.test.ts:1 skip-without-reason"),
 	c("a real key in the title is", "src/a.test.ts", `it.skip("PAY-12 refund race");\n`),
-	c("platform skip with a reason (Go short mode)", "pkg/a_test.go", `if testing.Short() {\n\tt.Skip("slow: runs only without -short")\n}\n`),
-	c("platform skip with a reason (Python)", "tests/test_c.py", `@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals only")\ndef test_c(): pass\n`),
-	c("platform skip with a reason (JUnit)", "src/test/java/BT.java", `@DisabledOnOs(value = OS.WINDOWS, disabledReason = "uses symlinks")\nvoid t() {}\n`),
-	c("platform skip with a reason (JS)", "src/a.test.ts", `it.skipIf(process.platform === "win32")("unix paths", () => {});\n`),
-	c("platform skip without a reason", "tests/test_d.py", `@pytest.mark.skipif(sys.platform == "win32")\ndef test_d(): pass\n`, "tests/test_d.py:1 skip-without-reason"),
+	c("mode marker (Go short mode)", "pkg/a_test.go", `if testing.Short() {\n\tt.Skip("mode: slow, runs only without -short")\n}\n`),
+	c("platform marker (Python)", "tests/test_c.py", `@pytest.mark.skipif(sys.platform == "win32", reason="platform: POSIX signals only")\ndef test_c(): pass\n`),
+	c("platform marker (JUnit)", "src/test/java/BT.java", `@DisabledOnOs(value = OS.WINDOWS, disabledReason = "platform: uses symlinks")\nvoid t() {}\n`),
+	c("a plain reason is not a marker", "tests/test_d.py", `@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals only")\ndef test_d(): pass\n`, "tests/test_d.py:1 skip-without-reason"),
+	c("a marker without a word does not count", "pkg/a_test.go", `t.Skip("platform:")\nt.Skip("mode:  ")\n`, "pkg/a_test.go:1 skip-without-reason", "pkg/a_test.go:2 skip-without-reason"),
+	c("marker in a comment above", "pkg/a_test.go", `// mode: needs -race\nt.Skip()\n`),
+	c("mocha marker above and trailing", "test/a.js", `// platform: no symlinks\nif (process.platform === "win32") this.skip();\nthis.skip(); // platform: no symlinks on windows\n`),
+	c("skipIf is explicit now, and a plain skip after it is a violation too", "src/a.test.ts", `it.skipIf(process.platform === "win32")("unix paths", () => {});\nit.skip("broken after refactor", () => {});\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason"),
+	c("playwright fixme with a URL in the condition call", "e2e/a.spec.ts", `test.fixme(({ browserName }) => browserName === "webkit", "https://github.com/o/r/issues/12");\n`),
+	c("playwright skip with an issue and a function condition", "e2e/a.spec.ts", `test.skip(({ isMobile }) => isMobile, "see #12");\n`),
+	c("a skip inside a one-line body", "e2e/a.spec.ts", `test("x", async () => { test.skip(true, "see #12"); });\n`),
+	c("stacked pytest: the marker does not excuse the next skip", "tests/test_f.py", `@pytest.mark.skipif(sys.platform == "win32", reason="platform: posix only")\n@pytest.mark.skip(reason="not ready yet")\ndef test_f(): pass\n`, "tests/test_f.py:2 skip-without-reason"),
+	c("a skip's body is dropped, a multi-line list is read", "e2e/a.spec.ts", `test.skip(\n  "login",\n  async () => {\n    await go("http://x");\n  },\n  "PROJ-7",\n);\n`),
 	c("missing infrastructure is not a platform", "tests/test_e.py", `@pytest.mark.skipif(not DATABASE_URL, reason="needs a database")\ndef test_e(): pass\n`, "tests/test_e.py:1 skip-without-reason"),
 	c("js skip", "src/a.test.ts", `it.skip("x", () => {});\n`, "src/a.test.ts:1 skip-without-reason"),
 	c("js xit and todo", "src/a.test.ts", `xit("x");\ntest.todo("y");\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason"),
@@ -107,7 +115,7 @@ const RULE_CASES: Case[] = [
 	c("py skip bare", "tests/test_a.py", `@pytest.mark.skip\ndef test_a(): ...\n`, "tests/test_a.py:1 skip-without-reason"),
 	c("py skip with reason=", "tests/test_a.py", `@pytest.mark.skip(reason="later")\ndef test_a(): ...\n`, "tests/test_a.py:1 skip-without-reason"),
 	c("py skip with reason= and issue", "tests/test_a.py", `@pytest.mark.skip(reason="later, see #12")\ndef test_a(): ...\n`),
-	c("py skipif and unittest skips (a platform skip with a reason is the exception)", "tests/test_a.py", `@pytest.mark.skipif(sys.platform == "win32", reason="posix only")\n@unittest.skip("later")\n@unittest.skipIf(x, "y")\npytest.skip("no db")\n`, "tests/test_a.py:2 skip-without-reason", "tests/test_a.py:3 skip-without-reason", "tests/test_a.py:4 skip-without-reason"),
+	c("py skipif and unittest skips", "tests/test_a.py", `@pytest.mark.skipif(sys.platform == "win32", reason="posix only")\n@unittest.skip("later")\n@unittest.skipIf(x, "y")\npytest.skip("no db")\n`, "tests/test_a.py:1 skip-without-reason", "tests/test_a.py:2 skip-without-reason", "tests/test_a.py:3 skip-without-reason", "tests/test_a.py:4 skip-without-reason"),
 	c("py skipif with issue on the next line of a multi-line call", "tests/test_a.py", `@pytest.mark.skipif(\n    sys.platform == "win32",\n    reason="PROJ-5",\n)\n`),
 	c("py skip with issue", "tests/test_a.py", `@pytest.mark.skip  # PROJ-12\ndef test_a(): ...\n`),
 	c("py pytest.skip()", "pkg/a_test.py", `def test_a():\n    pytest.skip()\n`, "pkg/a_test.py:2 skip-without-reason"),
@@ -341,69 +349,6 @@ test("junit: only testsuites totals are used when there are no suites", () => {
 	assert.ok(r2.run("--all", "--junit", "t.xml").hits.some((h) => h.endsWith(" junit-mismatch")));
 });
 
-const TASK = `# Task\n\n## Success criteria\n\n| # | Criterion | How verified |\n|---|-----------|--------------|\n| 1 | User logs in | scenario |\n| 2 | Cache is fast | benchmark |\n| 3 | User logs out | @C3 |\n`;
-
-/** A repo on `main` with `base` files, then a branch committing `branchFiles`. */
-function branch(base: Record<string, string>, branchFiles: Record<string, string>) {
-	const r = repo({ "README.md": "x\n", ...base });
-	r.git("switch", "-qc", "feat/x");
-	r.commit(branchFiles);
-	return r;
-}
-const TASK_PATH = "docs/tasks/2026-01-01-a.md";
-
-test("criteria: clean mapping passes", () => {
-	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n\n@C3 @smoke\nScenario: logout\n` });
-	const out = r.run();
-	assert.equal(out.status, 0, out.stdout);
-});
-
-test("criteria: scenario-verified criterion without a changed tagged scenario", () => {
-	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n` });
-	const out = r.run();
-	assert.equal(out.status, 1);
-	assert.deepEqual(out.hits, [`${TASK_PATH}:9 criterion-without-scenario`]);
-});
-
-test("criteria: two changed scenarios for one criterion", () => {
-	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C1\nScenario Outline: b\n@C3\nScenario: c\n` });
-	const out = r.run();
-	assert.equal(out.status, 1);
-	assert.deepEqual(out.hits.map((h) => h.split(" ")[1]), ["criterion-many-scenarios"]);
-});
-
-test("criteria: changed tag without a criterion", () => {
-	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C3\nScenario: c\n@C9\nScenario: z\n` });
-	assert.deepEqual(r.run().hits, ["features/a.feature:6 tag-without-criterion"]);
-});
-
-test("criteria: not checked without feature files or without task files", () => {
-	assert.equal(branch({}, { [TASK_PATH]: TASK }).run().status, 0);
-	assert.equal(branch({}, { "features/a.feature": `@C9\nScenario: z\n` }).run().status, 0);
-});
-
-test("criteria: old tags never fail a run, and --all skips the tag check", () => {
-	const bad = { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C9\nScenario: a\n  Given x\n@C1\nScenario: b\n@C1\nScenario: c\n` };
-	const r = branch(bad, { "README.md": "y\n" });
-	assert.equal(r.run().status, 0);
-	assert.equal(r.run("--all").status, 0);
-});
-
-test("criteria: editing a step of an old scenario doesn't re-check its finished task's tag", () => {
-	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then b\n\n@C1\nScenario: ok\n  Given z\n` }, { "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then B\n\n@C1\nScenario: ok\n  Given z\n` });
-	assert.equal(r.run().status, 0);
-});
-
-test("criteria: a tag line the branch adds or changes is checked", () => {
-	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C8\nScenario: old\n  Given a\n` }, { "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n` });
-	assert.deepEqual(r.run().hits, ["features/a.feature:2 tag-without-criterion"]);
-});
-
-test("criteria: unchanged scenarios with the same tag are not counted", () => {
-	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: old\n  Given a\n@C3\nScenario: o3\n` }, { "features/b.feature": `Feature: more\n@C1\nScenario: new\n  Given b\n` });
-	assert.equal(r.run().status, 0);
-});
-
 test("ratchet: a renamed file is not all-new", () => {
 	const r = repo({ "old.test.ts": `it.only("old");\nok();\n` });
 	r.git("switch", "-qc", "feat/x");
@@ -490,9 +435,4 @@ test("cli: runs from a subdirectory and prints a summary line", () => {
 	assert.match(out.stdout, /^sub\/a\.test\.ts:1 {2}focused {2}/m);
 	assert.match(out.stdout, /test-hygiene: 1 violation/);
 	assert.match(repo().run("--all").stdout, /test-hygiene: 0 violation/);
-});
-
-test("criteria: a Scenario Outline with tagged Examples is one scenario", () => {
-	const r = branch({ [TASK_PATH]: TASK }, { "features/a.feature": `Feature: f\n@C1\nScenario Outline: o\n  Given <x>\n  @smoke\n  Examples:\n    | x |\n    | 1 |\n  @slow\n  Examples:\n    | x |\n    | 2 |\n` });
-	assert.equal(r.run().status, 0, r.run().stdout);
 });

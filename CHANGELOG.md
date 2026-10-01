@@ -8,12 +8,13 @@
   - with BDD a user-visible criterion has exactly one scenario; every other criterion has at least one test at the cheapest level; end-to-end without BDD covers critical flows only;
   - **outside-in TDD with BDD:** the scenario is written first and seen failing, unit cycles drive the code, and the scenario passing closes the criterion. Unit tests test their unit's own contract and stay; only a unit test asserting the user-level outcome the scenario proves is left out;
   - characterization tests are `*.char.test.*` and pass on first run by design; golden data in a port is an acceptance test that fails first; every other new test is seen failing first;
-  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough), except a skip conditioned on the platform or test mode, with the condition explicit and a reason;
+  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough), except a platform or test-mode skip whose reason is marked `platform:` or `mode:`;
   - provider-sandbox tests are a separate suite and CI job;
   - tests never retry; waits are on a condition with one ceiling, never a fixed sleep;
   - missing test infrastructure fails the run instead of skipping;
   - flake fixes meet five criteria;
   - isolation rules for parallel tests, uncached state-dependent tests, test data kept out of production builds, CI-only visual baselines, small inline snapshots.
+- Criterion tags are checked in review against the task file (the checklist's Tests section); finished tasks' tags stay as history.
 - The review checklist adds fixed severities:
   - Critical: a focused test committed; a CI check removed, skipped or retried, or retries in a runner config;
   - Important: a manual check that isn't agreed or isn't necessary; a Review focus line without a test; a test without an assertion or asserting mock echo; an expected value copied from or recomputed like the code; a test-only helper in production code; a fixed sleep or real network call outside the sandbox suite; payments without a sandbox test; POS without a list of what ran on real hardware.
@@ -22,7 +23,6 @@
   - fixed sleeps;
   - retries in runner configs and test code;
   - with `--junit`, only the reports: missing, empty, or counts that don't add up (a crashed shard);
-  - criterion tags (`@C<n>`) on the tag lines the branch adds or changes, against the task file; tags of finished tasks never fail a run.
 
   In an existing project it checks only the lines a change adds (renames followed); old debt is counted, not blocking. Without a merge base it stops with a message. `test-hygiene: allow <reason>` marks a line where the pattern is the behavior under test; hiding a forbidden skip, retry or sleep with it needs the user's agreement. ci-quality-gates gets `test-hygiene` and `e2e` CI jobs and a per-stack table of native linters and JUnit reporters.
 - A review counts only for verified code: one recorded while edits were unverified is Inconclusive.
