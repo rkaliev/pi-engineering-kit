@@ -21,7 +21,7 @@ Legacy code is code without a safety net. Its current behavior, including its qu
 ## Process
 
 1. **Understand the change point:** callers, data flow, side effects (DB, files, network, devices), and configuration and feature flags.
-2. **Pin current behavior with characterization tests.** Call the code with realistic inputs and assert whatever it does *today*, even if it looks wrong, so that any change shows up. Cover the paths you will touch plus their edges.
+2. **Pin current behavior with characterization tests.** Call the code with realistic inputs and assert whatever it does *today*, even if it looks wrong, so that any change shows up. Cover the paths you will touch plus their edges. Name them `*.char.test.*` (or the stack's equivalent): they are the one kind of test whose expected values come from running the code, they pass on first run by design, and they don't count as tests of new behavior.
 3. **Find or create a seam** where a test can control dependencies:
    - pass the dependency as a parameter or constructor argument;
    - wrap a static or global in a small interface;
@@ -30,7 +30,7 @@ Legacy code is code without a safety net. Its current behavior, including its qu
 4. **Make the change with TDD** (test-driven-development): a new failing test for the new behavior, then minimal code.
    - **Sprout:** put new logic in a new, tested function or class and call it from the old code.
    - **Wrap:** add behavior before or after an existing call without editing its insides.
-5. **Verify** with the characterization tests, the full suite, and a manual run of the affected flow if coverage is thin. Say explicitly what could not be covered.
+5. **Verify** with the characterization tests and the full suite. Where coverage of the affected flow stays thin, add a manual run of it as well (it adds to the tests, it doesn't replace them) and say explicitly what could not be covered.
 
 ## Larger rewrites: strangler fig
 

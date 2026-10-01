@@ -19,18 +19,21 @@ The agent's session is one line of defence; CI is the other. CI runs on every ch
 Propose the layers that fit the stack, explain what each catches, and add each only with the user's yes. Templates and tool choices per stack are in `references/ci-templates.md`.
 
 1. **Verification commands:** tests, typecheck, lint and build, exactly as locally. Always.
-2. **Test hygiene:** lint rules against focused or skipped tests, tests without assertions, and conditional assertions (see test-driven-development).
+2. **Test hygiene**, on any stack (the rules are `../test-driven-development/references/test-standard.md`):
+   - the kit's `test-hygiene` script, copied into the project by kit-init with the user's agreement: focused tests, skips without a linked issue, sleeps, retries in runner configs, the number of tests that ran (from JUnit XML), and criterion tags. In an existing project it checks only lines the change adds, so old debt doesn't block; the report shows how much there is;
+   - the stack's own linters where it has them (table in `references/ci-templates.md`).
 3. **End-to-end:**
    - retries off;
    - artifacts on failure;
-   - a check that the number of tests that ran equals the number found, so a crashed shard can't pass silently.
+   - a JUnit report checked by `test-hygiene --junit`, so a crashed shard or an empty run can't pass silently.
 4. **Security:** secret scanning (gitleaks) and a dependency audit (osv-scanner or the ecosystem's tool) on every change.
 5. **Database** (database-changes): migrations applied, and rolled back where the project supports it, on a throwaway database, plus a schema drift check.
 6. **Contracts:** regenerate OpenAPI, protobuf or generated types from the source of truth, and fail if they differ from what is committed.
 7. **Docs:** link check, when the project keeps docs, and the `working-docs` job, so task files never reach the base branch from any author.
 8. **Commits:** the project's commit linter, if it uses one.
 9. **Coverage:** a report on every change, and a floor checked on a schedule. It never blocks a merge: it is a floor, not a target.
-10. **BDD scenarios**, when the project has them (`../test-driven-development/references/bdd.md`).
+10. **Provider sandboxes**, when the project has them: a separate job for the sandbox-tagged suite, with credentials from the CI store.
+11. **BDD scenarios**, when the project has them (`../test-driven-development/references/bdd.md`).
 
 Mobile and desktop add their own jobs: a release build, signing with secrets from the CI store, and UI tests on an emulator or simulator for critical flows (see mobile-development and desktop-development).
 

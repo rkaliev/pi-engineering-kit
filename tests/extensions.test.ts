@@ -9,6 +9,7 @@ import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
 import verify from "../extensions/verify.ts";
+import { verifyState } from "../extensions/lib/verify-state.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -524,4 +525,35 @@ test("review gate: reviewGate: false only in a trusted project; the guard config
 	assert.match(asked.asked[0]!, /guard config decides/);
 	assert.equal((await call("write", { path: join(tmpdir(), "eng-kit", "reviews", "x.json") }))?.block, true);
 	assert.equal((await call("bash", { command: `echo '{}' > .pi/guard.json` }))?.block, true, "declined confirmation");
+});
+
+test("review gate: a review that ran on unverified edits counts as Inconclusive", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const head = git("rev-parse", "HEAD");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const review = () => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
+	const pr = async () => (await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block;
+	try {
+		verifyState.unverified = true;
+		await g.emit("input", { text: "review", source: "interactive" }, ctx(dir));
+		await review();
+		assert.equal(await pr(), true);
+		verifyState.unverified = false;
+		await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
+		await review();
+		assert.equal(await pr(), undefined, "after a green run the review counts");
+	} finally {
+		verifyState.unverified = false;
+	}
 });

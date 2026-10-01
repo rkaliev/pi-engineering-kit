@@ -138,7 +138,7 @@ Inside pi:
 
 **Through a Claude subscription (Pro/Max):**
 1. In pi, run `/login` and choose **"Anthropic (Claude Pro/Max)"**.
-2. `claude.ai` opens in the browser. Sign in with the same account you use for Claude Code and approve access.
+2. `claude.ai` opens in the browser. Sign in with your Claude account and approve access.
 3. Pi receives the response via `localhost`. If the browser is on another machine (SSH, server), paste the final redirect URL or the authorization code into pi; pi will prompt you for it.
 4. The tokens are saved in `~/.pi/agent/auth.json` and refresh on their own from then on. To sign out: `/logout`.
 
@@ -219,6 +219,7 @@ The command shows what it will create, asks about each file and **never overwrit
 - If the project has no `AGENTS.md`, the command offers to run `/onboard`: the agent studies the repository, runs the commands and proposes an AGENTS.md.
 - The command also reports CI that doesn't run every verification command or lacks the `working-docs` job (the ci-quality-gates skill adds both).
 - `/kit-init --yes` creates everything missing without questions. This is handy for scripts.
+- `/kit-init --test-hygiene` also copies the stack-independent test-hygiene check for CI into `.ci/test-hygiene.ts` (the ci-quality-gates skill adds its job). Without the flag it is only offered.
 
 Commit all the `.pi/*` files: then the team has the same checks, rules and models.
 

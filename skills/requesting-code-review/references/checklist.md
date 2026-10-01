@@ -11,17 +11,23 @@ These don't move with the author's arguments or with how common the pattern is i
 | Secret, key or credential in code, config, logs, tests, a build argument, an image or a client bundle | Critical |
 | Injection, missing authorization or authentication check, unsafe deserialization | Critical |
 | Money or data loss: float money, lost update, missing idempotency or transaction on a write path | Critical |
-| A test weakened, deleted or skipped to get green | Critical |
+| A test weakened, deleted or skipped to get green, or changed in a way test-standard's "Changing tests" doesn't allow | Critical |
+| A focused test (`.only`, `fit`, `@only`) committed | Critical |
+| A CI check removed, skipped, set to continue on error, or given retries; retries in a test runner or end-to-end config | Critical |
 | Placeholder code in shipped paths: `TODO: implement`, stub returns, `throw new Error("not implemented")`, commented-out logic | Critical |
 | Suppressed type or lint errors without a written reason: `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `@Suppress`, `# type: ignore`, `//nolint`, `@SuppressLint` | Critical |
 | Personal or payment data in logs at info or above, even masked | Critical |
 | Destructive schema change without expand/contract or a recovery path; an applied migration edited | Critical |
-| A numbered criterion without a test | Important |
+| A numbered criterion without a test, or with a manual check where automation is possible or the user didn't agree to it | Important |
+| A plan's Review focus line without a test | Important |
+| A test without an assertion or one asserting mock echo; an expected value copied from the code's output or recomputed with its algorithm (outside a marked characterization test) | Important |
+| A test-only helper, flag or hook in production code | Important |
+| A fixed sleep in a test; a real network call outside the provider-sandbox suite | Important |
+| Payments without a test against the provider sandbox; POS without a list of what ran on real hardware | Important |
 | An outbound call, queue or database wait without a deadline | Important |
 | Environment read outside the config module, or configuration not validated at startup | Important |
 | A service or worker that exits without draining in-flight work on SIGTERM | Important |
 | A verification command that runs locally but not in CI | Important |
-| A CI check removed, skipped, set to continue on error, or given retries | Important |
 | A metric label from an unbounded set (ids, URLs, messages); dynamic log messages instead of fields | Important |
 | Docs the change made stale | Important |
 | A project rule broken (agent manifest, path rule, decision record) | Important |
@@ -42,14 +48,11 @@ These don't move with the author's arguments or with how common the pattern is i
 - Performance: I/O or queries in a loop (N+1), quadratic scans where a Map or Set would do, unbounded result sets without pagination.
 
 ## Tests
-- Each criterion has a test that fails without the change (someone saw it red), at a level that shows it as the user sees it.
-- Expected values trace to the spec or a domain rule, not to the code's current output. Characterization tests are marked as such.
-- No tests that can't fail usefully: constants, config, schema shapes, "renders", mock echo. Repeated cases are parametrized.
-- Assertions check observable behavior, not mock call counts or private internals.
-- Existing tests were not weakened, skipped, or rewritten to match new output without justification.
-- Determinism: no real clock, randomness, network, or order dependence without control. No sleeps where a condition wait belongs. No retries used as a fix for a flake.
-- Own database and queues are real in integration tests; only unmanaged dependencies are faked.
-- External side effects (payment, email, device) are verified at the boundary that matters.
+Check the diff against `../../test-driven-development/references/test-standard.md`, the single source of the test rules; the fixed severities above rate what it finds. In particular:
+- each criterion is verified as "Criteria and levels" says, and its new test was seen red (the PR or report says how);
+- layers don't repeat each other: a unit test restating a scenario's happy path is a finding;
+- determinism and isolation: controlled clock and randomness, own data per test, cleanup registered where data is created, no shared mutable state;
+- external side effects (payment, email, device) are verified at the boundary that matters.
 
 ## Security
 - Untrusted input reaching SQL, shell, HTML, file paths, templates, deserialization, or `eval`.

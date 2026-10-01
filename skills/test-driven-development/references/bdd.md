@@ -11,7 +11,9 @@ Use BDD when acceptance criteria should read in the domain's language and be che
 
 ## Link to the criteria
 
-Every user-visible criterion in the task file's success criteria table maps to one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and a criterion without a scenario is visible in review.
+Every user-visible criterion in the task file's success criteria table maps to exactly one scenario, tagged with the criterion (`@C3`). The "How it is verified" column names the scenario. Criterion → scenario → CI stays traceable, and the kit's `test-hygiene` check reports a criterion without a scenario, two scenarios for one criterion, or a tag with no criterion. Criteria the user doesn't see are verified by tests at a lower level (`test-standard.md`, "Criteria and levels").
+
+**Order: outside-in.** The scenario is written and run before the code it needs, and it must fail on the step that needs the missing behavior. Unit-level TDD cycles then drive the code until the scenario passes (test-driven-development, "With BDD scenarios").
 
 ## Writing scenarios
 
@@ -20,8 +22,8 @@ Every user-visible criterion in the task file's success criteria table maps to o
 - **Given sets up through the fastest path:** an API call, a seed or a stored session, never by clicking through the UI. Prove each step through the UI once, in its own scenario.
 - Steps use domain language ("the cashier closes the shift"), not UI mechanics ("clicks #btn-3"). Step definitions are thin and call shared helpers.
 - **Selectors:** accessible roles and labels, or stable test IDs. Never CSS paths or text that changes with translation.
-- **No time-based waits.** Wait for a state or an event, with one short project-wide ceiling (for example 1 s by default and 2 s at most against a local server). A step that needs longer is a performance defect to fix or report, not a timeout to raise.
-- **Scenarios are independent:** any order, in parallel, on any shard. Each creates its own data and registers its cleanup where it creates it.
-- Tags carry the criterion and the priority. `@skip` needs a linked issue. A serial-only scenario needs a written reason.
-- **Visual checks** go through one shared snapshot step. Baselines are produced in CI on its fixed environment, never on a laptop, and updating them is a deliberate, reviewed change.
-- Retries are off. A flaky scenario is fixed at its cause (see `test-standard.md`).
+- **Waiting:** for a state or an event, under the project-wide ceiling (for example 1 s by default and 2 s at most against a local server). A step that needs longer is a performance defect to fix or report, not a ceiling to raise.
+- Tags carry the criterion and the priority. A serial-only scenario needs a written reason.
+- Visual checks go through one shared snapshot step.
+
+Isolation, retries, flakes, skips and visual baselines follow `test-standard.md`, the same as every other test.

@@ -46,15 +46,16 @@ A task is the smallest unit that has its own test cycle and could be rejected by
 **Files:** Create `path/a.ts` · Modify `path/b.ts` · Test `path/a.test.ts`
 **Interfaces:** Consumes `fnX(a: A): B` from Task 2 · Produces `fnY(c: C): D`
 
-- [ ] Write failing test `rejects empty email` asserting `{ error: "Email required" }`
-- [ ] Run `npm test -- a.test.ts` → expect FAIL: "fnY is not defined"
+- [ ] Write failing test `rejects empty email` asserting `{ error: "Email required" }`; add a stub `fnY` that returns `{}`
+- [ ] Run `npm test -- a.test.ts` → expect FAIL: expected `{ error: "Email required" }`, received `{}`
 - [ ] Implement `fnY(c: C): D` in `path/a.ts` (one line on approach only if the test leaves a choice)
 - [ ] Run `npm test -- a.test.ts` → expect PASS, then the full suite
 - [ ] Commit `feat(scope): add fnY`
 ````
 
 What each step contains:
-- **Test step:** the test name and its assertions, with the description's exact values (quote the criterion). Each numbered criterion names its acceptance test, at the level that shows it as the user sees it; with BDD in the project, that is a scenario tagged with the criterion.
+- **Test step:** the test name and its assertions, with the description's exact values (quote the criterion). The expected FAIL is an assertion failure, never "not defined" or "cannot find module" (that is an error: add a stub). Each numbered criterion names how it is verified, by the rules in `../test-driven-development/references/test-standard.md` ("Criteria and levels").
+- **With BDD, outside-in:** the task for a user-visible criterion starts with `Write scenario @C3 … → run → expect FAIL at step "<step>"`, has its unit-test steps in between, and ends with `Run scenario @C3 → expect PASS`.
 - **Code step:** the signature, the file, and any pinned values. Include a body only for an algorithm the tests don't determine.
 - **Run step:** the command and the expected output.
 

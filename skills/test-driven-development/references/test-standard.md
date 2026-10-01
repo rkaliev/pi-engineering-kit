@@ -1,12 +1,12 @@
 # Test standard
 
-Load this when writing, changing or reviewing tests. It holds on any stack; the project's own test conventions win where they are stricter.
+Load this when writing, changing or reviewing tests. It is the single source of the kit's test rules: other skills link here instead of restating them. It holds on any stack; the project's own test conventions win where they are stricter.
 
 ## Expected values come from requirements
 
 - An expected value traces to a spec, a numbered criterion or a domain rule. Quote it in the test name or a short comment when it is not obvious.
-- Never derive an expected value by running the code and copying its output. That test proves only that the code does what it does.
-- **The one exception is characterization tests** (pinning legacy behavior before a change). Mark them as such (`*.char.test.*`, a `characterization` tag or a describe block), and don't count them as coverage of new behavior.
+- Never derive an expected value by running the code and copying its output, and never recompute it in the test with the same algorithm the code uses. Either way the test proves only that the code does what it does.
+- **The one exception is characterization tests** (pinning legacy behavior before a change, see changing-legacy-code). Name them `*.char.test.*` (or the stack's equivalent: a `characterization` tag or describe block). They pass on first run by design, and they don't count as coverage of new behavior.
 - Give a test generator the spec and the criteria, not only the code.
 
 ## A test earns its keep
@@ -17,58 +17,75 @@ Don't write tests that cannot fail for a reason anyone cares about:
 - the framework's or a dependency's own behavior;
 - **mock echo**: asserting that a mock returned what you told it to return.
 
-The same branch with different data is one parametrized test (`test.each`, table tests, `@ParameterizedTest`, `pytest.mark.parametrize`), not many copies. A test that no longer protects a behavior is deleted, with the reason in the commit.
+The same branch with different data is one parametrized test (`test.each`, table tests, `@ParameterizedTest`, `pytest.mark.parametrize`), not many copies. Snapshots are small and inline; a large external snapshot file is not a test anyone reads.
 
 ## Structure and names
 
-- Arrange, Act, Assert; one behavior per test. Several assertions are fine when they describe one outcome.
+- Arrange, Act, Assert; one behavior per test. Several assertions are fine when they describe one outcome. Every test asserts something.
 - Name = subject + circumstance + result: `applyDiscount rounds half up when the discount has a fraction of a cent`.
 - Prefer readable tests over clever reuse (DAMP over DRY): a reader understands one test without opening three helpers.
 - Test data is built in the test or by a small builder with explicit overrides; no shared mutable fixtures.
+- Test-only helpers, flags and hooks live in test code, never in production code.
 
 ## Test doubles
 
 - Fake only what you don't control: third-party HTTP APIs, e-mail and SMS, payment providers, devices and peripherals, the clock and randomness.
 - Your own database, queues and file layout are real in integration tests (a container, an embedded or local instance), because that is where mistakes hide. A fake is allowed only at a deliberate fault-injection seam (simulating a timeout or a crash).
-- Stub HTTP at the network boundary (the project's HTTP mock library), not by replacing your own client classes.
+- Each boundary has one shared stub (the project's HTTP mock library or helper, one fake clock, one fake mailbox), not an ad-hoc override of globals in each test. Stub at the network boundary, not by replacing your own client classes.
+- **Provider sandboxes** (a payment provider's or another vendor's test environment) are a separate suite with its own tag and its own CI job, with credentials from the CI secret store. They are the one place a test talks to the network, and they never run in the default suite.
 
-## Determinism
+## Determinism and isolation
 
 - Time is controlled (fake timers or an injected clock). Randomness is seeded.
-- No real network: unknown hosts point at a closed port so a missed stub fails loudly.
+- No real network in the default suite: unknown hosts point at a closed port so a missed stub fails loudly.
 - Run with a non-UTC timezone and a non-English locale somewhere in CI, so date and format bugs surface.
-- Tests don't depend on order and can run in parallel. Each creates the data it needs and cleans it up.
-- Never synchronize with sleep or a fixed timeout. Wait for a condition or an event.
+- **Waiting:** wait for a condition or an event, with one short project-wide ceiling as the upper bound. Never sleep for a fixed time.
+- Tests don't depend on order and can run in parallel: each creates its own identities and data, shared seed data is read-only, cleanup is registered where the data is created and runs in reverse order, and global setup is idempotent.
+- Missing test infrastructure (the database, a container, an emulator) fails the run with the command that fixes it. It is never a reason to skip.
+- A test cache must not hide a test whose result depends on a database or other outside state: such tests run uncached.
+- Test accounts, demo personas and fixtures never reach a production build; where the project has one, CI checks it.
+
+## Retries
+
+A test never retries: not in the runner config, not in CI, not with a loop around an assertion. Retrying a transient failure of an external system is product behavior (see systematic-debugging and the platform skills) and is tested like any other behavior.
 
 ## Flaky tests
 
-- A retry is not a fix. End-to-end configs run with retries off, so a flake is visible.
-- A flake is fixed when you can name the failing boundary and the root cause, the fix removes that cause, and a repeated run passes (`--repeat-each`, `-count=N`, `--rerun-each`, or the stack's equivalent). Put that evidence in the report.
-- Quarantining a flaky test needs the user's agreement and an issue, and it counts as a known gap.
+A flake is fixed only when all of these hold, and the report shows them:
+1. the failing run and the failing boundary are identified;
+2. the root cause is explained, and the fix removes it (not a longer wait, not a weaker assertion);
+3. a repeated run passes on the same commit (`--repeat-each`, `-count=N`, `--rerun-each`, or the stack's equivalent);
+4. it passes in the configuration where it failed (the same shard, coverage on, the CI image);
+5. the full suite passes.
 
-## Acceptance level
+Quarantining a flaky test is a skip: it follows "Changing tests" below and counts as a known gap.
 
-- Every numbered criterion of a task maps to at least one test that shows it the way a user or caller sees it. Use the cheapest level that can: an API test for a service, a UI or end-to-end test for a screen (Playwright, Espresso, XCUITest, or BDD scenarios where the project uses them), and a unit test when the criterion is pure logic.
-- One scenario = one journey. It sets up its own preconditions through the fastest path (an API call or a seeded state, not the UI), and it is independent of the others.
-- Prefer accessible roles and labels, or stable test IDs, over CSS or XPath selectors.
-- If the project uses BDD scenarios, or the user chooses them, follow `bdd.md`: one scenario per user-visible criterion, tagged with it.
+## Criteria and levels
+
+Every numbered criterion of a task is verified exactly as follows. The task file's "How it is verified" column names the test.
+- **A user-visible criterion in a project with BDD scenarios:** exactly one scenario, tagged with the criterion (`bdd.md`). Unit tests are added only for what the scenario cannot reach.
+- **Any other criterion:** at least one test at the cheapest level that shows it the way a user or caller sees it: a unit test for pure logic, an API or integration test for a service, a component or integration test for a screen.
+- **End-to-end tests without BDD** cover critical user flows only, one journey each. A screen's other criteria are covered at the component or integration level.
+- **Layers don't repeat each other:** a unit test that restates a scenario's happy path is deleted; unit tests keep the edge cases, races, permission matrices and failure paths the scenario cannot reach.
+- **A manual check** replaces a test only where automation is impossible (real hardware, a store review, a fiscal device, a physical signature). The task file names the manual step and the reason, the user agrees to it, and the report says it ran. Anywhere else a criterion without a test is a gap. A manual run on top of the tests (the target browsers, a device, the changed flow) is extra evidence, not a replacement.
+- One scenario or end-to-end test = one journey. It sets up its preconditions through the fastest path (an API call or a seeded state, not the UI) and is independent of the others. Prefer accessible roles and labels, or stable test IDs, over CSS or XPath selectors.
 
 ## Coverage
 
-- Coverage is a floor that finds untested code, not a target. Don't write tests to move the number, and never open a change whose only purpose is coverage.
-- New code has tests for each of its criteria, whatever the percentage says.
+- Coverage is a floor that finds untested code, not a target. It is measured on a schedule and never blocks a merge.
+- Don't write tests to move the number, and never open a change whose only purpose is coverage: a test without a requirement behind it doesn't count.
+
+## Visual regression
+
+Baselines are produced only in CI, on the image that checks them (in Git LFS where the project uses it). Accepting a changed baseline is a deliberate run that the user asks for. The global diff threshold is never raised to make a diff pass.
 
 ## Changing tests
 
-Editing an assertion, deleting a test, or adding a skip is a separate commit with the reason, and it needs the user's agreement. Never do it in the same commit as the code change it would hide.
+- **Allowed with the reason in the commit:** deleting a test together with the behavior it protected (the feature is removed), and deleting a test that never protected anything (it breaks "A test earns its keep").
+- **Everything else needs the user's agreement and its own commit:** editing an assertion, deleting a test whose behavior still exists, adding a skip or quarantine (with a linked issue). Never in the same commit as the code change it would hide.
 
 ## Make it mechanical
 
-Propose the lint rules the stack has, and add them only with the user's agreement:
-- no focused or skipped tests (`no-focused-tests`, `no-disabled-tests`);
-- every test asserts (`expect-expect`);
-- no conditional assertions;
-- small inline snapshots only;
-- the race detector for Go (`go test -race`);
-- randomized test order where the runner supports it;
-- retries off in the end-to-end config.
+With the user's agreement, ci-quality-gates adds two layers that check these rules on every change, on any stack:
+- the kit's `test-hygiene` script (focused and unexplained skipped tests, sleeps, retries in configs, the number of tests that ran, criterion tags), which checks only added lines in an existing project, so old debt doesn't block;
+- the stack's own linters where it has them (for example `no-focused-tests`, `expect-expect`, no conditional assertions, small snapshots, `go test -race`, randomized order).
