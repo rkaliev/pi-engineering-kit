@@ -313,3 +313,36 @@ test("non-ASCII doc names are recognized as docs", () => {
 	commit({ "docs/архитектура.md": "текст\n" });
 	assert.equal(check("gh pr create --fill"), undefined);
 });
+
+test("the change identity: moved lines, trailing whitespace, odd file names and color settings", () => {
+	const { git, commit, check, review } = repo();
+	git("switch", "-q", "main");
+	commit({ "src/flow.ts": "a();\nb();\nc();\nd();\ne();\nf();\n" });
+	git("push", "-q", "origin", "main");
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	const reviewed = commit({ "src/flow.ts": "a();\nb();\nauthorize();\nc();\nd();\ne();\nf();\n", 'src/we"ird.ts': "a\n", "src/back\\slash.ts": "a\n", "src/z.ts": "export const z = 1;\n" });
+	review(report(reviewed, "Yes"));
+	git("config", "color.ui", "always");
+	assert.equal(check("gh pr create --fill"), undefined, "color.ui=always changes nothing");
+	const cases: Array<[string, string]> = [
+		["src/flow.ts", "a();\nb();\nc();\nd();\nauthorize();\ne();\nf();\n"],
+		["src/z.ts", "export const z = 1;   \n"],
+		["src/z.ts", "export const z = 1;\r\n"],
+		['src/we"ird.ts', "b\n"],
+		["src/back\\slash.ts", "b\n"],
+	];
+	for (const [file, content] of cases) {
+		const before = git("rev-parse", "HEAD");
+		commit({ [file]: content });
+		assert.equal(action(check("gh pr create --fill")), "block", `${file}: ${JSON.stringify(content)}`);
+		git("reset", "-q", "--hard", before);
+	}
+});
+
+test("redirected verify commands may precede a landing; a nested subshell fails closed", () => {
+	const { head, check, review } = repo();
+	review(report(head, "Yes"));
+	for (const ok of ["npm test 2>&1 && gh pr create --fill", "npm test 2>&1 | tail -20 && gh pr create --fill", "npm test >/dev/null && gh pr create"]) assert.equal(check(ok), undefined, ok);
+	assert.equal(action(check("(cd src && (cd .. && ls)) && gh pr create")), "block");
+});

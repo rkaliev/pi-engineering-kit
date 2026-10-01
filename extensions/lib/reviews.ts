@@ -119,16 +119,20 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
 /**
  * Block (or ask before) landing code on the base branch that no passing review covers. `cwd` is where the
  * command starts; `cd <dir>` and `git -C <dir>` in it are followed, so a worktree's branch is checked there.
- * Anything the guard can't follow (a variable, a subshell, another repository) fails closed.
+ * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	let dir: string | undefined = cwd;
 	let outside: string | undefined;
 	let inSubshell = false;
 	let unsafeBefore = false;
-	for (const raw of splitSegments(tokenize(command))) {
+	// Redirections don't change what lands, and `2>&1` would otherwise split a segment at its `&`.
+	const plain = command.replace(/\s*\d*>>?\s*(&\d+|[^\s;&|]+)/g, "").replace(/\s*<\s*[^\s;&|]+/g, "");
+	for (const raw of splitSegments(tokenize(plain))) {
 		// A `cd` inside a subshell ends with it: restore the directory after the closing parenthesis.
+		// A nested subshell is more than the guard tracks: what follows fails closed.
 		if (raw[0]?.startsWith("(")) {
+			if (inSubshell || raw[0].startsWith("((")) dir = undefined;
 			inSubshell = true;
 			outside = dir;
 		}
@@ -154,7 +158,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		}
 		const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
 		if (where === undefined || (l.kind === "pr" && l.repo)) {
-			return decision(options.missing, "can't tell which checkout this command lands from (a variable, a subshell, a missing folder or another repository). Run it from the checkout itself.", options);
+			return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
 		}
 		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
 			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
@@ -275,30 +279,31 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 }
 
 /**
- * The branch's own change to reviewable files, from where it forked off the base: the diff text without
- * positions (so the same change on a newer base matches, even in a file the base also changed), and the new
- * content hash of each binary file. "" when it changes no reviewable file, undefined when git fails. Every
- * byte of a changed line counts, whitespace included.
+ * The branch's own change to reviewable files, from where it forked off the base: the diff text with one line
+ * of context but without line numbers (so the same change on a newer base matches, even in a file the base also
+ * changed elsewhere, while a moved line doesn't), and the new content hash of each binary file. "" when it
+ * changes no reviewable file, undefined when git fails. Every byte of a changed line counts, whitespace included.
  */
 function ownChange(where: string, upstream: string, sha: string, prefix: string, workDocs: string[]): string | undefined {
 	const fork = git(where, ["merge-base", upstream, sha]);
 	if (!fork) return undefined;
-	const raw = git(where, ["-c", "core.quotePath=false", "diff", "--raw", "--numstat", "--no-renames", "--no-abbrev", fork, sha]);
-	if (raw === undefined) return undefined;
+	const listing = gitRaw(where, ["diff", "-z", "--raw", "--numstat", "--no-renames", "--no-abbrev", fork, sha]);
+	if (listing === undefined) return undefined;
 	const blobs = new Map<string, string>();
 	const binary = new Set<string>();
-	for (const line of raw.split("\n").filter(Boolean)) {
-		if (line.startsWith(":")) {
-			const [meta = "", path = ""] = line.split("\t");
-			blobs.set(path, meta.split(" ")[3] ?? "");
-		} else if (line.startsWith("-\t-\t")) binary.add(line.slice(4));
+	const fields = listing.split("\0");
+	for (let i = 0; i < fields.length; i++) {
+		const field = fields[i]!;
+		if (field.startsWith(":")) blobs.set(fields[++i] ?? "", field.split(" ")[3] ?? "");
+		else if (field.startsWith("-\t-\t")) binary.add(field.slice(4));
 	}
-	const files = [...blobs.keys()].filter((p) => !exempt(p, prefix, workDocs)).sort();
+	const files = [...blobs.keys()].filter((p) => p && !exempt(p, prefix, workDocs)).sort();
 	if (files.length === 0) return "";
 	const text = files.filter((f) => !binary.has(f));
 	let diff = "";
 	if (text.length > 0) {
-		const out = git(where, ["-c", "core.quotePath=false", "diff", "--no-renames", "--no-ext-diff", "--unified=0", fork, sha, "--", ...text.map((f) => `:(top)${f}`)]);
+		const args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=1", fork, sha, "--", ...text.map((f) => `:(top,literal)${f}`)];
+		const out = gitRaw(where, args);
 		if (out === undefined) return undefined;
 		diff = out
 			.split("\n")
@@ -307,7 +312,7 @@ function ownChange(where: string, upstream: string, sha: string, prefix: string,
 			.join("\n");
 	}
 	const bins = files.filter((f) => binary.has(f)).map((f) => `${f} ${blobs.get(f)}`);
-	return hash(`${diff}\n${bins.join("\n")}`);
+	return hash(`${diff}\0${bins.join("\n")}`);
 }
 
 /** Task files, prose and pictures in `docs/`, and other markdown need no review, except markdown that steers the agent. */
@@ -393,6 +398,11 @@ function writeAtomic(path: string, text: string): void {
 }
 
 function git(cwd: string, args: string[]): string | undefined {
-	const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
-	return r.status === 0 ? r.stdout.trim() : undefined;
+	return gitRaw(cwd, args)?.trim();
+}
+
+/** git output as is: a diff's trailing whitespace is part of the change. Paths are never quoted. */
+function gitRaw(cwd: string, args: string[]): string | undefined {
+	const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
+	return r.status === 0 ? r.stdout : undefined;
 }

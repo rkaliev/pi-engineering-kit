@@ -83,7 +83,11 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (typeof result === "string") {
 				// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel
 				// reviewer's Yes on that commit can't stand alone; a review of a later commit is unaffected.
-				recordVerdict(ctx.cwd, reviewedHead(run.finalOutput ?? "") ?? "HEAD", "Inconclusive", ids, options.reviewsRoot);
+				const named = reviewedHead(run.finalOutput ?? "");
+				// A SHA that isn't a commit here (a typo) falls back to HEAD, so the failure is never lost.
+				if (named === undefined || typeof recordVerdict(ctx.cwd, named, "Inconclusive", ids, options.reviewsRoot) === "string") {
+					recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot);
+				}
 				if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
 			}
 		});
