@@ -54,7 +54,7 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 ## Finish
 
 1. Run the whole-branch review with requesting-code-review (range `$(git merge-base <base> HEAD)..HEAD`). Include the plan's Review focus and a pointer to the rulings in Progress.
-2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite. Record Minor findings in Progress.
+2. Fix Critical and Important findings in one pass, each with RED→GREEN plus a green full suite, then re-review the fixes' range until the verdict is `Yes`: the review gate lands nothing else without asking the user. Record Minor findings in Progress.
 3. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
 4. **Task file:** move what lasts out of it: behavior into the topic chapter, decisions and lasting rulings into `docs/decisions/` (writing-documentation). Show the user its Follow-ups and offer to start the next one. Then delete the task file in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists; git keeps it.
 5. Apply verification-before-completion, then use the finishing section of git-workflow.

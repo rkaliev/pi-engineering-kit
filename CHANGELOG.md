@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+- Review gate. Before `gh pr create/merge`, `glab mr create/merge`, `git merge` into the base or `git push` to the base, the guard asks the user unless the reviewer's last verdict is `Yes` for the commit being landed (no UI: blocked).
+  - The guard records the verdict of each `reviewer` run in a `subagent` tool result (`Reviewed HEAD: <sha>` and `Ready to merge: …` in its final output); a failed reviewer run counts as Inconclusive, and the main agent never writes a verdict. Reviews from one user message combine to the worst verdict. A background run may not report back, so a missing verdict asks rather than blocks.
+  - A review covers the branch's own change to reviewable files, compared with the remote base. Deleting task files, changing docs or other markdown, and rebasing onto a newer base keep it valid; any other change needs a new review. Markdown that steers the agent (AGENTS.md, SKILL.md, `.pi/`, `rules/`, `skills/`, `agents/`, `prompts/`) is reviewable. The list is fixed.
+  - Worktrees: `cd <dir>` and `git -C <dir>` are followed. A landing chained after anything but read-only steps asks; `gh pr merge <number>` asks.
+  - A change is identified by its diff with one line of context but without line numbers (and binaries by content), so whitespace, moved lines and binary changes need a new review while a rebase keeps it. Code under `docs/` (a docs site's config) is reviewable; prose and pictures there are not. A `cd` the guard can't follow (a variable, `$(…)`, a nested subshell, a missing folder; a `cd` inside one `( … )` is followed and ends with it) and `-R` to another repository fail closed. `git push origin HEAD` from the base branch counts as a landing. `gh pr merge` checks the remote branch as well. A reviewer run that fails, times out or gives no verdict counts as Inconclusive for the commit it reviewed. A landing may follow read-only steps and the project's verification commands in one command. One confirmation names every reason.
+  - `.pi/guard.json` gets `reviewGate` (`false` turns it off, trusted projects only). The guard asks before `.pi/guard.json` is changed (edit/write or shell) and blocks writes to the review records.
+- The reviewer's output ends with `Reviewed HEAD:` and adds the verdict `Inconclusive` for a review that could not read the requirements, the range or the rules. A finding against a project rule cites the rule. The reviewer doesn't repeat what the verification commands and linters check, gives wordy prose at most one grouped Minor, and matches repeat-round findings by the underlying defect.
+- Parallel reviewers merge by root cause; the same `file:line` keeps the higher severity. executing-plans re-reviews after fixes until `Yes`, and `/finish` now reviews an unreviewed branch first. receiving-code-review doesn't call a finding resolved before a re-review closed it.
+- ci-quality-gates offers one required human approval and a CODEOWNERS file for the files that steer every change (template in `references/ci-templates.md`), both only on the user's yes.
+
 ## 0.11.0
 
 - One task file replaces the roadmap, spec, plan and ledger. Each piece of work gets `docs/tasks/YYYY-MM-DD-<slug>.md` from `templates/task.md`, which stands in for a tracker issue: the user's request verbatim, the description (Intent, Context, Success criteria, Scope, Decisions, Design, Rollout, Risks), Follow-ups, Plan and Progress. `templates/spec.md` is gone.

@@ -1,14 +1,42 @@
 /**
  * Guard: blocks irreversible or secret-leaking tool calls and task files reaching the base
- * branch, and asks the human before outward-facing ones. Tightening rules from `.pi/guard.json`
- * always apply; `allow` and `workDocs` (which relax the defaults) apply only in trusted projects.
+ * branch, asks before code reaches it without a passing review, and asks the human before
+ * outward-facing ones. Tightening rules from `.pi/guard.json` always apply; `allow`, `workDocs`
+ * and `reviewGate` (which relax the defaults) apply only in trusted projects.
+ *
+ * The review verdict comes from a `subagent` tool result: each child run of the `reviewer` agent
+ * whose final output carries `Reviewed HEAD:` and `Ready to merge:`; a failed reviewer run counts
+ * as Inconclusive. A background run may never report back here, so a missing verdict asks the
+ * human rather than blocking.
  */
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
+import { resolveVerifyCommands } from "./lib/commands.ts";
+import { checkGateFiles, checkReview, recordReview, recordVerdict, reviewedHead } from "./lib/reviews.ts";
 import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
-export default function guardExtension(pi: ExtensionAPI) {
+/** The part of a pi-subagents result the review gate reads. */
+interface SubagentRun {
+	agent?: string;
+	exitCode?: number;
+	finalOutput?: string;
+	error?: string;
+	timedOut?: boolean;
+	interrupted?: boolean;
+	stopped?: boolean;
+}
+
+export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?: string } = {}) {
+	// Reviews from one user message combine to the worst verdict; the next message starts a new round.
+	const session = randomUUID();
+	let prompt = 0;
+	pi.on("input", async () => {
+		prompt += 1;
+		return undefined;
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		const config = loadConfig(ctx);
 		const input = event.input as Record<string, unknown>;
@@ -18,7 +46,14 @@ export default function guardExtension(pi: ExtensionAPI) {
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			subject = String(input.command ?? "");
 			decision = checkCommand(subject, ctx.cwd, config);
-			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, config.workDocs ?? WORK_DOC_DIRS) ?? decision;
+			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
+			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
+			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
+			if (decision.action !== "block" && config.reviewGate !== false) {
+				const gate = { workDocs, missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
+				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
+				decision = join(decision, review);
+			}
 		} else if (event.toolName === "read" || event.toolName === "write" || event.toolName === "edit") {
 			subject = String(input.path ?? "");
 			decision = checkPath(event.toolName, subject, ctx.cwd, config);
@@ -35,6 +70,36 @@ export default function guardExtension(pi: ExtensionAPI) {
 		const ok = await ctx.ui.confirm("Guard: confirm action", `${decision.reason}\n\n${event.toolName}: ${subject}`);
 		return ok ? undefined : { block: true, reason: `Guard: the user declined. ${decision.reason} Ask how to proceed.` };
 	});
+
+	pi.on("tool_result", async (event, ctx) => {
+		if (event.toolName !== "subagent") return undefined;
+		const runs = (event.details as { results?: SubagentRun[] } | undefined)?.results;
+		if (!Array.isArray(runs)) return undefined;
+		runs.forEach((run, index) => {
+			if (run.agent !== "reviewer") return;
+			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
+			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
+			const result = failed ? "the reviewer run failed" : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
+			if (typeof result === "string") {
+				// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel
+				// reviewer's Yes on that commit can't stand alone; a review of a later commit is unaffected.
+				const named = reviewedHead(run.finalOutput ?? "");
+				// A SHA that isn't a commit here (a typo) falls back to HEAD, so the failure is never lost.
+				if (named === undefined || typeof recordVerdict(ctx.cwd, named, "Inconclusive", ids, options.reviewsRoot) === "string") {
+					recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot);
+				}
+				if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
+			}
+		});
+		return undefined;
+	});
+}
+
+/** Combine two guard decisions: a block wins; two confirmations become one that names both reasons. */
+function join(current: GuardDecision, next: GuardDecision | undefined): GuardDecision {
+	if (!next || current.action === "block") return current;
+	if (next.action === "block" || current.action === "allow") return next;
+	return { action: "confirm", reason: `${next.reason} Also: ${current.reason}` };
 }
 
 function loadConfig(ctx: ExtensionContext): GuardConfig {
@@ -57,6 +122,7 @@ function loadConfig(ctx: ExtensionContext): GuardConfig {
 		protectedPaths: strings(raw.protectedPaths),
 		allow: trusted ? regexes(raw.allow) : [],
 		workDocs: trusted && Array.isArray(raw.workDocs) ? strings(raw.workDocs) : undefined,
+		reviewGate: !(trusted && raw.reviewGate === false),
 	};
 }
 
