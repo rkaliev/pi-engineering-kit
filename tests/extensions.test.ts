@@ -491,6 +491,9 @@ test("review gate: a reviewer run's report records the verdict; without one the 
 		await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }, bad]);
 		assert.equal(await pr(), true, `a reviewer run without a usable verdict spoils the round: ${JSON.stringify(bad)}`);
 	}
+	await g.emit("input", { text: "typo", source: "interactive" }, ctx(dir));
+	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }, { agent: "reviewer", exitCode: 1, finalOutput: "Reviewed HEAD: 0000000" }]);
+	assert.equal(await pr(), true, "a failed run naming a SHA that isn't a commit counts against HEAD");
 	await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
 	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }]);
 	assert.equal(await bash("gh pr create --fill"), undefined);

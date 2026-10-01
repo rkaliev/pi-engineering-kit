@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, exempt, parseReview, readReviews, recordReview, recordVerdict, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, exempt, parseReview, readReviews, recordReview, recordVerdict, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
 const OPTIONS: ReviewGateOptions = { workDocs: ["docs/tasks"], missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
@@ -345,4 +345,21 @@ test("redirected verify commands may precede a landing; a nested subshell fails 
 	review(report(head, "Yes"));
 	for (const ok of ["npm test 2>&1 && gh pr create --fill", "npm test 2>&1 | tail -20 && gh pr create --fill", "npm test >/dev/null && gh pr create"]) assert.equal(check(ok), undefined, ok);
 	assert.equal(action(check("(cd src && (cd .. && ls)) && gh pr create")), "block");
+});
+
+test("redirections are stripped outside quotes only: a > in a commit message is text", () => {
+	assert.equal(stripRedirects("npm test 2>&1 | tail -20").replace(/\s+/g, " ").trim(), "npm test | tail -20");
+	assert.equal(stripRedirects("npm test &>/dev/null && x").replace(/\s+/g, " ").trim(), "npm test && x");
+	assert.equal(stripRedirects("(npm test > out.log) && x").replace(/\s+/g, " ").trim(), "(npm test ) && x");
+	assert.equal(stripRedirects(`git commit -m "a -> b" && gh pr create`), `git commit -m "a -> b" && gh pr create`);
+	assert.equal(stripRedirects("git commit -m 'Map<K, V>' && x"), "git commit -m 'Map<K, V>' && x");
+
+	const { dir, git, commit, check } = repo();
+	for (const sneaky of [`git commit -qm "fix: a -> b" && gh pr create --fill`, `git commit -qm "use Map<K, V>" && gh pr create`, `git commit -am "x=>y" && git push origin HEAD:main`, `echo "x>y"; gh pr create --fill`]) {
+		assert.equal(action(check(sneaky)), "block", sneaky);
+	}
+	const wt = join(dir, ".worktrees", "r");
+	git("worktree", "add", "-q", "-b", "feat/r", wt, "main");
+	commit({ "src/r.ts": "export const r = 1;\n" }, wt);
+	assert.equal(action(check(`(cd ${wt} && npm test > out.log) && gh pr create --fill`)), "block", "a redirect target ends at the closing parenthesis");
 });

@@ -126,9 +126,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 	let outside: string | undefined;
 	let inSubshell = false;
 	let unsafeBefore = false;
-	// Redirections don't change what lands, and `2>&1` would otherwise split a segment at its `&`.
-	const plain = command.replace(/\s*\d*>>?\s*(&\d+|[^\s;&|]+)/g, "").replace(/\s*<\s*[^\s;&|]+/g, "");
-	for (const raw of splitSegments(tokenize(plain))) {
+	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
 		// A `cd` inside a subshell ends with it: restore the directory after the closing parenthesis.
 		// A nested subshell is more than the guard tracks: what follows fails closed.
 		if (raw[0]?.startsWith("(")) {
@@ -211,6 +209,54 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		}
 	}
 	return undefined;
+}
+
+/**
+ * The command without its redirections (`2>&1`, `> out.log`, `&>/dev/null`, `< in`), which don't change what
+ * lands and would otherwise split a segment at the `&` of `2>&1`. Only outside quotes: a `>` in a commit
+ * message is text. A target ends at whitespace, an operator or a parenthesis.
+ */
+export function stripRedirects(command: string): string {
+	let out = "";
+	let quote: string | null = null;
+	let i = 0;
+	while (i < command.length) {
+		const ch = command[i]!;
+		if (quote) {
+			if (ch === quote) quote = null;
+			out += ch;
+			i++;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			out += ch;
+			i++;
+			continue;
+		}
+		const boundary = i === 0 || /[\s;&|()]/.test(command[i - 1]!);
+		const op = /^(?:\d*|&)(?:>>?|<)(?:&\d+|&-)?/.exec(command.slice(i))?.[0];
+		const isRedirect = op !== undefined && (ch === ">" || ch === "<" || (boundary && op.length > 1 && /[>&<]/.test(op.slice(1))));
+		if (!isRedirect || op === undefined) {
+			out += ch;
+			i++;
+			continue;
+		}
+		i += op.length;
+		if (!/&(\d+|-)$/.test(op)) {
+			while (i < command.length && /[ \t]/.test(command[i]!)) i++;
+			let target: string | null = null;
+			while (i < command.length && (target || !/[\s;&|()<>]/.test(command[i]!))) {
+				const c = command[i]!;
+				if (target) {
+					if (c === target) target = null;
+				} else if (c === "'" || c === '"') target = c;
+				i++;
+			}
+		}
+		out += " ";
+	}
+	return out;
 }
 
 function isCd(tokens: string[]): boolean {
