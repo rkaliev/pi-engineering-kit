@@ -5,10 +5,10 @@
 - One source for the test rules. test-driven-development's `references/test-standard.md` now holds every test rule. TDD, BDD, writing-plans, the review checklist and the other skills link to it instead of restating it, and the wording that contradicted itself is gone:
   - the plan template's expected RED is an assertion failure after a stub, never "not defined";
   - a manual check verifies a criterion only where automation is impossible (hardware, a store review, a fiscal device, a signature), with the reason in the task file and the user's agreement;
-  - with BDD a user-visible criterion has exactly one scenario; every other criterion has at least one test at the cheapest level; end-to-end without BDD covers critical flows only; a unit test doesn't repeat a scenario's happy path;
-  - **outside-in TDD with BDD:** the scenario is written first and seen failing, unit cycles drive the code, and the scenario passing closes the criterion;
-  - characterization tests are `*.char.test.*` and pass on first run by design;
-  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement;
+  - with BDD a user-visible criterion has exactly one scenario; every other criterion has at least one test at the cheapest level; end-to-end without BDD covers critical flows only;
+  - **outside-in TDD with BDD:** the scenario is written first and seen failing, unit cycles drive the code, and the scenario passing closes the criterion. Unit tests test their unit's own contract and stay; only a unit test asserting the user-level outcome the scenario proves is left out;
+  - characterization tests are `*.char.test.*` and pass on first run by design; golden data in a port is an acceptance test that fails first; every other new test is seen failing first;
+  - deleting a test together with its behavior needs only the reason in the commit; every other edit, deletion or skip needs the user's agreement, and a skip names a linked issue (a reason in words is not enough);
   - provider-sandbox tests are a separate suite and CI job;
   - tests never retry; waits are on a condition with one ceiling, never a fixed sleep;
   - missing test infrastructure fails the run instead of skipping;
@@ -18,16 +18,16 @@
   - Critical: a focused test committed; a CI check removed, skipped or retried, or retries in a runner config;
   - Important: a manual check that isn't agreed or isn't necessary; a Review focus line without a test; a test without an assertion or asserting mock echo; an expected value copied from or recomputed like the code; a test-only helper in production code; a fixed sleep or real network call outside the sandbox suite; payments without a sandbox test; POS without a list of what ran on real hardware.
 - **Test hygiene on any stack.** A new dependency-free `scripts/test-hygiene.ts`, run with Node ≥22.18, checks:
-  - focused tests, and skips without a linked issue (JS/TS, Python, JVM, Go, Swift, .NET, Gherkin);
+  - focused tests, and skips without a linked issue (JS/TS including Playwright and Cypress, Python, JVM, Go, Swift, .NET, Gherkin);
   - fixed sleeps;
-  - retries in runner configs;
-  - JUnit reports: missing, empty, counts that don't add up, unexplained skips;
-  - criterion tags (`@C<n>`) against the task file.
+  - retries in runner configs and test code;
+  - with `--junit`, only the reports: missing, empty, or counts that don't add up (a crashed shard);
+  - criterion tags (`@C<n>`) on the scenarios the branch adds or changes, against the task file; tags of finished tasks never fail a run.
 
-  In an existing project it checks only the lines a change adds; old debt is counted, not blocking. `test-hygiene: allow <reason>` covers deliberate cases. ci-quality-gates gets `test-hygiene` and `e2e` CI jobs and a per-stack table of native linters and JUnit reporters.
+  In an existing project it checks only the lines a change adds (renames followed); old debt is counted, not blocking. Without a merge base it stops with a message. `test-hygiene: allow <reason>` marks a line where the pattern is the behavior under test; hiding a forbidden skip, retry or sleep with it needs the user's agreement. ci-quality-gates gets `test-hygiene` and `e2e` CI jobs and a per-stack table of native linters and JUnit reporters.
 - A review counts only for verified code: one recorded while edits were unverified is Inconclusive.
 - The PR body says how each new test was seen failing first; executing-plans' completion contract includes it.
-- `/kit-init --test-hygiene` copies the script into `.ci/test-hygiene.ts`. `/kit-init` reports an older copy, and a CI that doesn't run it. The package now ships `scripts/`.
+- `/kit-init --test-hygiene` copies the script into `.ci/test-hygiene.mts` (an ES module whatever `package.json` says). `/kit-init` reports an older copy, and a CI that doesn't run it. The package now ships `scripts/`.
 - The `worker` dispatched per task gets the same reporting contract as an implementer: each new test seen failing first, with the commands run. Fixes go back to the same worker.
 
 ## 0.12.0

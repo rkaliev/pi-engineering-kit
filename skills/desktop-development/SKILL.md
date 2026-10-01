@@ -36,7 +36,7 @@ Platform details:
 
 ## Verification
 
-1. Unit tests for view models and logic, and integration tests for file, DB and device adapters, using fakes.
+1. Unit tests for view models and logic; integration tests for file and database adapters against a real local instance, and for device adapters against a fake (`../test-driven-development/references/test-standard.md`).
 2. A build of the release configuration, and the package itself (installer, MSIX, AppImage, deb…).
 3. Install the package into a clean VM or container. Run first-launch, upgrade from the previous version, and uninstall.
 4. Manual smoke test of the changed flows, with screenshots. State which OS versions and architectures (x64/arm64) were actually tested.

@@ -28,4 +28,4 @@ If a failure only appears when the whole suite runs, bisect the test files: run 
 
 ## Timing bugs
 
-Replace arbitrary `sleep`/`setTimeout` with waiting for the condition itself (polling with a timeout and a clear error message). A fixed delay is either too slow or, on a busy CI machine, too short.
+Replace arbitrary `sleep`/`setTimeout` with waiting for the condition itself, under the project-wide ceiling and with a clear error message (`../../test-driven-development/references/test-standard.md`, "Determinism and isolation"). A fixed delay is either too slow or, on a busy CI machine, too short.

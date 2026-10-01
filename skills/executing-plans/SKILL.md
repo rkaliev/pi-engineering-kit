@@ -27,7 +27,7 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
    - **The plan is wrong:** choose the smallest change that satisfies the description, add `Ruling: <what> — <why> — <cost if wrong>` to Progress, and continue.
 3. Commit as the plan says.
 4. **Completion contract**, with evidence from this session:
-   - every named test exists and ran, and was seen failing before its code (with BDD, the criterion's scenario failed first and passes now);
+   - every named test exists and ran, and was seen failing first as test-standard defines it (with BDD, the criterion's scenario failed first and passes now);
    - the full suite is green;
    - every `Expected` was compared;
    - every deviation has a ruling.
@@ -44,7 +44,7 @@ Keep long command output out of context: redirect it to a file and read the tail
 ## With a subagent tool (when the user chose "subagent per task")
 
 For each task:
-1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and these instructions: "Work test-first (test-driven-development): watch each new test fail for the right reason before writing its code. Change only what the task needs; never weaken, skip or delete a test. Run the verification commands in full and unpiped. Finish with DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, then: Changed (files), Tests (each new test and that you saw it fail first), Checks run (command → result), Concerns."
+1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and these instructions: "Work test-first (test-driven-development): watch each new test fail for the right reason before writing its code (characterization tests excepted). Change only what the task needs; never weaken, skip or delete a test to get green, and change tests only as test-standard's \"Changing tests\" allows. Run the verification commands in full and unpiped. Finish with DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, then: Changed (files), Tests (each new test and that you saw it fail first), Checks run (command → result), Concerns."
 2. Don't trust the report. Check `git diff BASE..HEAD` and run the tests yourself.
 3. Dispatch a fresh reviewer (`reviewer`) using `../requesting-code-review/reviewer-prompt.md` on `BASE..HEAD`.
 4. Have the implementer fix Critical and Important findings (give the same worker its own report and the findings, so it keeps its context), then re-review. After 3 rounds without convergence, stop and ask the user.

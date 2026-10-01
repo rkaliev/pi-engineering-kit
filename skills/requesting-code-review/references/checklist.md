@@ -23,6 +23,7 @@ These don't move with the author's arguments or with how common the pattern is i
 | A test without an assertion or one asserting mock echo; an expected value copied from the code's output or recomputed with its algorithm (outside a marked characterization test) | Important |
 | A test-only helper, flag or hook in production code | Important |
 | A fixed sleep in a test; a real network call outside the provider-sandbox suite | Important |
+| A `test-hygiene: allow` that hides a forbidden skip, retry or sleep without the user's agreement | Same as the pattern it hides |
 | Payments without a test against the provider sandbox; POS without a list of what ran on real hardware | Important |
 | An outbound call, queue or database wait without a deadline | Important |
 | Environment read outside the config module, or configuration not validated at startup | Important |
@@ -49,7 +50,7 @@ These don't move with the author's arguments or with how common the pattern is i
 
 ## Tests
 Check the diff against `../../test-driven-development/references/test-standard.md`, the single source of the test rules; the fixed severities above rate what it finds. In particular:
-- each criterion is verified as "Criteria and levels" says, and its new test was seen red (the PR or report says how);
+- each criterion is verified as "Criteria and levels" says, and its new tests were seen failing first as the standard defines it (the PR or report says how);
 - layers don't repeat each other: a unit test restating a scenario's happy path is a finding;
 - determinism and isolation: controlled clock and randomness, own data per test, cleanup registered where data is created, no shared mutable state;
 - external side effects (payment, email, device) are verified at the boundary that matters.

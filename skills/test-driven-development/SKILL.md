@@ -36,7 +36,7 @@ Code written before its test is deleted and rewritten from the test. Don't keep 
 
 **Before the first test of a task, read `references/test-standard.md`**. It is the single source of the test rules: expected values, which tests are worth writing, names, doubles, determinism, retries, flakes, which level verifies which criterion, coverage and changing tests. Follow the project's existing test stack and layout.
 
-**With BDD scenarios: outside-in.** For a user-visible criterion, write its scenario first (`references/bdd.md`) and run it: it must fail on the step that needs the missing behavior (the outer RED). Then drive the code with the cycle above, one unit test at a time (the inner loops). The criterion is done when its scenario passes. Don't write scenarios for criteria you aren't working on yet.
+**With BDD scenarios: outside-in.** For a user-visible criterion, write its scenario first (`references/bdd.md`) and run it: it must fail on the step that needs the missing behavior (the outer RED). Then drive the code with the cycle above, one unit test at a time (the inner loops); each unit test checks its unit's own contract and stays (test-standard, "Criteria and levels"). The criterion is done when its scenario passes. Don't write scenarios for criteria you aren't working on yet.
 
 ## Red flags: stop and start over
 

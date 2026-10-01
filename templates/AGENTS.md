@@ -44,7 +44,7 @@ Run exactly these; they mirror CI.
 - Never: <touch `<path>`, run against production, read `.env`, …>
 
 ## Definition of done
-1. Each criterion of the task is covered by a test, or checked manually. Say which, and how.
+1. Each criterion of the task is verified as test-standard says ("Criteria and levels"): by a test, or by a manual check only where automation is impossible, with the reason in the task file and the user's agreement. Say which, and how.
 2. `<test command>` and `<typecheck command>` ran in this session and passed.
 3. The final message lists changed files, commands run with their results, and what was not verified.
 

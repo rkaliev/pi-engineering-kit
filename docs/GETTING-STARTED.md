@@ -207,7 +207,7 @@ Inside pi, at the project root:
 /kit-init
 ```
 
-The command shows what it will create, asks about each file and **never overwrites existing ones**:
+The command shows what it will create, asks about each file and **never overwrites existing ones** (the one exception is an older test-hygiene copy, below):
 
 | File | What it contains |
 |---|---|
@@ -219,7 +219,7 @@ The command shows what it will create, asks about each file and **never overwrit
 - If the project has no `AGENTS.md`, the command offers to run `/onboard`: the agent studies the repository, runs the commands and proposes an AGENTS.md.
 - The command also reports CI that doesn't run every verification command or lacks the `working-docs` job (the ci-quality-gates skill adds both).
 - `/kit-init --yes` creates everything missing without questions. This is handy for scripts.
-- `/kit-init --test-hygiene` also copies the stack-independent test-hygiene check for CI into `.ci/test-hygiene.ts` (the ci-quality-gates skill adds its job). Without the flag it is only offered.
+- `/kit-init --test-hygiene` also copies the stack-independent test-hygiene check for CI into `.ci/test-hygiene.mts` (the ci-quality-gates skill adds its job), or replaces an older copy. Without the flag it is only offered. Flags combine (`/kit-init --yes --test-hygiene`), and the command completes each of them.
 
 Commit all the `.pi/*` files: then the team has the same checks, rules and models.
 

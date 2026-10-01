@@ -20,7 +20,7 @@ export interface CiCoverage {
 export const WORK_DOCS_MARKER = "working-docs:";
 
 /** The kit's test-hygiene script, as CI runs it. */
-export const HYGIENE_MARKER = "test-hygiene.ts";
+export const HYGIENE_MARKER = "test-hygiene.mts";
 
 export function findCiFiles(cwd: string): string[] {
 	const files = CI_FILES.filter((f) => existsSync(join(cwd, f)));

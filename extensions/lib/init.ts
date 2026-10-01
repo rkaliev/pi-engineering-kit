@@ -21,7 +21,7 @@ const templatesDir = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const hygieneScript = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "test-hygiene.ts");
 
 /** Where /kit-init puts the test-hygiene script in a project; CI templates run it from here. */
-export const HYGIENE_TARGET = ".ci/test-hygiene.ts";
+export const HYGIENE_TARGET = ".ci/test-hygiene.mts";
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 /** Everything /kit-init would do in `cwd`. Existing files are only ever merged (settings) or left alone. */
@@ -66,8 +66,10 @@ export function planInit(cwd: string, options: { copyHygiene?: boolean } = {}): 
 	);
 
 	items.push(planSettings(cwd));
-	items.push(planHygiene(cwd, readFileSync(hygieneScript, "utf8"), options.copyHygiene === true, "/kit-init --test-hygiene"));
-	items.push(planCi(cwd, "/skill:ci-quality-gates"));
+	const hygiene = planHygiene(cwd, readFileSync(hygieneScript, "utf8"), options.copyHygiene === true, "/kit-init --test-hygiene");
+	items.push(hygiene);
+	// Report the CI gap in the same run that adds the script.
+	items.push(planCi(cwd, "/skill:ci-quality-gates", existsSync(join(cwd, HYGIENE_TARGET)) || hygiene.status === "create"));
 
 	items.push(
 		has("AGENTS.md")
@@ -136,22 +138,24 @@ function safeList(dir: string): string[] {
 	}
 }
 
-/** The test-hygiene script: offered, copied only on request, and reported when the project's copy is older. */
+/** The test-hygiene script: offered, copied (or an older copy replaced) only on request, and reported when the project's copy is older. */
 export function planHygiene(cwd: string, script: string, copy: boolean, flag: string): InitItem {
-	const version = (text: string) => /export const VERSION = "([^"]+)"/.exec(text)?.[1];
+	const version = (text: string) => Number(/export const VERSION = "(\d+)"/.exec(text)?.[1] ?? 0);
+	const ours = version(script);
 	const file = join(cwd, HYGIENE_TARGET);
+	const create = (why: string): InitItem => ({ target: HYGIENE_TARGET, status: existsSync(file) ? "merge" : "create", content: script, why });
 	if (existsSync(file)) {
 		const theirs = version(readFileSync(file, "utf8"));
-		const ours = version(script);
-		if (theirs === ours) return { target: HYGIENE_TARGET, status: "exists", why: `test-hygiene v${ours}` };
-		return { target: HYGIENE_TARGET, status: "missing", why: `test-hygiene v${theirs ?? "?"} is older than the kit's v${ours}; replace the file with the kit's scripts/test-hygiene.ts after the user agrees` };
+		if (theirs >= ours) return { target: HYGIENE_TARGET, status: "exists", why: `test-hygiene v${theirs}` };
+		if (copy) return create(`replace test-hygiene v${theirs} with the kit's v${ours}`);
+		return { target: HYGIENE_TARGET, status: "missing", why: `test-hygiene v${theirs} is older than the kit's v${ours}; replace it by re-running with ${flag} after the user agrees` };
 	}
 	if (!copy) return { target: HYGIENE_TARGET, status: "missing", why: `optional: the stack-independent test-hygiene check for CI (ci-quality-gates); add it by re-running with ${flag} after the user agrees` };
-	return { target: HYGIENE_TARGET, status: "create", content: script, why: "test-hygiene check for CI: focused and unexplained skipped tests, sleeps, retries, test counts, criterion tags" };
+	return create("test-hygiene check for CI: focused tests, skips without a linked issue, sleeps, retries, test counts, criterion tags");
 }
 
 /** CI is the second line of defence: it must run at least the verification commands. Reported, never written here. */
-function planCi(cwd: string, hint: string): InitItem {
+function planCi(cwd: string, hint: string, hasHygiene: boolean): InitItem {
 	const configured = resolveVerifyCommands(cwd).commands;
 	const commands = configured.length > 0 ? configured : detectVerifyCommands(cwd);
 	const { files, missing, workDocsCheck, hygieneCheck } = ciCoverage(cwd, commands);
@@ -161,7 +165,7 @@ function planCi(cwd: string, hint: string): InitItem {
 	const gaps = [
 		...(missing.length > 0 ? [`doesn't run: ${missing.join(", ")}`] : []),
 		...(wantsDocsCheck && !workDocsCheck ? ["has no working-docs check (task files must not reach the base branch)"] : []),
-		...(existsSync(join(cwd, HYGIENE_TARGET)) && !hygieneCheck ? [`doesn't run ${HYGIENE_TARGET}`] : []),
+		...(hasHygiene && !hygieneCheck ? [`doesn't run ${HYGIENE_TARGET}`] : []),
 	];
 	if (gaps.length > 0) return { target: "CI", status: "missing", why: `${files.join(", ")} ${gaps.join("; ")}; run ${hint}` };
 	return { target: "CI", status: "exists", why: `${files.join(", ")} runs every verification command${wantsDocsCheck ? " and the working-docs check" : ""}` };

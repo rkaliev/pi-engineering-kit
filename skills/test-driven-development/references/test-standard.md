@@ -7,6 +7,8 @@ Load this when writing, changing or reviewing tests. It is the single source of 
 - An expected value traces to a spec, a numbered criterion or a domain rule. Quote it in the test name or a short comment when it is not obvious.
 - Never derive an expected value by running the code and copying its output, and never recompute it in the test with the same algorithm the code uses. Either way the test proves only that the code does what it does.
 - **The one exception is characterization tests** (pinning legacy behavior before a change, see changing-legacy-code). Name them `*.char.test.*` (or the stack's equivalent: a `characterization` tag or describe block). They pass on first run by design, and they don't count as coverage of new behavior.
+- **Porting** to a new system is different: expected values taken from the old system's outputs (golden data) are acceptance tests of the new code. They fail first like any other test and are not marked as characterization.
+- **Every new test is seen failing first** for the right reason, except a characterization test. "Seen failing" in a plan, a report or a PR body always means this rule.
 - Give a test generator the spec and the criteria, not only the code.
 
 ## A test earns its keep
@@ -17,7 +19,7 @@ Don't write tests that cannot fail for a reason anyone cares about:
 - the framework's or a dependency's own behavior;
 - **mock echo**: asserting that a mock returned what you told it to return.
 
-The same branch with different data is one parametrized test (`test.each`, table tests, `@ParameterizedTest`, `pytest.mark.parametrize`), not many copies. Snapshots are small and inline; a large external snapshot file is not a test anyone reads.
+The same branch with different data is one parametrized test (`test.each`, table tests, `@ParameterizedTest`, `pytest.mark.parametrize`), not many copies. Text and serialized snapshots are small and inline; a large external snapshot file is not a test anyone reads. Visual baselines (images) are a separate thing, below.
 
 ## Structure and names
 
@@ -47,7 +49,7 @@ The same branch with different data is one parametrized test (`test.each`, table
 
 ## Retries
 
-A test never retries: not in the runner config, not in CI, not with a loop around an assertion. Retrying a transient failure of an external system is product behavior (see systematic-debugging and the platform skills) and is tested like any other behavior.
+A test never retries: not in the runner config, not in CI, not by re-running the test or a block of assertions until it passes. Waiting for a condition under the ceiling (a web-first assertion, `expect.poll`, `waitFor`) is waiting, not a retry. Retrying a transient failure of an external system is product behavior (see systematic-debugging and the platform skills) and is tested like any other behavior.
 
 ## Flaky tests
 
@@ -63,10 +65,10 @@ Quarantining a flaky test is a skip: it follows "Changing tests" below and count
 ## Criteria and levels
 
 Every numbered criterion of a task is verified exactly as follows. The task file's "How it is verified" column names the test.
-- **A user-visible criterion in a project with BDD scenarios:** exactly one scenario, tagged with the criterion (`bdd.md`). Unit tests are added only for what the scenario cannot reach.
+- **A user-visible criterion in a project with BDD scenarios:** exactly one scenario, tagged with the criterion (`bdd.md`), written first (outside-in, test-driven-development). The unit tests that drive the code underneath it test each unit's own contract (its inputs, edges and errors) and stay.
 - **Any other criterion:** at least one test at the cheapest level that shows it the way a user or caller sees it: a unit test for pure logic, an API or integration test for a service, a component or integration test for a screen.
 - **End-to-end tests without BDD** cover critical user flows only, one journey each. A screen's other criteria are covered at the component or integration level.
-- **Layers don't repeat each other:** a unit test that restates a scenario's happy path is deleted; unit tests keep the edge cases, races, permission matrices and failure paths the scenario cannot reach.
+- **Layers don't repeat each other:** a unit test that asserts the user-level outcome a scenario already proves (the same journey, through the same entry point) is not written, or is removed in REFACTOR before the commit. Unit tests of a unit's own contract are not repetition, even on the happy path.
 - **A manual check** replaces a test only where automation is impossible (real hardware, a store review, a fiscal device, a physical signature). The task file names the manual step and the reason, the user agrees to it, and the report says it ran. Anywhere else a criterion without a test is a gap. A manual run on top of the tests (the target browsers, a device, the changed flow) is extra evidence, not a replacement.
 - One scenario or end-to-end test = one journey. It sets up its preconditions through the fastest path (an API call or a seeded state, not the UI) and is independent of the others. Prefer accessible roles and labels, or stable test IDs, over CSS or XPath selectors.
 
@@ -82,7 +84,8 @@ Baselines are produced only in CI, on the image that checks them (in Git LFS whe
 ## Changing tests
 
 - **Allowed with the reason in the commit:** deleting a test together with the behavior it protected (the feature is removed), and deleting a test that never protected anything (it breaks "A test earns its keep").
-- **Everything else needs the user's agreement and its own commit:** editing an assertion, deleting a test whose behavior still exists, adding a skip or quarantine (with a linked issue). Never in the same commit as the code change it would hide.
+- **Everything else needs the user's agreement and its own commit:** editing an assertion, deleting a test whose behavior still exists, adding a skip or quarantine. A skip names a linked issue (`#123`, a URL or `ABC-123`) on its line or the line above; a reason in words alone ("flaky", "needs docker") is not enough. Never in the same commit as the code change it would hide.
+- **`test-hygiene: allow <reason>`** marks a line where a checked pattern is the behavior under test (a test of the retry logic itself, a sleep that is the subject). It is not a way around these rules: an allow that hides a skip, a retry or a sleep that this standard forbids needs the user's agreement like the change it hides.
 
 ## Make it mechanical
 

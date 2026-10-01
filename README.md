@@ -22,7 +22,7 @@ It contains:
   - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
   - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
-- **A test-hygiene script** for the project's CI on any stack (`scripts/test-hygiene.ts`, Node only, no dependencies): focused tests, skips without a linked issue, fixed sleeps, retries in runner configs, JUnit test counts and criterion tags. In an existing project it checks only the lines a change adds, so old debt doesn't block.
+- **A test-hygiene script** for the project's CI on any stack (`scripts/test-hygiene.ts`, Node only, no dependencies): focused tests, skips without a linked issue, fixed sleeps, retries in runner configs and test code, JUnit test counts and criterion tags on the scenarios a branch changes. In an existing project it checks only the lines a change adds, so old debt doesn't block.
 
 How it works and why: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A step-by-step guide with a demo project is in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). Both are also available in Russian: [ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md), [GETTING-STARTED.ru.md](docs/GETTING-STARTED.ru.md). The demo project itself is [examples/demo](examples/demo): a dependency-free cart library with one task, so you can try the whole loop in a minute.
 
@@ -59,7 +59,7 @@ Without `pi-subagents`, the skills fall back to doing that work inline.
 
 ## Set up a project
 
-1. Run `/kit-init`. It creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or build tools), `.pi/guard.json` and `.pi/model-routing.json`, and adds `pi-subagents` to `.pi/settings.json`. It never overwrites existing files, and `--yes` skips the questions. `/kit-init --test-hygiene` also copies the test-hygiene script into `.ci/test-hygiene.ts` for CI; without the flag it is only offered. It reports an older copy and a CI that doesn't run it.
+1. Run `/kit-init`. It creates the missing `.pi/verify.json` (commands detected from AGENTS.md, package scripts or build tools), `.pi/guard.json` and `.pi/model-routing.json`, and adds `pi-subagents` to `.pi/settings.json`. It never overwrites existing files other than an older copy of the kit's test-hygiene script, and `--yes` skips the questions. `/kit-init --test-hygiene` also copies the test-hygiene script into `.ci/test-hygiene.mts` for CI (an ES module whatever `package.json` says) and replaces an older copy; without the flag it is only offered. It reports an older copy and a CI that doesn't run it.
 2. Run `/onboard`. It maps the repo, proves the build and test commands, and proposes `AGENTS.md` and `.pi/verify.json`. For new projects, start from [templates/AGENTS.md](templates/AGENTS.md).
 3. Tune `.pi/guard.json` ([example](templates/guard.json)) and `.pi/model-routing.json` if needed.
 4. Each piece of work gets one task file, `docs/tasks/YYYY-MM-DD-<slug>.md`, from [templates/task.md](templates/task.md): description, criteria, plan and progress in one place, standing in for a tracker issue (`/new-task` writes the description for you).

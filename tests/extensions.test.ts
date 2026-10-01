@@ -557,3 +557,26 @@ test("review gate: a review that ran on unverified edits counts as Inconclusive"
 		verifyState.unverified = false;
 	}
 });
+
+test("verify state is shared across separately loaded module graphs, as pi loads extensions", async () => {
+	const url = new URL("../extensions/lib/verify-state.ts", import.meta.url).href;
+	const a = (await import(`${url}?graph=a`)) as { verifyState: { unverified: boolean } };
+	const b = (await import(`${url}?graph=b`)) as { verifyState: { unverified: boolean } };
+	try {
+		a.verifyState.unverified = true;
+		assert.equal(b.verifyState.unverified, true, "one state, whichever copy of the module wrote it");
+		assert.equal(verifyState.unverified, true);
+	} finally {
+		a.verifyState.unverified = false;
+	}
+});
+
+test("/kit-init completes the last flag and keeps the earlier ones", () => {
+	const g = fakePi();
+	init(g.pi);
+	const complete = g.commands.get("kit-init").getArgumentCompletions as (prefix: string) => Array<{ value: string }> | null;
+	assert.deepEqual(complete("--te")?.map((o) => o.value), ["--test-hygiene"]);
+	assert.deepEqual(complete("--yes --te")?.map((o) => o.value), ["--yes --test-hygiene"]);
+	assert.deepEqual(complete("--yes ")?.map((o) => o.value), ["--yes --test-hygiene"], "a flag already given isn't offered again");
+	assert.equal(complete("--nope"), null);
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,8 +46,15 @@ function hits(stdout: string): string[] {
 		.map((m) => `${m[1]} ${m[2]}`);
 }
 
+test("the version is on one of the first lines, before the imports", () => {
+	const src = readFileSync(SCRIPT, "utf8").split("\n");
+	const v = src.indexOf('export const VERSION = "2";');
+	assert.ok(v >= 0 && v < 25, "VERSION line");
+	assert.ok(v < src.findIndex((l) => l.startsWith("import ")));
+});
+
 test("exports a version and pure helpers", () => {
-	assert.equal(VERSION, "1");
+	assert.equal(VERSION, "2");
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("a/b/c.spec.ts"));
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("c.test.ts"));
 	assert.ok(!globToRegExp("*.ts").test("a/c.ts"));
@@ -81,30 +88,35 @@ const RULE_CASES: Case[] = [
 	c("js setTimeout without promise is fine", "src/a.test.ts", `setTimeout(done, 1);\n`),
 	// Python
 	c("py skip bare", "tests/test_a.py", `@pytest.mark.skip\ndef test_a(): ...\n`, "tests/test_a.py:1 skip-without-reason"),
-	c("py skip with reason=", "tests/test_a.py", `@pytest.mark.skip(reason="later")\ndef test_a(): ...\n`),
+	c("py skip with reason=", "tests/test_a.py", `@pytest.mark.skip(reason="later")\ndef test_a(): ...\n`, "tests/test_a.py:1 skip-without-reason"),
+	c("py skip with reason= and issue", "tests/test_a.py", `@pytest.mark.skip(reason="later, see #12")\ndef test_a(): ...\n`),
+	c("py skipif and unittest skips", "tests/test_a.py", `@pytest.mark.skipif(sys.platform == "win32", reason="posix only")\n@unittest.skip("later")\n@unittest.skipIf(x, "y")\npytest.skip("no db")\n`, "tests/test_a.py:1 skip-without-reason", "tests/test_a.py:2 skip-without-reason", "tests/test_a.py:3 skip-without-reason", "tests/test_a.py:4 skip-without-reason"),
+	c("py skipif with issue on the next line of a multi-line call", "tests/test_a.py", `@pytest.mark.skipif(\n    sys.platform == "win32",\n    reason="PROJ-5",\n)\n`),
 	c("py skip with issue", "tests/test_a.py", `@pytest.mark.skip  # PROJ-12\ndef test_a(): ...\n`),
 	c("py pytest.skip()", "pkg/a_test.py", `def test_a():\n    pytest.skip()\n`, "pkg/a_test.py:2 skip-without-reason"),
 	c("py sleep", "tests/conftest.py", `import time\ntime.sleep(1)\n`, "tests/conftest.py:2 sleep"),
 	c("py non-test file untouched", "pkg/a.py", `time.sleep(1)\n`),
 	// JVM
 	c("kotlin Disabled bare", "app/src/test/kotlin/AFoo.kt", `@Disabled\nfun a() {}\n`, "app/src/test/kotlin/AFoo.kt:1 skip-without-reason"),
-	c("kotlin Disabled with text", "app/src/test/kotlin/AFoo.kt", `@Disabled("not supported on CI")\nfun a() {}\n`),
+	c("kotlin Disabled with text", "app/src/test/kotlin/AFoo.kt", `@Disabled("not supported on CI")\nfun a() {}\n`, "app/src/test/kotlin/AFoo.kt:1 skip-without-reason"),
 	c("kotlin Disabled with issue", "app/src/test/kotlin/AFoo.kt", `@Disabled("flaky, see #12")\nfun a() {}\n`),
 	c("java Ignore bare and sleep", "app/src/test/java/FooTest.java", `@Ignore\npublic void a() { Thread.sleep(100); }\n`, "app/src/test/java/FooTest.java:1 skip-without-reason", "app/src/test/java/FooTest.java:2 sleep"),
-	c("java Ignore with string", "lib/FooTest.java", `@Ignore("slow")\n`),
+	c("java Ignore with string", "lib/FooTest.java", `@Ignore("slow")\n`, "lib/FooTest.java:1 skip-without-reason"),
 	c("android test dir", "app/src/androidTest/kotlin/X.kt", `Thread.sleep(5)\n`, "app/src/androidTest/kotlin/X.kt:1 sleep"),
 	// Go
 	c("go skip bare", "pkg/a_test.go", `func TestA(t *testing.T) {\n\tt.Skip()\n}\n`, "pkg/a_test.go:2 skip-without-reason"),
-	c("go skip with text", "pkg/a_test.go", `\tt.Skip("needs docker")\n`),
+	c("go skip with text", "pkg/a_test.go", `\tt.Skip("needs docker")\n`, "pkg/a_test.go:1 skip-without-reason"),
+	c("go skip with issue, Skipf", "pkg/a_test.go", `\tt.Skipf("x %d", 1)\n\tt.Skip("needs docker, #44")\n`, "pkg/a_test.go:1 skip-without-reason"),
 	c("go SkipNow and sleep", "pkg/a_test.go", `t.SkipNow()\ntime.Sleep(time.Second)\n`, "pkg/a_test.go:1 skip-without-reason", "pkg/a_test.go:2 sleep"),
 	// Swift
 	c("swift XCTSkipIf bare", "AppTests/FooTests.swift", `try XCTSkipIf(true)\n`, "AppTests/FooTests.swift:1 skip-without-reason"),
-	c("swift XCTSkipIf with message", "AppTests/FooTests.swift", `try XCTSkipIf(true, "no simulator")\n`),
+	c("swift XCTSkipIf with message", "AppTests/FooTests.swift", `try XCTSkipIf(true, "no simulator")\n`, "AppTests/FooTests.swift:1 skip-without-reason"),
+	c("swift XCTSkipIf with issue and Swift Testing disabled", "AppTests/FooTests.swift", `@Test(.disabled("later"))\ntry XCTSkipIf(true, "no simulator PROJ-3")\n`, "AppTests/FooTests.swift:1 skip-without-reason"),
 	c("swift sleeps", "AppTests/FooTests.swift", `sleep(1)\nusleep(10)\nThread.sleep(forTimeInterval: 1)\n`, "AppTests/FooTests.swift:1 sleep", "AppTests/FooTests.swift:2 sleep", "AppTests/FooTests.swift:3 sleep"),
 	// C#
 	c("cs Ignore bare", "Foo.Tests/FooTests.cs", `[Ignore]\npublic void A() {}\n`, "Foo.Tests/FooTests.cs:1 skip-without-reason"),
 	c("cs Fact empty skip", "Foo.Tests/FooTests.cs", `[Fact(Skip = "")]\n`, "Foo.Tests/FooTests.cs:1 skip-without-reason"),
-	c("cs Fact skip with text", "Foo.Tests/FooTests.cs", `[Fact(Skip = "slow")]\n`),
+	c("cs Fact skip with text", "Foo.Tests/FooTests.cs", `[Fact(Skip = "slow")]\n[Test, Ignore]\n[Ignore("later")]\n[Fact(Skip = "slow, #3")]\n`, "Foo.Tests/FooTests.cs:1 skip-without-reason", "Foo.Tests/FooTests.cs:2 skip-without-reason", "Foo.Tests/FooTests.cs:3 skip-without-reason"),
 	c("cs Task.Delay", "FooTests/Bar.cs", `await Task.Delay(100);\n`, "FooTests/Bar.cs:1 sleep"),
 	// Gherkin
 	c("gherkin only", "features/a.feature", `@only\nScenario: a\n`, "features/a.feature:1 focused"),
@@ -123,7 +135,20 @@ RULE_CASES.push(
 	c("skip method call is not a test skip", "src/W.test.tsx", `act(() => result.current.skip());\nresult.current.only(1);\n`),
 	c("skip variants of the test API", "src/a.test.ts", `it.skip.each([1])("x", () => {});\ntest.skip("y");\nsuite.skip("z");\ndescribe.concurrent.skip("w");\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason", "src/a.test.ts:3 skip-without-reason", "src/a.test.ts:4 skip-without-reason"),
 	c("only variants of the test API", "src/a.test.ts", `test.concurrent.only("x");\ndescribe.only.each([1])("y", () => {});\n`, "src/a.test.ts:1 focused", "src/a.test.ts:2 focused"),
-	c("skipIf is a conditional skip, not flagged", "src/a.test.ts", `it.skipIf(win)("x");\n`),
+	c("skipIf, runIf and conditional test.skip need an issue too", "src/a.test.ts", `it.skipIf(win)("x");\nit.runIf(mac)("y");\ntest.skip(browserName === "firefox", "bug");\ntest.fixme("z");\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason", "src/a.test.ts:3 skip-without-reason", "src/a.test.ts:4 skip-without-reason"),
+	c("conditional skip with a ticket", "src/a.test.ts", `test.skip(browserName === "firefox", "PROJ-9 firefox bug");\n`),
+	c("playwright describe modifiers", "e2e/a.spec.ts", `test.describe.only("a", () => {});\ntest.describe.serial.only("b", () => {});\ntest.describe.parallel.only("c", () => {});\ntest.describe.skip("d", () => {});\ntest.describe.fixme("e", () => {});\n`, "e2e/a.spec.ts:1 focused", "e2e/a.spec.ts:2 focused", "e2e/a.spec.ts:3 focused", "e2e/a.spec.ts:4 skip-without-reason", "e2e/a.spec.ts:5 skip-without-reason"),
+	c("gherkin skip with ticket-less reason comment", "features/a.feature", `@skip # needs docker\nScenario: a\n`, "features/a.feature:1 skip-without-reason"),
+	c("sleep(0) and asyncio.sleep(0) yield, not wait", "tests/test_a.py", `await asyncio.sleep(0)\ntime.sleep(0)\ntime.sleep(0.5)\n`, "tests/test_a.py:3 sleep"),
+	c("timers/promises setTimeout is a sleep", "src/a.test.ts", `await setTimeout(100);\n`, "src/a.test.ts:1 sleep"),
+	c("multi-line block comment is a comment", "src/a.test.ts", `/*\n it.only("x");\n page.waitForTimeout(1);\n*/\nit.only("y"); /* a */ ok();\n/* b */ it.only("z");\n`, "src/a.test.ts:5 focused", "src/a.test.ts:6 focused"),
+	c("ginkgo focus", "pkg/a_test.go", `FIt("x", func() {})\nFDescribe("y", func() {})\nFContext("z", func() {})\n`, "pkg/a_test.go:1 focused", "pkg/a_test.go:2 focused", "pkg/a_test.go:3 focused"),
+	c("TimeUnit sleep", "app/src/test/java/FooTest.java", `TimeUnit.SECONDS.sleep(1);\n`, "app/src/test/java/FooTest.java:1 sleep"),
+	c("cypress, nest and mocha test globs", "cypress/e2e/a.cy.ts", `it.only("x");\n`, "cypress/e2e/a.cy.ts:1 focused"),
+	c("nest e2e-spec glob", "app.e2e-spec.ts", `it.only("x");\n`, "app.e2e-spec.ts:1 focused"),
+	c("mocha test dir glob", "test/helpers.js", `it.only("x");\n`, "test/helpers.js:1 focused"),
+	c("e2e dir glob", "e2e/flow.ts", `it.only("x");\n`, "e2e/flow.ts:1 focused"),
+	c("e2e suffix glob", "src/a.e2e.ts", `it.only("x");\n`, "src/a.e2e.ts:1 focused"),
 	// string literals are not code
 	c("js fixture string", "src/a.test.ts", `["await page.waitForTimeout(500);", 1],\n\`it.only(x)\`;\n'it.skip(y)';\n`),
 	c("code after an escaped quote still counts", "src/a.test.ts", `const s = "a \\" b"; page.waitForTimeout(1);\n`, "src/a.test.ts:1 sleep"),
@@ -214,6 +239,15 @@ const RETRY_CASES: Case[] = [
 ];
 
 RETRY_CASES.push(
+	c("jest.retryTimes inside a string literal is a fixture", "src/a.test.ts", `["jest.retryTimes(", 1];\n`),
+	c("mocha this.retries and playwright configure", "src/a.test.ts", `this.retries(2);\ntest.describe.configure({ mode: "serial", retries: 2 });\ntest.describe.configure({ retries: 0 });\n`, "src/a.test.ts:1 retries", "src/a.test.ts:2 retries"),
+	c("pytest flaky marker and reruns=", "tests/test_a.py", `@pytest.mark.flaky(reruns=3)\ndef test_a(): ...\n`, "tests/test_a.py:1 retries"),
+	c("cypress zero retries object", "cypress.config.ts", `export default { retries: { runMode: 0, openMode: 0 } };\n`),
+	c("cypress non-zero retries object", "cypress.config.ts", `export default { retries: { runMode: 2, openMode: 0 } };\n`, "cypress.config.ts:1 retries"),
+	c("cypress multi-line retries object", "cypress.config.ts", `retries: {\n\trunMode: 0,\n\topenMode: 1,\n},\n`, "cypress.config.ts:1 retries"),
+	c("cypress multi-line zero object", "cypress.config.ts", `retries: {\n\trunMode: 0,\n\topenMode: 0,\n},\nworkers: 4,\n`),
+	c("flaky marker definition is not a retry", "pyproject.toml", `[tool.pytest.ini_options]\nmarkers = ["flaky: known flaky tests"]\n`),
+	c("flaky dependency is a retry", "requirements-test.txt", `flaky==3.7.0\n`, "requirements-test.txt:1 retries"),
 	c("comment mentioning retries", "playwright.config.ts", `// retain-on-failure, not on-first-retry: with retries: 0 (RFC-0008 §8)\n/* retries: 3 */\n * retries: 3\n`),
 	c("digits after the value are not the value", "playwright.config.ts", `retries: 0, workers: 4,\n`),
 	c("trailing comment digits", "playwright.config.ts", `retries: 0, // was 2\n`),
@@ -254,14 +288,33 @@ test("junit: missing, empty and mismatch", () => {
 	assert.ok(mismatch.hits.some((h) => h.endsWith(" junit-mismatch")), mismatch.stdout);
 });
 
-test("junit: skipped without reason fails, with message or text passes", () => {
-	const bad = `<testcase name="a"><skipped/></testcase>\n<testcase name="b"><skipped message=""></skipped></testcase>\n`;
-	const good = `<testcase name="a"><skipped message="needs docker"/></testcase>\n<testcase name="b"><skipped>flaky, PROJ-1</skipped></testcase>\n`;
-	const r = repo({ "bad.xml": suite(2, bad), "good.xml": suite(2, good) });
-	const b = r.run("--all", "--junit", "bad.xml");
-	assert.equal(b.status, 1);
-	assert.deepEqual(b.hits.map((h) => h.split(" ")[1]), ["junit-skip-without-reason", "junit-skip-without-reason"]);
-	assert.equal(r.run("--all", "--junit", "good.xml").status, 0);
+test("junit: a bare <skipped/> is fine (reasons are checked in the source)", () => {
+	const r = repo({ "bare.xml": suite(2, `<testcase name="a"><skipped/></testcase>\n<testcase name="b"><skipped message=""></skipped></testcase>\n`) });
+	assert.equal(r.run("--all", "--junit", "bare.xml").status, 0);
+});
+
+test("junit: nested suites are not double counted, single-quoted attributes work", () => {
+	const nested = `<testsuites><testsuite name="o" tests="2"><testsuite name="i" tests="2"><testcase name="a"/><testcase name="b"/></testsuite></testsuite></testsuites>\n`;
+	const quoted = `<testsuite name='s' tests='1'><testcase name='a'/></testsuite>\n`;
+	const bad = `<testsuite name='s' tests='3'><testcase name='a'/></testsuite>\n`;
+	const r = repo({ "n.xml": nested, "q.xml": quoted, "b.xml": bad });
+	assert.equal(r.run("--all", "--junit", "n.xml").status, 0);
+	assert.equal(r.run("--all", "--junit", "q.xml").status, 0);
+	assert.ok(r.run("--all", "--junit", "b.xml").hits.some((h) => h.endsWith(" junit-mismatch")));
+});
+
+test("junit: --junit without --all checks only the reports, even outside a git repo", () => {
+	const r = repo({ "a.test.ts": `it.only("x");\n`, "ok.xml": suite(1, ok(1)), "bad.xml": suite(2, ok(1)) });
+	assert.equal(r.run("--junit", "ok.xml").status, 0);
+	const bad = r.run("--junit", "bad.xml");
+	assert.equal(bad.status, 1);
+	assert.deepEqual(bad.hits.map((h) => h.split(" ")[1]), ["junit-mismatch"]);
+	assert.match(bad.stdout, /test-hygiene: 1 violation\b(?!.*pre-existing)/);
+	const dir = mkdtempSync(join(tmpdir(), "hygiene-nogit-"));
+	writeFileSync(join(dir, "r.xml"), suite(1, ok(1)));
+	const out = spawnSync(process.execPath, [SCRIPT, "--junit", "r.xml"], { cwd: dir, encoding: "utf8" });
+	assert.equal(out.status, 0, out.stdout + out.stderr);
+	assert.equal(r.run("--all", "--junit", "ok.xml").status, 1);
 });
 
 test("junit: only testsuites totals are used when there are no suites", () => {
@@ -273,43 +326,91 @@ test("junit: only testsuites totals are used when there are no suites", () => {
 
 const TASK = `# Task\n\n## Success criteria\n\n| # | Criterion | How verified |\n|---|-----------|--------------|\n| 1 | User logs in | scenario |\n| 2 | Cache is fast | benchmark |\n| 3 | User logs out | @C3 |\n`;
 
+/** A repo on `main` with `base` files, then a branch committing `branchFiles`. */
+function branch(base: Record<string, string>, branchFiles: Record<string, string>) {
+	const r = repo({ "README.md": "x\n", ...base });
+	r.git("switch", "-qc", "feat/x");
+	r.commit(branchFiles);
+	return r;
+}
+const TASK_PATH = "docs/tasks/2026-01-01-a.md";
+
 test("criteria: clean mapping passes", () => {
-	const r = repo({ "docs/tasks/2026-01-01-a.md": TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n\n@C3 @smoke\nScenario: logout\n` });
-	const out = r.run("--all");
+	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n\n@C3 @smoke\nScenario: logout\n` });
+	const out = r.run();
 	assert.equal(out.status, 0, out.stdout);
 });
 
-test("criteria: scenario-verified criterion without a tagged scenario", () => {
-	const r = repo({ "docs/tasks/2026-01-01-a.md": TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n` });
-	const out = r.run("--all");
+test("criteria: scenario-verified criterion without a changed tagged scenario", () => {
+	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n\n@C1\nScenario: login\n` });
+	const out = r.run();
 	assert.equal(out.status, 1);
-	assert.deepEqual(out.hits, ["docs/tasks/2026-01-01-a.md:9 criterion-without-scenario"]);
+	assert.deepEqual(out.hits, [`${TASK_PATH}:9 criterion-without-scenario`]);
 });
 
-test("criteria: two scenarios for one criterion", () => {
-	const r = repo({ "docs/tasks/2026-01-01-a.md": TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C1\nScenario Outline: b\n@C3\nScenario: c\n` });
-	const out = r.run("--all");
+test("criteria: two changed scenarios for one criterion", () => {
+	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C1\nScenario Outline: b\n@C3\nScenario: c\n` });
+	const out = r.run();
 	assert.equal(out.status, 1);
-	assert.ok(out.hits.some((h) => h.endsWith(" criterion-many-scenarios")), out.stdout);
-	assert.equal(out.hits.length, 1);
+	assert.deepEqual(out.hits.map((h) => h.split(" ")[1]), ["criterion-many-scenarios"]);
 });
 
-test("criteria: tag without a criterion", () => {
-	const r = repo({ "docs/tasks/2026-01-01-a.md": TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C3\nScenario: c\n@C9\nScenario: z\n` });
-	const out = r.run("--all");
-	assert.deepEqual(out.hits, ["features/a.feature:6 tag-without-criterion"]);
+test("criteria: changed tag without a criterion", () => {
+	const r = branch({}, { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: a\n@C3\nScenario: c\n@C9\nScenario: z\n` });
+	assert.deepEqual(r.run().hits, ["features/a.feature:6 tag-without-criterion"]);
 });
 
 test("criteria: not checked without feature files or without task files", () => {
-	assert.equal(repo({ "docs/tasks/2026-01-01-a.md": TASK }).run("--all").status, 0);
-	assert.equal(repo({ "features/a.feature": `@C9\nScenario: z\n` }).run("--all").status, 0);
+	assert.equal(branch({}, { [TASK_PATH]: TASK }).run().status, 0);
+	assert.equal(branch({}, { "features/a.feature": `@C9\nScenario: z\n` }).run().status, 0);
 });
 
-test("criteria: not ratcheted, also reported in PR mode", () => {
-	const r = repo({ "docs/tasks/2026-01-01-a.md": TASK, "features/a.feature": `@C1\nScenario: a\n` });
+test("criteria: old tags never fail a run, and --all skips the tag check", () => {
+	const bad = { [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C9\nScenario: a\n  Given x\n@C1\nScenario: b\n@C1\nScenario: c\n` };
+	const r = branch(bad, { "README.md": "y\n" });
+	assert.equal(r.run().status, 0);
+	assert.equal(r.run("--all").status, 0);
+});
+
+test("criteria: changing a step line counts as changing the scenario", () => {
+	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then b\n\n@C1\nScenario: ok\n  Given z\n` }, { "features/a.feature": `Feature: auth\n@C9\nScenario: old\n  Given a\n  Then B\n\n@C1\nScenario: ok\n  Given z\n` });
+	assert.deepEqual(r.run().hits, ["features/a.feature:2 tag-without-criterion"]);
+});
+
+test("criteria: unchanged scenarios with the same tag are not counted", () => {
+	const r = branch({ [TASK_PATH]: TASK, "features/a.feature": `Feature: auth\n@C1\nScenario: old\n  Given a\n@C3\nScenario: o3\n` }, { "features/b.feature": `Feature: more\n@C1\nScenario: new\n  Given b\n` });
+	assert.equal(r.run().status, 0);
+});
+
+test("ratchet: a renamed file is not all-new", () => {
+	const r = repo({ "old.test.ts": `it.only("old");\nok();\n` });
 	r.git("switch", "-qc", "feat/x");
-	r.commit({ "README.md": "y\n" });
-	assert.equal(r.run().status, 1);
+	r.git("mv", "old.test.ts", "moved.test.ts");
+	r.git("commit", "-qm", "move");
+	const out = r.run();
+	assert.equal(out.status, 0, out.stdout);
+	assert.match(out.stdout, /pre-existing: 1/);
+});
+
+test("parseDiff: '\\ No newline at end of file' does not eat the hunk", () => {
+	const d = "+++ b/a.ts\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n@@ -5,0 +6 @@\n+c\n";
+	assert.deepEqual([...(parseDiff(d).get("a.ts") ?? [])], [1, 6]);
+});
+
+test("a shallow clone without a merge base exits 2 with a hint", () => {
+	const remote = repo({ "a.txt": "1\n" });
+	remote.git("switch", "-qc", "feat");
+	remote.commit({ "b.txt": "2\n" });
+	remote.git("switch", "-q", "main");
+	remote.commit({ "c.txt": "3\n" });
+	remote.git("switch", "-q", "feat");
+	const clone = mkdtempSync(join(tmpdir(), "hygiene-shallow-"));
+	const sh = (cwd: string, ...args: string[]) => assert.equal(spawnSync("git", args, { cwd, encoding: "utf8" }).status, 0, args.join(" "));
+	sh(tmpdir(), "clone", "-q", "--depth", "1", "--branch", "feat", `file://${remote.dir}`, clone);
+	sh(clone, "fetch", "-q", "--depth", "1", "origin", "main:refs/remotes/origin/main");
+	const r = spawnSync(process.execPath, [SCRIPT, "--base", "origin/main"], { cwd: clone, encoding: "utf8" });
+	assert.equal(r.status, 2, r.stdout + r.stderr);
+	assert.match(r.stderr, /no merge base with origin\/main.*fetch-depth: 0/);
 });
 
 test("config: extra patterns, extra test files and ignore", () => {

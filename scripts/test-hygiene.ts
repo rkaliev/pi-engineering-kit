@@ -1,25 +1,27 @@
 /**
- * Stack-independent test hygiene check: focused tests, skips without a reason, sleeps, retries,
+ * Stack-independent test hygiene check: focused tests, skips without a linked issue, sleeps, retries,
  * JUnit report sanity and success-criterion to scenario tags. One self-contained file with no
  * imports from the repo, so it can be copied verbatim into any project and run in its CI.
  *
- *   node test-hygiene.ts [--all] [--base <ref>] [--junit <file-or-dir> ...] [--config <path>]
+ *   node .ci/test-hygiene.mts [--all] [--base <ref>] [--junit <file-or-dir> ...] [--config <path>]
  *
  * Default (PR mode) is a ratchet: only violations on lines added since the merge-base with the
  * base branch fail the run; older ones are only counted as "pre-existing". --all checks every line
- * of every tracked file. JUnit and criterion-tag checks are never ratcheted.
+ * of every tracked file. `--junit` alone checks only the reports (no source scan, no diff).
+ * Criterion tags (@C<n>) are checked only for scenarios changed in the branch, never with --all;
+ * JUnit checks are never ratcheted.
  *
  * A line opts out with an inline comment `test-hygiene: allow <reason>`; an allow without a reason
  * is itself a violation. Config (.claude/test-hygiene.json, else .pi/test-hygiene.json, or
  * --config): { "testFiles": [glob], "ignore": [glob], "patterns": [{ id, files, regex, message }] }.
  * Exit 0: no new violation, 1: violations, 2: usage, config or git error.
  */
+export const VERSION = "2";
+
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-export const VERSION = "1";
 
 export type Violation = { path: string; line: number; rule: string; message: string };
 export type Pattern = { id: string; files: string; regex: string; message: string };
@@ -80,6 +82,12 @@ const DEFAULT_TEST_GLOBS = [
 	"**/*.Tests/**/*.cs",
 	"**/*Test*.cs",
 	"**/*.feature",
+	"**/*.cy.{js,jsx,ts,tsx}",
+	"**/*.e2e-spec.{js,ts}",
+	"**/*.e2e.{js,ts}",
+	"**/test/**/*.{js,ts,mjs,cjs}",
+	"**/tests/**/*.{js,ts,mjs,cjs}",
+	"**/e2e/**/*.{js,ts}",
 ].map(globToRegExp);
 
 /** True for a path matching the default test globs or the config's `testFiles`. */
@@ -110,44 +118,63 @@ function langOf(path: string): Lang | undefined {
 type LineRule = { id: string; langs: Lang[]; re: RegExp; message: string; issue?: boolean; context?: RegExp };
 
 const FOCUSED = "focused test: nothing else in the suite runs; remove it";
-const SKIPPED = "skipped test without a reason: add an issue reference (#123, URL or ABC-123) on this line or the line above, or delete the test";
+const SKIPPED = "skipped test without a linked issue: add an issue reference (#123, URL or ABC-123) on this line or the line above, or delete the test";
 const SLEEP = "fixed sleep in a test: wait for a condition or event instead";
 
-/** The JS test API with its modifiers: `it`, `test.concurrent`, `describe.each`, ... */
-const JS_API = String.raw`(?<![\w.$])(?:it|test|describe|context|suite|bench)(?:\.(?:concurrent|each|sequential|only|skip|todo|skipIf|runIf))*`;
+/** The JS test API with its modifiers: `it`, `test.concurrent`, `describe.each`, `test.describe.serial`, ... */
+const JS_API = String.raw`(?<![\w.$])(?:it|test|describe|context|suite|bench)(?:\.(?:concurrent|each|sequential|only|skip|todo|fixme|skipIf|runIf|describe|serial|parallel))*`;
+const CALL_AFTER = String.raw`(?=\s*[(.<])`;
+/** `sleep(n)` with a real duration: `sleep(0)` only yields. */
+const SLEEP_CALL = String.raw`\bsleep\(\s*(?!0\s*\))[^\s)]`;
 
 const LINE_RULES: LineRule[] = [
-	{ id: "focused", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.only\b(?=\s*[(.<])|(?<![\w.$])(?:fit|fdescribe)\(`), message: FOCUSED },
+	{ id: "focused", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.only\b${CALL_AFTER}|(?<![\w.$])(?:fit|fdescribe)\(`), message: FOCUSED },
+	{ id: "focused", langs: ["go"], re: /(?<![\w.$])F(?:It|Describe|Context|When|Entry|DescribeTable|Specify)\(/, message: FOCUSED },
 	{ id: "focused", langs: ["feature"], re: /(?:^|\s)@(?:only|focus)\b/, message: FOCUSED },
 
-	{ id: "skip-without-reason", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.(?:skip|todo)\b(?=\s*[(.<])|(?<![\w.$])(?:xit|xdescribe|xtest)\(`), message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["py"], re: /@pytest\.mark\.skip\b(?!\s*\((?:[^)]*reason\s*=|\s*$))|\bpytest\.skip\(\s*\)/, message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["jvm"], re: /@(?:Disabled|Ignore)\b(?!\s*\(\s*(?:value\s*=\s*)?"[^"])/, message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["go"], re: /\bt\.Skip(?:Now)?\(\s*\)/, message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["swift"], re: /XCTSkip(?:(?:If|Unless)\((?![^\n]*,\s*")|\(\s*\))/, message: SKIPPED, issue: true },
-	{ id: "skip-without-reason", langs: ["cs"], re: /\bSkip\s*=\s*""|\[Ignore(?:\(\s*\))?\]|\[(?:Fact|Theory)\(\s*Skip\b(?!\s*=\s*"[^"])/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["js"], re: new RegExp(String.raw`${JS_API}\.(?:skip|todo|fixme|skipIf|runIf)\b${CALL_AFTER}|(?<![\w.$])(?:xit|xdescribe|xtest)\(`), message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["py"], re: /@pytest\.mark\.skip(?:if)?\b|\bpytest\.skip\(|@unittest\.skip(?:If|Unless)?\b/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["jvm"], re: /@(?:Disabled|Ignore)\b/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["go"], re: /\bt\.Skip(?:f|Now)?\(/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["swift"], re: /XCTSkip(?:If|Unless)?\(|[(,]\s*\.disabled\(/, message: SKIPPED, issue: true },
+	{ id: "skip-without-reason", langs: ["cs"], re: /\[(?:Fact|Theory)\b[^\]]*\bSkip\b|\[[^\]]*\bIgnore\b[^\]]*\]/, message: SKIPPED, issue: true },
 	{ id: "skip-without-reason", langs: ["feature"], re: /(?:^|\s)@(?:skip|wip|ignore)\b/, message: SKIPPED, issue: true },
 
-	{ id: "sleep", langs: ["js"], re: /\bwaitForTimeout\(|\bcy\.wait\(\d|(?<!(?:[Ss]kipping|[Ff]ake|[Mm]ock|[Cc]lock)\w*\.)\bsleep\(\s*[^\s)]/, message: SLEEP },
+	{ id: "sleep", langs: ["js"], re: new RegExp(String.raw`\bwaitForTimeout\(|\bcy\.wait\(\d|(?<!(?:[Ss]kipping|[Ff]ake|[Mm]ock|[Cc]lock)\w*\.)${SLEEP_CALL}|\bawait\s+setTimeout\(\s*[^\s)]`), message: SLEEP },
 	{ id: "sleep", langs: ["js"], re: /\bsetTimeout\(\s*(?:resolve|res\w*|r\s*[,)]|\(\s*\)\s*=>\s*(?:\{\s*)?res)/, context: /new Promise/, message: SLEEP },
-	{ id: "sleep", langs: ["py"], re: /\bsleep\(/, message: SLEEP },
-	{ id: "sleep", langs: ["jvm"], re: /\bThread\.sleep\(/, message: SLEEP },
+	{ id: "sleep", langs: ["py"], re: new RegExp(SLEEP_CALL), message: SLEEP },
+	{ id: "sleep", langs: ["jvm"], re: /\bThread\.sleep\(|\bTimeUnit\.\w+\.sleep\(/, message: SLEEP },
 	{ id: "sleep", langs: ["go"], re: /\btime\.Sleep\(/, message: SLEEP },
 	{ id: "sleep", langs: ["swift"], re: /\bu?sleep\(|\bThread\.sleep\b/, message: SLEEP },
 	{ id: "sleep", langs: ["cs"], re: /\bTask\.Delay\(|\bThread\.Sleep\(/, message: SLEEP },
 ];
 
-/** Retry settings in config files, matched on the file's base name; `lang` instead matches every file of that language. */
-type RetryRule = { file?: RegExp; lang?: Lang; re: RegExp };
+/**
+ * Retry settings, matched on the file's base name (`file`, strings count: a Gradle plugin id is a string)
+ * or on every file of a language (`lang`, strings are ignored: test code may quote the API in fixtures).
+ * `multi` sees the code of this line and the following ones (comments cut), for objects spread over lines.
+ */
+type RetryRule = { file?: RegExp; lang?: Lang; re?: RegExp; multi?: (code: string[], i: number) => boolean };
 
 const RETRIES = "retries hide flaky tests: fix the test instead of rerunning it";
 
+/** Cypress `retries: 2` or `retries: { runMode: 2 }` (also over several lines); an all-zero object is fine. */
+function cypressRetries(code: string[], i: number): boolean {
+	const m = /"?\bretries"?\s*:\s*(\{|[1-9])/.exec(code[i]);
+	if (!m) return false;
+	if (m[1] !== "{") return true;
+	let inner = code[i].slice(m.index + m[0].length);
+	for (let k = i; k < Math.min(code.length, i + 8) && !inner.includes("}"); k++) if (k > i) inner += ` ${code[k]}`;
+	return /(?<![\w.$])[1-9]/.test(inner.split("}")[0]);
+}
+
 const RETRY_RULES: RetryRule[] = [
 	{ file: /^playwright\.config\./, re: /\bretries\s*:[^,}\n/]*?(?<![\w.$])[1-9]\d*(?![\w.])/ },
-	{ file: /^(?:cypress\.config\..+|cypress\.json)$/, re: /"?\bretries"?\s*:\s*(?:\{|[1-9])/ },
-	{ lang: "js", re: /\bjest\.retryTimes\(/ },
+	{ file: /^(?:cypress\.config\..+|cypress\.json)$/, multi: cypressRetries },
+	{ lang: "js", re: /\bjest\.retryTimes\(|\bthis\.retries\(\s*(?!0\s*\))|\bdescribe\.configure\(\s*\{[^}]*\bretries\s*:\s*[1-9]/ },
+	{ lang: "py", re: /@pytest\.mark\.flaky\(|\breruns\s*=\s*(?!0\b)\S/ },
 	{ file: /^(?:vitest|vite)\.config\./, re: /\bretry\s*:\s*[1-9]/ },
-	{ file: /^(?:pytest\.ini|pyproject\.toml|setup\.cfg|tox\.ini|requirements.*\.txt)$/, re: /--reruns(?![ =]0\b)|pytest-rerunfailures|\bflaky\b/ },
+	{ file: /^(?:pytest\.ini|pyproject\.toml|setup\.cfg|tox\.ini|requirements.*\.txt)$/, re: /--reruns(?![ =]0\b)|pytest-rerunfailures|^\s*flaky(?![\w:-])|["']flaky(?:[<>=!~\s;\[]|["'](?!\s*:))/ },
 	{ file: /\.gradle(?:\.kts)?$/, re: /org\.gradle\.test-retry|\bretry\s*\{/ },
 	{ file: /\.ya?ml$|^Makefile$/, re: /--rerun-fails\b/ },
 	{ file: /\.ya?ml$|\.xcconfig$/, re: /-retry-tests-on-failure|-test-iterations\b.*retry|retry.*-test-iterations\b/ },
@@ -183,15 +210,33 @@ function styleOf(path: string): Style {
 	return { comment: "#", strings: false };
 }
 
-/** Per-line view: where a comment starts and which characters sit inside a string literal. */
-function mask(line: string, style: Style): { comment: number; inString: boolean[] } {
+/** Per-line view: where a trailing comment starts, which characters sit in a string literal or a block comment. */
+type View = { comment: number; inString: boolean[]; dead: boolean[]; open: boolean };
+
+/** `open`: the line ends inside a block comment that continues on the next line. */
+function mask(line: string, style: Style, inBlock: boolean): View {
 	const inString: boolean[] = new Array(line.length).fill(false);
+	const dead: boolean[] = new Array(line.length).fill(false);
 	const trimmed = line.trimStart();
 	const lead = line.length - trimmed.length;
-	if (style.comment === "//" && /^(?:\/\/|\/\*|\*)/.test(trimmed)) return { comment: lead, inString };
-	if (style.comment === "#" && trimmed.startsWith("#")) return { comment: lead, inString };
+	let i = 0;
+	if (inBlock) {
+		const close = line.indexOf("*/");
+		if (close < 0) return { comment: 0, inString, dead, open: true };
+		dead.fill(true, 0, close + 2);
+		i = close + 2;
+	} else {
+		if (style.comment === "//" && /^(?:\/\/|\/\*|\*)/.test(trimmed)) {
+			// a one-line block comment may be followed by code; anything else is a comment line
+			const close = trimmed.startsWith("/*") ? line.indexOf("*/", lead + 2) : -1;
+			if (close < 0) return { comment: lead, inString, dead, open: trimmed.startsWith("/*") };
+			dead.fill(true, 0, close + 2);
+			i = close + 2;
+		}
+		if (style.comment === "#" && trimmed.startsWith("#")) return { comment: lead, inString, dead, open: false };
+	}
 	let quote = "";
-	for (let i = 0; i < line.length; i++) {
+	for (; i < line.length; i++) {
 		const ch = line[i];
 		if (quote) {
 			inString[i] = true;
@@ -200,18 +245,37 @@ function mask(line: string, style: Style): { comment: number; inString: boolean[
 			} else if (ch === quote) quote = "";
 			continue;
 		}
-		if (style.comment === "//" && (line.startsWith("//", i) || line.startsWith("/*", i))) return { comment: i, inString };
-		if (style.comment === "#" && ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) return { comment: i, inString };
+		if (style.comment === "//" && line.startsWith("//", i)) return { comment: i, inString, dead, open: false };
+		if (style.comment === "//" && line.startsWith("/*", i)) {
+			const close = line.indexOf("*/", i + 2);
+			if (close < 0) return { comment: i, inString, dead, open: true };
+			dead.fill(true, i, close + 2);
+			i = close + 1;
+			continue;
+		}
+		if (style.comment === "#" && ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) return { comment: i, inString, dead, open: false };
 		if (style.strings && (ch === '"' || ch === "'" || ch === "`")) {
 			quote = ch;
 			inString[i] = true;
 		}
 	}
-	return { comment: line.length, inString };
+	return { comment: line.length, inString, dead, open: false };
 }
 
 /** A line that opens an `if` / `else` branch or is a one-line guard (`if (x) return;`). */
 const GUARD = /^\s*(?:\}\s*)?(?:if|else)\b/;
+
+/** The line, plus the following lines while its parentheses are still open (an annotation spread over several lines). */
+function issueWindow(lines: string[], i: number): string {
+	let text = lines[i];
+	let depth = 0;
+	for (let k = i; k < Math.min(lines.length, i + 4); k++) {
+		if (k > i) text += `\n${lines[k]}`;
+		depth += (lines[k].match(/\(/g) ?? []).length - (lines[k].match(/\)/g) ?? []).length;
+		if (depth <= 0) break;
+	}
+	return text;
+}
 
 const LOOP = /(?<![\w.$])(?:while|for|loop|repeat)\b|\bdo\s*\{/;
 
@@ -227,13 +291,15 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 	const out: Violation[] = [];
 	const lines = text.split(/\r?\n/);
 	// code view of each line: comment cut off, string contents blanked (for loop detection)
-	const views = lines.map((l) => mask(l, style));
-	const bare = lines.map((l, i) => [...l.slice(0, views[i].comment)].map((ch, k) => (views[i].inString[k] ? " " : ch)).join(""));
+	const views: View[] = [];
+	for (const l of lines) views.push(mask(l, style, views.length > 0 && views[views.length - 1].open));
+	const bare = lines.map((l, i) => [...l.slice(0, views[i].comment)].map((ch, k) => (views[i].inString[k] || views[i].dead[k] ? " " : ch)).join(""));
+	const code = lines.map((l, i) => [...l.slice(0, views[i].comment)].map((ch, k) => (views[i].dead[k] ? " " : ch)).join(""));
 	/** Does `re` match line `i` at a position that is real code (outside strings and comments)? */
 	const hit = (re: RegExp, i: number, strings = false): RegExpMatchArray | undefined => {
 		const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
 		for (const m of lines[i].matchAll(g)) {
-			if (m.index < views[i].comment && (strings || !views[i].inString[m.index])) return m;
+			if (m.index < views[i].comment && !views[i].dead[m.index] && (strings || !views[i].inString[m.index])) return m;
 		}
 		return undefined;
 	};
@@ -250,7 +316,7 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 			const m = hit(r.re, i);
 			if (!m) continue;
 			if (r.context && !r.context.test(`${prev}\n${line}`)) continue;
-			if (r.issue && (ISSUE_REF.test(line) || ISSUE_REF.test(prev))) continue;
+			if (r.issue && ISSUE_REF.test(`${prev}\n${issueWindow(lines, i)}`)) continue;
 			if (r.id === "sleep") {
 				// polling is a condition wait: a loop opens in the 4 lines above, or an `if` guards the sleep
 				const loop = bare.slice(Math.max(0, i - 4), i).some((l) => LOOP.test(l));
@@ -259,7 +325,7 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 			}
 			add(r.id, r.message);
 		}
-		if (retryRules.some((r) => hit(r.re, i, true))) add("retries", RETRIES);
+		if (retryRules.some((r) => (r.multi ? r.multi(code, i) : r.re && hit(r.re, i, r.lang === undefined)))) add("retries", RETRIES);
 		for (const p of custom) if (p.re.test(line)) add(p.id, p.message);
 	}
 	return out;
@@ -267,43 +333,44 @@ export function scanText(path: string, text: string, config: Config = EMPTY_CONF
 
 // ---------------------------------------------------------------- JUnit
 
-const ATTRS = /([\w:.-]+)="([^"]*)"/g;
+const ATTRS = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
 function attrs(tag: string): Record<string, string> {
 	const out: Record<string, string> = {};
-	for (const m of tag.matchAll(ATTRS)) out[m[1]] = m[2];
+	for (const m of tag.matchAll(ATTRS)) out[m[1]] = m[2] ?? m[3] ?? "";
 	return out;
 }
-
-const lineAt = (text: string, index: number): number => text.slice(0, index).split("\n").length;
 
 type JunitTotals = { tests: number; failures: number; errors: number; skipped: number; cases: number };
 
 /** Check one JUnit XML text (regex based, no XML parser). Totals come back for aggregate checks. */
 export function checkJunitText(path: string, text: string): { violations: Violation[]; totals: JunitTotals } {
-	const violations: Violation[] = [];
-	const sum = (tag: RegExp) => {
-		const t = { tests: 0, failures: 0, errors: 0, skipped: 0 };
-		let found = false;
-		for (const m of text.matchAll(tag)) {
-			found = true;
-			const a = attrs(m[0]);
-			for (const k of Object.keys(t) as (keyof typeof t)[]) t[k] += Number(a[k] ?? 0) || 0;
+	const declared = { tests: 0, failures: 0, errors: 0, skipped: 0 };
+	// outermost <testsuite> elements only, so nested suites are not counted twice
+	let depth = 0;
+	let found = false;
+	for (const m of text.matchAll(/<(\/?)testsuite\b([^>]*)>/g)) {
+		if (m[1]) {
+			depth = Math.max(0, depth - 1);
+			continue;
 		}
-		return found ? t : undefined;
-	};
-	const declared = sum(/<testsuite\b[^>]*>/g) ?? sum(/<testsuites\b[^>]*>/g) ?? { tests: 0, failures: 0, errors: 0, skipped: 0 };
-	let cases = 0;
-	for (const m of text.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
-		cases++;
-		const skipped = m[2] === undefined ? null : /<skipped\b([^>]*?)(?:\/>|>([\s\S]*?)<\/skipped>)/.exec(m[2]);
-		if (!skipped) continue;
-		const message = (attrs(skipped[1]).message ?? "").trim();
-		const body = (skipped[2] ?? "").replace(/<!\[CDATA\[|\]\]>/g, "").trim();
-		if (!message && !body) {
-			violations.push({ path, line: lineAt(text, m.index), rule: "junit-skip-without-reason", message: "skipped test case has no message or text" });
+		const selfClosing = m[2].trimEnd().endsWith("/");
+		if (depth === 0) {
+			found = true;
+			const a = attrs(m[2]);
+			for (const k of Object.keys(declared) as (keyof typeof declared)[]) declared[k] += Number(a[k] ?? 0) || 0;
+		}
+		if (!selfClosing) depth++;
+	}
+	if (!found) {
+		const top = /<testsuites\b([^>]*)>/.exec(text);
+		if (top) {
+			const a = attrs(top[1]);
+			for (const k of Object.keys(declared) as (keyof typeof declared)[]) declared[k] = Number(a[k] ?? 0) || 0;
 		}
 	}
+	const cases = (text.match(/<testcase\b/g) ?? []).length;
+	const violations: Violation[] = [];
 	if (declared.tests !== cases) {
 		violations.push({ path, line: 1, rule: "junit-mismatch", message: `declares ${declared.tests} tests but contains ${cases} test cases (crashed shard?)` });
 	}
@@ -366,35 +433,77 @@ function parseCriteria(file: Source): Criterion[] {
 	return out;
 }
 
-/** Cross-check `@C<n>` scenario tags in .feature files against the success-criteria tables in task files. */
-export function checkCriteria(tasks: Source[], features: Source[]): Violation[] {
+type Block = { tags: { n: number; line: number }[]; lines: number[]; feature: boolean };
+
+/** Feature and scenario blocks of a .feature file: their tags and the lines that belong to them (tags, header, steps, examples). */
+function featureBlocks(text: string): Block[] {
+	const blocks: Block[] = [];
+	const fresh = (): Block => ({ tags: [], lines: [], feature: false });
+	let pending = fresh();
+	const st: { current: Block | undefined; last: Block | undefined } = { current: undefined, last: undefined };
+	const close = () => {
+		if (st.current) {
+			blocks.push(st.current);
+			st.last = st.current;
+		}
+		st.current = undefined;
+	};
+	const lines = text.split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		const t = lines[i].trim();
+		const ln = i + 1;
+		if (!t || t.startsWith("#")) continue;
+		if (t.startsWith("@")) {
+			close();
+			for (const m of t.matchAll(/@C(\d+)\b/g)) pending.tags.push({ n: Number(m[1]), line: ln });
+			pending.lines.push(ln);
+		} else if (/^(?:Feature|Scenario|Scenario Outline|Scenario Template|Example):/.test(t)) {
+			close();
+			st.current = { tags: pending.tags, lines: [...pending.lines, ln], feature: t.startsWith("Feature:") };
+			pending = fresh();
+		} else if (/^(?:Examples|Scenarios):/.test(t) && (st.current ?? st.last)) {
+			const target = (st.current ?? st.last) as Block;
+			target.lines.push(...pending.lines, ln);
+			st.current = target;
+			pending = fresh();
+		} else if (/^(?:Rule|Background):/.test(t)) {
+			close();
+			pending = fresh();
+		} else if (st.current && !st.current.feature) st.current.lines.push(ln);
+	}
+	close();
+	return blocks;
+}
+
+/**
+ * Cross-check `@C<n>` scenario tags against the success-criteria tables in task files, looking only at
+ * what the branch changed: scenarios (header, tag, step or example lines added) and task files with added lines.
+ * `added` maps a path to its added line numbers. Old scenarios and old tags never produce a violation.
+ */
+export function checkCriteria(tasks: Source[], features: Source[], added: Map<string, Set<number>>): Violation[] {
 	const criteria = tasks.flatMap(parseCriteria);
 	const known = new Set(criteria.map((c) => c.n));
+	const changedTasks = new Set(tasks.filter((t) => (added.get(t.path)?.size ?? 0) > 0).map((t) => t.path));
 	const tags = new Map<number, { path: string; line: number }[]>();
 	for (const f of features) {
-		const lines = f.text.split(/\r?\n/);
-		let pending: { n: number; line: number }[] = [];
-		for (let i = 0; i < lines.length; i++) {
-			const t = lines[i].trim();
-			if (/^@/.test(t)) {
-				for (const m of t.matchAll(/@C(\d+)\b/g)) pending.push({ n: Number(m[1]), line: i + 1 });
-			} else if (/^(?:Feature|Scenario|Scenario Outline|Scenario Template|Example):/.test(t)) {
-				for (const p of pending) tags.set(p.n, [...(tags.get(p.n) ?? []), { path: f.path, line: p.line }]);
-				pending = [];
-			} else if (t && !t.startsWith("#")) pending = [];
+		const touched = added.get(f.path);
+		if (!touched?.size) continue;
+		for (const b of featureBlocks(f.text)) {
+			if (!b.lines.some((l) => touched.has(l))) continue;
+			for (const t of b.tags) tags.set(t.n, [...(tags.get(t.n) ?? []), { path: f.path, line: t.line }]);
 		}
 	}
 	const out: Violation[] = [];
 	for (const c of criteria) {
-		if (c.scenario && !tags.has(c.n)) {
-			out.push({ path: c.path, line: c.line, rule: "criterion-without-scenario", message: `criterion ${c.n} is scenario-verified but no scenario is tagged @C${c.n}` });
+		if (changedTasks.has(c.path) && c.scenario && !tags.has(c.n)) {
+			out.push({ path: c.path, line: c.line, rule: "criterion-without-scenario", message: `criterion ${c.n} is scenario-verified but no scenario changed in this branch is tagged @C${c.n}` });
 		}
 	}
 	for (const [n, where] of tags) {
 		if (!known.has(n)) {
 			for (const w of where) out.push({ ...w, rule: "tag-without-criterion", message: `@C${n} matches no criterion in docs/tasks/*.md` });
 		} else if (where.length > 1) {
-			out.push({ ...where[1], rule: "criterion-many-scenarios", message: `criterion ${n} has ${where.length} tagged scenarios; one criterion maps to one scenario` });
+			out.push({ ...where[1], rule: "criterion-many-scenarios", message: `criterion ${n} has ${where.length} changed scenarios tagged @C${n}; one criterion maps to one scenario` });
 		}
 	}
 	return out;
@@ -415,6 +524,7 @@ export function parseDiff(diff: string): Map<string, Set<number>> {
 	let next = 0;
 	for (const line of diff.split("\n")) {
 		if (remaining > 0) {
+			if (line.startsWith("\\")) continue; // "\ No newline at end of file" is not a hunk line
 			remaining--;
 			if (line.startsWith("+") && file) added.get(file)?.add(next++);
 			continue;
@@ -436,14 +546,17 @@ export function parseDiff(diff: string): Map<string, Set<number>> {
 	return added;
 }
 
-/** The commit PR mode diffs against: --base or origin/HEAD, else main, else master; merge-base with HEAD when there is one. */
+/** The commit PR mode diffs against: the merge-base of HEAD with --base, else with origin/HEAD, main or master. */
 function resolveBase(root: string, base: string | undefined): string {
 	const candidates = base ? [base] : ["origin/HEAD", "main", "master"];
+	let withoutMergeBase: string | undefined;
 	for (const ref of candidates) {
 		if (!git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok) continue;
 		const mb = git(root, ["merge-base", "HEAD", ref]);
-		return mb.ok && mb.out.trim() ? mb.out.trim() : ref;
+		if (mb.ok && mb.out.trim()) return mb.out.trim();
+		withoutMergeBase ??= ref;
 	}
+	if (withoutMergeBase) throw new UsageError(`no merge base with ${withoutMergeBase}; fetch full history, e.g. actions/checkout fetch-depth: 0`);
 	throw new UsageError(base ? `base ref not found: ${base}` : "no base to compare with: pass --base <ref> (looked for origin/HEAD, main, master)");
 }
 
@@ -498,7 +611,7 @@ function loadConfig(root: string, cwd: string, explicit: string | undefined): Co
 
 type Options = { all: boolean; base?: string; junit: string[]; config?: string; help: boolean };
 
-const USAGE = "usage: node test-hygiene.ts [--all] [--base <ref>] [--junit <file-or-dir> ...] [--config <path>]";
+const USAGE = "usage: node .ci/test-hygiene.mts [--all] [--base <ref>] [--junit <file-or-dir> ...] [--config <path>]";
 
 function parseArgs(argv: string[]): Options {
 	const o: Options = { all: false, junit: [], help: false };
@@ -532,6 +645,15 @@ function readText(abs: string): string | undefined {
 	}
 }
 
+/** Print the violations and the summary line; returns the exit code. `added` set means PR mode. */
+function report(violations: Violation[], added: unknown, preExisting: number, out: (s: string) => void): number {
+	const all = [...violations].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.rule.localeCompare(b.rule));
+	for (const v of all) out(`${v.path}:${v.line}  ${v.rule}  ${v.message}\n`);
+	const noun = all.length === 1 ? "violation" : "violations";
+	out(`test-hygiene: ${all.length} ${added ? "new " : ""}${noun}${added ? `, pre-existing: ${preExisting}` : ""}\n`);
+	return all.length ? 1 : 0;
+}
+
 /** Run the checker from `cwd`; returns the exit code and writes the report through `out` / `err`. */
 export function run(argv: string[], cwd: string, out: (s: string) => void, err: (s: string) => void): number {
 	try {
@@ -541,6 +663,11 @@ export function run(argv: string[], cwd: string, out: (s: string) => void, err: 
 			return 0;
 		}
 		const top = git(cwd, ["rev-parse", "--show-toplevel"]);
+		if (o.junit.length && !o.all) {
+			// reports only: no source scan and no diff, so no repository is needed
+			const found = checkJunit(o.junit, cwd, top.ok ? top.out.trim() : cwd);
+			return report(found, undefined, 0, out);
+		}
 		if (!top.ok) throw new UsageError(`not a git repository: ${top.err}`);
 		const root = top.out.trim();
 		const config = loadConfig(root, cwd, o.config);
@@ -563,16 +690,12 @@ export function run(argv: string[], cwd: string, out: (s: string) => void, err: 
 		if (o.junit.length) extra.push(...checkJunit(o.junit, cwd, root));
 		const features = tracked.filter((p) => p.endsWith(".feature"));
 		const tasks = tracked.filter((p) => /^docs\/tasks\/[^/]+\.md$/.test(p));
-		if (features.length && tasks.length) {
+		if (added && features.length && tasks.length) {
 			const load = (p: string): Source => ({ path: p, text: readText(resolve(root, p)) ?? "" });
-			extra.push(...checkCriteria(tasks.map(load), features.map(load)));
+			extra.push(...checkCriteria(tasks.map(load), features.map(load), added));
 		}
 
-		const all = [...counted, ...extra].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.rule.localeCompare(b.rule));
-		for (const v of all) out(`${v.path}:${v.line}  ${v.rule}  ${v.message}\n`);
-		const noun = all.length === 1 ? "violation" : "violations";
-		out(`test-hygiene: ${all.length} ${added ? "new " : ""}${noun}${added ? `, pre-existing: ${preExisting}` : ""}\n`);
-		return all.length ? 1 : 0;
+		return report([...counted, ...extra], added, preExisting, out);
 	} catch (e) {
 		if (e instanceof UsageError) {
 			err(`test-hygiene: ${e.message}\n`);
@@ -584,7 +707,7 @@ export function run(argv: string[], cwd: string, out: (s: string) => void, err: 
 
 function parseDiffFor(root: string, base: string | undefined): Map<string, Set<number>> {
 	const ref = resolveBase(root, base);
-	const d = git(root, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", ref, "HEAD"]);
+	const d = git(root, ["diff", "-U0", "--no-color", "--no-ext-diff", "-M", ref, "HEAD"]);
 	if (!d.ok) throw new UsageError(`git diff failed: ${d.err}`);
 	return parseDiff(d.out);
 }

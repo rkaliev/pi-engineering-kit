@@ -116,5 +116,8 @@ test("test-hygiene: offered without the flag, the package's own script with it, 
 	assert.match(item(fresh).why, /\/kit-init --test-hygiene/);
 	assert.deepEqual([item(fresh, true).status, item(fresh, true).content], ["create", script]);
 	assert.equal(item(project({ [HYGIENE_TARGET]: script })).status, "exists");
-	assert.match(item(project({ [HYGIENE_TARGET]: 'export const VERSION = "0";\n' })).why, /v0 is older/);
+	const olderDir = project({ [HYGIENE_TARGET]: 'export const VERSION = "0";\n' });
+	assert.match(item(olderDir).why, /v0 is older/);
+	assert.equal(item(olderDir, true).status, "merge", "--test-hygiene replaces an older copy");
+	assert.equal(item(project({ [HYGIENE_TARGET]: 'export const VERSION = "999";\n' })).status, "exists", "a newer copy is not called older");
 });
