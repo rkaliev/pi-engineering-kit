@@ -165,7 +165,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 			if (ref === undefined) {
 				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
 			}
-			const problem = uncovered(where, projectDir, base, ref, root);
+			const problem = uncovered(where, projectDir, base, ref, l.kind === "push" && l.remote ? l.remote : "origin", root);
 			if (problem) return decision(options.missing, problem, options);
 		}
 	}
@@ -297,20 +297,23 @@ function targets(l: Exclude<Landing, { kind: "commit" }>, where: string, base: s
 	return refs.length === 0 ? [undefined] : refs;
 }
 
-function uncovered(where: string, projectDir: string, base: string, ref: string, root?: string): string | undefined {
+function uncovered(where: string, projectDir: string, base: string, ref: string, remote: string, root?: string): string | undefined {
 	const sha = git(where, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
 	if (!sha) return `can't resolve ${ref}.`;
-	// Already on the remote base (or the base itself): nothing new lands, so there is nothing to review.
-	const upstream = git(where, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${base}`]) ? `refs/remotes/origin/${base}` : base;
-	if (spawnSync("git", ["merge-base", "--is-ancestor", sha, upstream], { cwd: where, timeout: 5000 }).status === 0) return undefined;
+	// Already on the remote's base branch: nothing new lands. Only a remote-tracking ref proves that; the
+	// local base branch never does, since unreviewed commits may sit on it.
+	const tracking = `refs/remotes/${remote}/${base}`;
+	const landed = git(where, ["rev-parse", "--verify", "--quiet", tracking]) !== undefined && spawnSync("git", ["merge-base", "--is-ancestor", sha, tracking], { cwd: where, timeout: 5000 }).status === 0;
+	if (landed) return undefined;
 
 	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see.
 	const reviews = readReviews(projectDir, root);
 	const match = reviews.find((r) => r.sha === sha);
 	if (!match) {
-		const last = reviews[0];
-		return last
-			? `no reviewer verdict recorded for ${short(sha)}; the last reviewed commit is ${short(last.sha)}, and the branch changed after it (a new commit, an amend or a rebase), so it needs a new review.`
+		// Name an earlier review only when it was of this branch (an ancestor): then the branch changed after it.
+		const earlier = reviews.find((r) => spawnSync("git", ["merge-base", "--is-ancestor", r.sha, sha], { cwd: where, timeout: 5000 }).status === 0);
+		return earlier
+			? `no reviewer verdict recorded for ${short(sha)}; the last review of this branch covers ${short(earlier.sha)}, and the branch changed after it (a new commit, an amend or a rebase), so it needs a new review.`
 			: `no reviewer verdict recorded for ${short(sha)}.`;
 	}
 	// "With fixes" passes only after the fixes and a re-review of them, which gives a new verdict.
@@ -393,7 +396,7 @@ function git(cwd: string, args: string[]): string | undefined {
 	return gitRaw(cwd, args)?.trim();
 }
 
-/** git output as is: a diff's trailing whitespace is part of the change. Paths are never quoted. */
+/** git output as is. Paths are never quoted. */
 function gitRaw(cwd: string, args: string[]): string | undefined {
 	const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
 	return r.status === 0 ? r.stdout : undefined;

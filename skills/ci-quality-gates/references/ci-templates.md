@@ -155,7 +155,7 @@ Then turn on "Require review from Code Owners" (GitHub branch protection) or "Co
 - **`--junit <dir>`** checks only the reports: missing or empty, or a declared count that differs from the cases that ran (a crashed shard).
 - **Ratchet:** by default only lines the change adds count (renames are followed), so an existing project isn't blocked by old debt; the summary shows the pre-existing count. `--all` checks every line, for a new project or a one-off clean-up.
 - **Escape hatch:** an inline `test-hygiene: allow <reason>` on the line, when the pattern is the behavior under test. An allow without a reason is itself reported.
-- **Project additions:** `.pi/test-hygiene.json` with extra `testFiles`, `ignore` and `patterns`.
+- **Project additions:** `.ci/test-hygiene.json` with extra `testFiles`, `ignore` and `patterns`.
 
 JUnit reports by stack (each must write a file, not print to the console): Playwright `--reporter=junit` with `PLAYWRIGHT_JUNIT_OUTPUT_FILE=test-results/junit.xml`, Vitest `--reporter=junit --outputFile.junit=test-results/junit.xml`, Jest `jest-junit` with `JEST_JUNIT_OUTPUT_DIR=test-results`, pytest `--junitxml=test-results/junit.xml`, Gradle `build/test-results/`, Go `gotestsum --junitfile test-results/junit.xml`, Xcode `xcresult` → `xcbeautify --report junit`, .NET `--logger "junit;LogFilePath=test-results/junit.xml"`.
 

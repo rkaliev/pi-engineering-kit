@@ -48,13 +48,13 @@ function hits(stdout: string): string[] {
 
 test("the version is on one of the first lines, before the imports", () => {
 	const src = readFileSync(SCRIPT, "utf8").split("\n");
-	const v = src.indexOf('export const VERSION = "3";');
+	const v = src.indexOf('export const VERSION = "4";');
 	assert.ok(v >= 0 && v < 25, "VERSION line");
 	assert.ok(v < src.findIndex((l) => l.startsWith("import ")));
 });
 
 test("exports a version and pure helpers", () => {
-	assert.equal(VERSION, "3");
+	assert.equal(VERSION, "4");
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("a/b/c.spec.ts"));
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("c.test.ts"));
 	assert.ok(!globToRegExp("*.ts").test("a/c.ts"));
@@ -87,7 +87,9 @@ const RULE_CASES: Case[] = [
 	c("code on the line above is not an issue", "src/a.test.ts", `const BASE = "https://app.test";\nit.skip("x");\n`, "src/a.test.ts:2 skip-without-reason"),
 	c("a comment on the line above is", "src/a.test.ts", `// broken until #41 lands\nit.skip("x");\n`),
 	c("SHA-256 is not an issue key", "src/a.test.ts", `it.skip("SHA-256 slow");\n`, "src/a.test.ts:1 skip-without-reason"),
-	c("a real key in the title is", "src/a.test.ts", `it.skip("PAY-12 refund race");\n`),
+	c("a test name is not a skip's reason", "src/a.test.ts", `it.skip("PAY-12 refund race", () => {});\n`, "src/a.test.ts:1 skip-without-reason"),
+	c("a test name can't claim the platform exception", "src/a.test.ts", `describe.skip("mode: legacy", () => {});\nit.skip("handles refund #12", () => {});\n`, "src/a.test.ts:1 skip-without-reason", "src/a.test.ts:2 skip-without-reason"),
+	c("a named skip with the issue in a comment", "src/a.test.ts", `it.skip("refund race", () => {}); // PAY-12\n`),
 	c("mode marker (Go short mode)", "pkg/a_test.go", `if testing.Short() {\n\tt.Skip("mode: slow, runs only without -short")\n}\n`),
 	c("platform marker (Python)", "tests/test_c.py", `@pytest.mark.skipif(sys.platform == "win32", reason="platform: POSIX signals only")\ndef test_c(): pass\n`),
 	c("platform marker (JUnit)", "src/test/java/BT.java", `@DisabledOnOs(value = OS.WINDOWS, disabledReason = "platform: uses symlinks")\nvoid t() {}\n`),
@@ -390,7 +392,7 @@ test("config: extra patterns, extra test files and ignore", () => {
 		patterns: [{ id: "no-console", files: "**/*.test.ts", regex: "console\\.log\\(", message: "no console.log in tests" }],
 	});
 	const r = repo({
-		".claude/test-hygiene.json": config,
+		".ci/test-hygiene.json": config,
 		"a.test.ts": `console.log("x");\n`,
 		"vendor/b.test.ts": `it.only("v");\nconsole.log("x");\n`,
 		"checks/run.sh": `echo hi\n`,
@@ -402,9 +404,9 @@ test("config: extra patterns, extra test files and ignore", () => {
 	assert.equal(out.status, 1);
 });
 
-test("config: --config path, and .pi/test-hygiene.json as fallback", () => {
+test("config: --config path, and .ci/test-hygiene.json next to the script", () => {
 	const pattern = { patterns: [{ id: "todo", files: "**/*.md", regex: "TODO", message: "no todo" }] };
-	const viaPi = repo({ ".pi/test-hygiene.json": JSON.stringify(pattern), "n.md": "TODO\n" });
+	const viaPi = repo({ ".ci/test-hygiene.json": JSON.stringify(pattern), "n.md": "TODO\n" });
 	assert.deepEqual(viaPi.run("--all").hits, ["n.md:1 todo"]);
 	const explicit = repo({ "custom.json": JSON.stringify(pattern), "n.md": "TODO\n" });
 	assert.deepEqual(explicit.run("--all", "--config", "custom.json").hits, ["n.md:1 todo"]);
@@ -412,11 +414,11 @@ test("config: --config path, and .pi/test-hygiene.json as fallback", () => {
 });
 
 test("config: invalid regex and invalid JSON exit 2 with the reason", () => {
-	const bad = repo({ ".claude/test-hygiene.json": JSON.stringify({ patterns: [{ id: "x", files: "**", regex: "(", message: "m" }] }) });
+	const bad = repo({ ".ci/test-hygiene.json": JSON.stringify({ patterns: [{ id: "x", files: "**", regex: "(", message: "m" }] }) });
 	const a = bad.run("--all");
 	assert.equal(a.status, 2);
 	assert.match(a.stderr, /regex/i);
-	const json = repo({ ".claude/test-hygiene.json": "{nope" });
+	const json = repo({ ".ci/test-hygiene.json": "{nope" });
 	const b = json.run("--all");
 	assert.equal(b.status, 2);
 	assert.match(b.stderr, /test-hygiene\.json/);

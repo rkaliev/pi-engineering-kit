@@ -36,3 +36,4 @@ If a conflict is architectural, involve the user. If you can't verify a claim, s
 - State the fix instead: "Fixed: `parseAmount` now rejects negative values (payment.ts:42), test added."
 - If your pushback turns out wrong: "Checked: you're correct, X does Y. Fixing." Then move on.
 - When replying on a PR, answer in the inline thread, not in a new top-level comment.
+- Fixes pushed to a reviewed PR are a new commit: re-review the new range (requesting-code-review) before you report the PR ready again.

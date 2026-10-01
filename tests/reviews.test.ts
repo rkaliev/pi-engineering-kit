@@ -300,3 +300,18 @@ test("nothing new to land needs no review", () => {
 	git("switch", "-qc", "empty", "main");
 	assert.equal(check("gh pr create --fill"), undefined, "a branch at the base lands nothing");
 });
+
+test("commits on the base count as landed only against the push remote's tracking branch, never the local base", () => {
+	const { dir, git, run, commit, check } = repo();
+	const other = mkdtempSync(join(tmpdir(), "reviews-github-"));
+	run(other, "init", "-q", "--bare", "-b", "main");
+	git("remote", "add", "github", other);
+	git("switch", "-q", "main");
+	commit({ "src/hotfix.ts": "export const fix = 1;\n" });
+	for (const push of ["git push github main", "git push github HEAD:main"]) assert.equal(action(check(push)), "block", `${push}: no github/main to compare with`);
+	git("push", "-q", "github", "main");
+	git("fetch", "-q", "github");
+	assert.equal(check("git push github main"), undefined, "already on github/main");
+	assert.equal(action(check("git push origin main")), "block", "not on origin/main yet");
+	assert.ok(dir);
+});

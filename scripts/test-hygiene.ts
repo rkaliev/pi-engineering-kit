@@ -11,11 +11,10 @@
  * JUnit checks are never ratcheted.
  *
  * A line opts out with an inline comment `test-hygiene: allow <reason>`; an allow without a reason
- * is itself a violation. Config (.claude/test-hygiene.json, else .pi/test-hygiene.json, or
- * --config): { "testFiles": [glob], "ignore": [glob], "patterns": [{ id, files, regex, message }] }.
+ * is itself a violation. Config (.ci/test-hygiene.json next to the copied script, or --config): { "testFiles": [glob], "ignore": [glob], "patterns": [{ id, files, regex, message }] }.
  * Exit 0: no new violation, 1: violations, 2: usage, config or git error.
  */
-export const VERSION = "3";
+export const VERSION = "4";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -333,6 +332,8 @@ function skipReason(lines: string[], views: View[], i: number, m: RegExpMatchArr
 		const blank = blankStrings(text);
 		const close = closing(blank, open);
 		args = stripBodies(text.slice(open, close < 0 ? undefined : close + 1));
+		// A declared test's first string is its name, not the skip's reason: `it.skip("name", fn)`.
+		if (lang === "js") args = args.replace(/^\(\s*(["'`])(?:\\.|(?!\1).)*\1\s*,?/s, "(");
 	}
 	return `${above}\n${args}\n${trailing}`;
 }
@@ -565,10 +566,9 @@ function loadConfig(root: string, cwd: string, explicit: string | undefined): Co
 		if (!existsSync(p)) throw new UsageError(`config not found: ${explicit}`);
 		return parseConfig(readFileSync(p, "utf8"), explicit);
 	}
-	for (const rel of [".claude/test-hygiene.json", ".pi/test-hygiene.json"]) {
-		const p = resolve(root, rel);
-		if (existsSync(p)) return parseConfig(readFileSync(p, "utf8"), rel);
-	}
+	const rel = ".ci/test-hygiene.json";
+	const p = resolve(root, rel);
+	if (existsSync(p)) return parseConfig(readFileSync(p, "utf8"), rel);
 	return EMPTY_CONFIG;
 }
 

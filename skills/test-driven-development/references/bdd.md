@@ -19,7 +19,7 @@ Every user-visible criterion in the task file's success criteria table maps to e
 
 - **One scenario is one user journey** with an outcome the user cares about. Never write one just to check that a page or element exists.
 - Use Examples tables or several personas only when the outcome differs between rows.
-- **Given sets up through the fastest path:** an API call, a seed or a stored session, never by clicking through the UI. Prove each step through the UI once, in its own scenario.
+- **Given sets up through the fastest path:** an API call, a seed or a stored session, never by clicking through the UI. Prove each step through the UI once, in the scenario of the criterion that needs it (or an untagged scenario when no criterion does).
 - Steps use domain language ("the cashier closes the shift"), not UI mechanics ("clicks #btn-3"). Step definitions are thin and call shared helpers.
 - **Selectors:** accessible roles and labels, or stable test IDs. Never CSS paths or text that changes with translation.
 - **Waiting:** for a state or an event, under the project-wide ceiling (for example 1 s by default and 2 s at most against a local server). A step that needs longer is a performance defect to fix or report, not a ceiling to raise.
