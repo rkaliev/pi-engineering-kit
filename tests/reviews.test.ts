@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, exempt, parseReview, readReviews, recordReview, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, exempt, parseReview, readReviews, recordReview, recordVerdict, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
 const OPTIONS: ReviewGateOptions = { workDocs: ["docs/tasks"], missing: "block", waiver: "reviewGate: false" };
 
@@ -183,12 +183,81 @@ test("parallel reviewers of one prompt combine to the worst verdict; a later pro
 	assert.match(String(review(report("0000000", "Yes"))), /not a commit/);
 });
 
-test("shell writes to the gate's own files: stamps are blocked, the guard config asks", () => {
+test("shell writes to the gate's own files: records are blocked, the guard config asks, reads pass", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	mkdirSync(join(project, ".pi"));
 	const guard = ".pi/guard.json";
-	assert.equal(checkGateFiles(`echo '{}' > $TMPDIR/eng-kit/reviews/x/y.json`, guard)?.action, "block");
-	assert.equal(checkGateFiles(`echo '{"reviewGate":false}' > .pi/guard.json`, guard)?.action, "confirm");
-	assert.equal(checkGateFiles(`sed -i '' s/x/y/ ./.pi/guard.json`, guard)?.action, "confirm");
-	assert.equal(checkGateFiles("cat .pi/guard.json", guard), undefined);
-	assert.equal(checkGateFiles("git diff .pi/guard.json", guard), undefined);
-	assert.equal(checkGateFiles("npm test", guard), undefined);
+	const check = (command: string) => checkGateFiles(command, project, project, guard)?.action ?? "allow";
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	assert.equal(check(`echo '{}' > ${records}/x/y.json`), "block");
+	assert.equal(check(`cd ${join(tmpdir(), "eng-kit")} && echo x > reviews/h/y.json`), "block", "cd is followed");
+	assert.equal(check(`grep -rn eng-kit/reviews lib/`), "allow", "reading is fine");
+	assert.equal(check(`ls ${records}`), "allow");
+	for (const write of [`echo '{"reviewGate":false}' > .pi/guard.json`, "sed -i '' s/x/y/ ./.pi/guard.json", "cat new.json > .pi/guard.json", "jq . x | tee .pi/guard.json", "git checkout main -- .pi/guard.json", "git restore -s HEAD~1 .pi/guard.json", "cd .pi && sed -i '' s/a/b/ guard.json", "(cd .pi && sed -i '' s/a/b/ guard.json)"]) {
+		assert.equal(check(write), "confirm", write);
+	}
+	for (const read of ["cat .pi/guard.json", "git diff .pi/guard.json", "git log -p .pi/guard.json", "npm test"]) assert.equal(check(read), "allow", read);
+});
+
+test("round 2: HEAD pushes, whitespace and binary changes, unknown directories", () => {
+	const { dir, git, commit, head, check, review } = repo();
+	review(report(head, "Yes"));
+	const pyReviewed = commit({ "src/job.py": "if ok:\n    run()\nclean()\n" });
+	review(report(pyReviewed, "Yes"));
+	assert.equal(check("gh pr create --fill"), undefined);
+	commit({ "src/job.py": "if ok:\n    run()\n    clean()\n" });
+	assert.equal(action(check("gh pr create --fill")), "block", "an indentation change is a code change");
+	const binReviewed = commit({ "src/job.py": "if ok:\n    run()\nclean()\n", "bin/tool.bin": "\u0000\u0001" });
+	review(report(binReviewed, "Yes"));
+	commit({ "bin/tool.bin": "\u0000\u0002" });
+	assert.equal(action(check("gh pr create --fill")), "block", "a changed binary is a code change");
+
+	for (const unknown of [`cd "$WT" && gh pr create`, "cd $(git rev-parse --show-toplevel) && gh pr create", "cd ~/no-such-dir-xyz && gh pr create", "(cd .worktrees/none && gh pr create)", "gh pr merge feat/a -R o/r"]) {
+		assert.equal(action(check(unknown)), "block", unknown);
+	}
+	git("switch", "-q", "main");
+	commit({ "src/hotfix.ts": "export const fix = 1;\n" });
+	for (const push of ["git push origin HEAD", "git push -u origin HEAD", "git push origin @", "git push origin HEAD:main"]) assert.equal(action(check(push)), "block", push);
+	assert.equal(action(check("git branch -f main feat/a && git push origin main")), "block", "a ref move before a push");
+	assert.equal(action(check("git fetch . feat/a:main && git push origin main")), "block");
+	assert.equal(check("git status && git fetch origin"), undefined);
+	assert.ok(dir);
+});
+
+test("round 2: the newest review of a change decides; a failed run spoils its prompt; merge -m and agent rules", () => {
+	const { dir, root, git, commit, head, check, review } = repo();
+	review(report(head, "Yes"), "p1", "a");
+	const docs = commit({ "docs/more.md": "x\n" });
+	review(report(docs, "No"), "p2", "a");
+	git("switch", "-q", "main");
+	assert.equal(action(check(`git push origin ${head}:main`)), "block", "a later No on the same change wins over an older exact Yes");
+
+	git("switch", "-q", "feat/a");
+	review(report(docs, "Yes"), "p3", "a");
+	recordVerdict(dir, undefined, "Inconclusive", { promptId: "p3", run: "b" }, root);
+	assert.equal(readReviews(dir, root)[0]?.verdict, "Inconclusive", "a parallel run that failed counts against the prompt");
+	review(report(docs, "Yes"), "p4", "a");
+	git("switch", "-q", "main");
+	assert.equal(check("git merge -m 'land a' feat/a"), undefined, "the -m value is not a ref");
+
+	for (const rule of ["agents.md", "AGENTS.override.md", "CLAUDE.MD", "docs/conf.py", "docs/.vitepress/config.ts"]) assert.equal(exempt(rule, "", []), false, rule);
+});
+
+test("round 2: a PR merge checks the remote head too; glab -s names the branch", () => {
+	const { dir, git, run, commit, head, check, review } = repo();
+	git("push", "-q", "origin", "feat/a");
+	review(report(head, "Yes"));
+	const clone = mkdtempSync(join(tmpdir(), "reviews-clone-"));
+	run(clone, "clone", "-q", "-b", "feat/a", git("remote", "get-url", "origin"), ".");
+	run(clone, "config", "user.email", "o@example.com");
+	run(clone, "config", "user.name", "o");
+	commit({ "src/other.ts": "export const o = 1;\n" }, clone);
+	run(clone, "push", "-q", "origin", "feat/a");
+	git("fetch", "-q", "origin");
+	git("switch", "-q", "main");
+	assert.equal(action(check("gh pr merge feat/a")), "block", "origin/feat/a has a commit nobody reviewed");
+	assert.equal(action(check("glab mr create -s feat/a")), "block");
+	git("switch", "-q", "feat/a");
+	assert.equal(action(check("gh pr merge")), "block", "no argument: the current branch, local and remote");
+	assert.ok(dir);
 });

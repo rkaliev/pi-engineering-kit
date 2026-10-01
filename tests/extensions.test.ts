@@ -486,9 +486,17 @@ test("review gate: a reviewer run's report records the verdict; without one the 
 		{ agent: "reviewer", exitCode: 1 },
 	]);
 	assert.equal(await pr(), true, "a failed reviewer run is Inconclusive");
+	for (const bad of [{ agent: "reviewer", exitCode: 0, finalOutput: "couldn't read the range" }, { agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes"), timedOut: true }]) {
+		await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
+		await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }, bad]);
+		assert.equal(await pr(), true, `a reviewer run without a usable verdict spoils the round: ${JSON.stringify(bad)}`);
+	}
 	await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
 	await result("subagent", [{ agent: "reviewer", exitCode: 0, finalOutput: verdict("Yes") }]);
 	assert.equal(await bash("gh pr create --fill"), undefined);
+	const both = ctx(dir, { confirm: false });
+	await bash("git push origin feat/a && cat x > .pi/guard.json", both);
+	assert.match(both.asked[0]!, /\.pi\/guard\.json.* Also: This command pushes to a remote/, "the guard-config question keeps the push reason");
 });
 
 test("review gate: reviewGate: false only in a trusted project; the guard config and stamps are protected", async () => {

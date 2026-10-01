@@ -21,6 +21,10 @@ interface SubagentRun {
 	agent?: string;
 	exitCode?: number;
 	finalOutput?: string;
+	error?: string;
+	timedOut?: boolean;
+	interrupted?: boolean;
+	stopped?: boolean;
 }
 
 export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?: string } = {}) {
@@ -43,12 +47,11 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			decision = checkCommand(subject, ctx.cwd, config);
 			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
-			if (decision.action !== "block") decision = checkGateFiles(subject, ".pi/guard.json") ?? decision;
+			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
 				const gate = { workDocs, missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json' };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
-				// One confirmation that names both reasons: the user should know the review is missing.
-				if (review) decision = decision.action === "confirm" ? { action: "confirm", reason: `${review.reason} Also: ${decision.reason}` } : review;
+				decision = join(decision, review);
 			}
 		} else if (event.toolName === "read" || event.toolName === "write" || event.toolName === "edit") {
 			subject = String(input.path ?? "");
@@ -74,12 +77,23 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		runs.forEach((run, index) => {
 			if (run.agent !== "reviewer") return;
 			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
-			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string";
-			const result = failed ? recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot) : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
-			if (typeof result === "string" && ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded: ${result}.`, "warning");
+			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
+			const result = failed ? "the reviewer run failed" : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
+			if (typeof result === "string") {
+				// A run with no verdict spoils its prompt, so a parallel reviewer's Yes can't stand alone.
+				recordVerdict(ctx.cwd, undefined, "Inconclusive", ids, options.reviewsRoot);
+				if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this round counts as Inconclusive.`, "warning");
+			}
 		});
 		return undefined;
 	});
+}
+
+/** Combine two guard decisions: a block wins; two confirmations become one that names both reasons. */
+function join(current: GuardDecision, next: GuardDecision | undefined): GuardDecision {
+	if (!next || current.action === "block") return current;
+	if (next.action === "block" || current.action === "allow") return next;
+	return { action: "confirm", reason: `${next.reason} Also: ${current.reason}` };
 }
 
 function loadConfig(ctx: ExtensionContext): GuardConfig {

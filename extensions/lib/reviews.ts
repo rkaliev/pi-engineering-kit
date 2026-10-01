@@ -1,22 +1,21 @@
 /**
  * Review gate: code reaches the base branch (a PR/MR, a merge into it or a push to it) only after
  * a reviewer passed it. Verdicts are recorded from the reviewer's own report (never by the main
- * agent), one file per reviewer run, and match a commit by the branch's own diff: deleting task
+ * agent), one file per reviewer run, and match a commit by the branch's own change: deleting task
  * files, changing docs or rebasing onto a newer base keeps a review valid; changing code doesn't.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
-import { baseBranch, currentBranch, landing, pushedToBase } from "./workdocs.ts";
+import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
 
-/** One reviewer run's verdict on one commit. */
+/** One reviewer run's verdict on one commit. `sha` is `*` for a run that failed: it spoils its whole prompt. */
 export interface ReviewRecord {
-	/** The full SHA the reviewer reviewed. */
 	sha: string;
 	verdict: Verdict;
 	/** Reviews from one user prompt combine (parallel reviewers); a later prompt replaces them. */
@@ -37,11 +36,19 @@ const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2
 // A verdict word followed by `/` or `|` is the unfilled template line, not a verdict.
 const VERDICT = /Ready to merge[*_]*:[*_\s]*(Yes|No|With fixes|Inconclusive)\b(?![*_\s]*[/|])/gi;
 const HEAD = /Reviewed HEAD[*_]*:[*_\s`]*([0-9a-f]{7,40})\b/gi;
-/** Markdown in these steers the agent (manifests, rules, skills, prompts), so it is code for the gate. */
-const RULE_FILES = new Set(["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "SKILL.md"]);
+/** Markdown in these steers the agent (manifests, rules, skills, prompts), so it is code for the gate. Lower case. */
+const RULE_FILES = new Set(["claude.md", "claude.local.md", "agents.md", "agents.override.md", "skill.md"]);
 const RULE_DIRS = new Set([".claude", ".pi", "rules", "skills", "agents", "prompts"]);
+/** What `docs/` may hold without review: prose and pictures, not a docs site's code or config. */
+const DOC_FILE = /\.(mdx?|txt|rst|adoc|png|jpe?g|gif|svg|webp|pdf|drawio|excalidraw)$/i;
+/** Segments that may run before a landing in one command: they neither commit nor move a ref. */
+const SAFE_COMMANDS = new Set(["cd", "pushd", "popd", "echo", "printf", "true", "sleep", "pwd", "ls", "cat"]);
+const SAFE_GIT = new Set(["status", "diff", "log", "show", "rev-parse", "add", "fetch", "remote", "branch"]);
+const READ_ONLY = new Set(["cat", "less", "head", "tail", "grep", "rg", "ls", "wc", "diff", "stat", "file"]);
+const READ_ONLY_GIT = new Set(["diff", "show", "log", "status", "blame"]);
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const CANDIDATES = 20;
+const CANDIDATES = 10;
+const FAILED = "*";
 
 /** The verdict and SHA in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
 export function parseReview(text: string): { sha: string; verdict: Verdict } | undefined {
@@ -61,16 +68,16 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root);
 }
 
-/** Record a verdict directly (a reviewer run that failed counts as Inconclusive). */
-export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
-	const sha = git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+/** Record a verdict for a commit, or with `rev` undefined a failed run, which makes its prompt Inconclusive. */
+export function recordVerdict(projectDir: string, rev: string | undefined, verdict: Verdict, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
+	const sha = rev === undefined ? FAILED : git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
 	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
 	const record: ReviewRecord = { sha, verdict, promptId: ids.promptId, at: Date.now() };
 	const dir = reviewsDir(projectDir, root);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		if (!ownDir(dir)) return `${dir} belongs to another user`;
-		writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
+		writeAtomic(join(dir, `${sha === FAILED ? "failed" : sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
 		prune(dir);
 	} catch (err) {
 		return `could not write ${dir}: ${(err as Error).message}`;
@@ -93,11 +100,14 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
 		const record = readRecord(join(dir, name));
 		if (record) bySha.set(record.sha, [...(bySha.get(record.sha) ?? []), record]);
 	}
+	const failedPrompts = new Set((bySha.get(FAILED) ?? []).map((r) => r.promptId));
+	bySha.delete(FAILED);
 	const combined: ReviewRecord[] = [];
 	for (const records of bySha.values()) {
 		const latest = records.reduce((a, b) => (b.at > a.at ? b : a));
-		const prompt = records.filter((r) => r.promptId === latest.promptId);
-		combined.push({ ...latest, verdict: worst(prompt.map((r) => r.verdict)) });
+		const prompt = records.filter((r) => r.promptId === latest.promptId).map((r) => r.verdict);
+		if (failedPrompts.has(latest.promptId)) prompt.push("Inconclusive");
+		combined.push({ ...latest, verdict: worst(prompt) });
 	}
 	return combined.sort((a, b) => b.at - a.at);
 }
@@ -105,38 +115,47 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
 /**
  * Block (or ask before) landing code on the base branch that no passing review covers. `cwd` is where the
  * command starts; `cd <dir>` and `git -C <dir>` in it are followed, so a worktree's branch is checked there.
+ * Anything the guard can't follow (a variable, a subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
-	let dir = cwd;
-	let moved = false;
-	for (const tokens of splitSegments(tokenize(command))) {
-		if ((tokens[0] === "cd" || tokens[0] === "pushd") && tokens[1]) {
-			dir = resolve(dir, tokens[1]);
+	let dir: string | undefined = cwd;
+	let unsafeBefore = false;
+	for (const raw of splitSegments(tokenize(command))) {
+		// A subshell's directory is its own: the guard doesn't track it.
+		if (raw[0]?.startsWith("(")) dir = undefined;
+		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		const l = landing(tokens);
+		if (!l || l.kind === "commit") {
+			if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
+			else if (!isSafe(tokens)) unsafeBefore = true;
 			continue;
 		}
-		const l = landing(tokens);
-		if (!l) continue;
-		const where = "dir" in l && l.dir ? resolve(dir, l.dir) : dir;
-		if (git(where, ["rev-parse", "--git-dir"]) === undefined) continue;
-		const base = baseBranch(where);
-		if (!base) continue;
-		const onBase = currentBranch(where) === base;
 		// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
-		if (moved && l.kind === "merge") {
+		if (l.kind === "merge" && unsafeBefore) {
 			return decision(options.missing, "this command moves HEAD before it merges, so the guard can't see where the merge lands. Run the merge as its own command.", options);
 		}
-		if (l.kind === "commit" || l.kind === "head" || (l.kind === "merge" && !onBase)) {
-			moved = true;
+		if (l.kind === "merge" && dir !== undefined && !landsOnBase(l, dir)) {
+			unsafeBefore = true;
 			continue;
 		}
-		const refs = l.kind === "pr" ? prRefs(where, l.target) : l.kind === "merge" ? l.refs : pushedToBase(l, base, onBase);
+		const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
+		if (where === undefined || (l.kind === "pr" && l.repo)) {
+			return decision(options.missing, "can't tell which checkout this command lands from (a variable, a subshell, a missing folder or another repository). Run it from the checkout itself.", options);
+		}
+		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
+			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
+			continue;
+		}
+		const base = baseBranch(where);
+		if (!base) continue;
+		const refs = targets(l, where, base);
 		if (refs.length === 0) continue;
-		if (moved) {
-			return decision(options.missing, "this command commits or moves HEAD before it lands, so the guard can't see what it lands. Run the landing as its own command.", options);
+		if (unsafeBefore) {
+			return decision(options.missing, "this command runs something before it lands (a commit, a switch, a ref update), so the guard can't see what it lands. Run the landing as its own command.", options);
 		}
 		for (const ref of refs) {
 			if (ref === undefined) {
-				return { action: "confirm", reason: `Review gate: can't tell locally which commit this PR/MR merge lands (${l.kind === "pr" ? l.target : ""}). Check that its head commit has a Yes review, or switch to its branch and merge from there.` };
+				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
 			}
 			const problem = uncovered(where, projectDir, base, ref, options, root);
 			if (problem) return decision(options.missing, problem, options);
@@ -146,30 +165,73 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 }
 
 /**
- * Commands that write the review gate's own state: a stamp file (block) or the guard config (ask).
- * The path rules cover Edit/Write; this covers the shell. An interpreter one-liner can still hide a path.
+ * Commands that write the review gate's own state: a verdict record (block) or the guard config (ask).
+ * The path rules cover Edit/Write; this covers the shell, following `cd`. An interpreter one-liner can still hide a path.
  */
-export function checkGateFiles(command: string, guardConfig: string): GuardDecision | undefined {
-	for (const tokens of splitSegments(tokenize(command))) {
-		if (tokens.some((t) => t.replaceAll("\\", "/").includes("eng-kit/reviews"))) {
-			return { action: "block", reason: "Review stamps are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
+export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string): GuardDecision | undefined {
+	const redirects = /[>]|\btee\b/.test(command);
+	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
+	let dir = cwd;
+	for (const raw of splitSegments(tokenize(command))) {
+		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		if (isCd(tokens)) {
+			dir = follow(dir, tokens[1]) ?? dir;
+			continue;
 		}
-		const readOnly = ["cat", "less", "head", "tail", "grep", "rg", "jq", "git", "diff", "ls", "wc"].includes(tokens[0] ?? "") && !tokens.some((t) => t.startsWith(">"));
-		if (!readOnly && tokens.some((t) => t.replace(/^\.\//, "").endsWith(guardConfig))) {
+		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
+		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
+		if (readOnly) continue;
+		const paths = tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/"));
+		if (paths.some((p) => p.includes("/eng-kit/reviews"))) {
+			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
+		}
+		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
 			return { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
 	}
 	return undefined;
 }
 
-/** The ref a PR/MR command lands: HEAD, or the named branch; `undefined` when it names a number or URL. */
-function prRefs(where: string, target: string | undefined): Array<string | undefined> {
-	if (target === undefined) return ["HEAD"];
-	if (/^\d+$/.test(target) || target.includes("://") || target.startsWith("#") || target.startsWith("!")) return [undefined];
-	for (const ref of [`refs/heads/${target}`, `refs/remotes/origin/${target}`]) {
-		if (git(where, ["rev-parse", "--verify", "--quiet", ref])) return [ref];
+function isCd(tokens: string[]): boolean {
+	return tokens[0] === "cd" || tokens[0] === "pushd";
+}
+
+/** The directory `cd <arg>` moves to, or undefined when the guard can't know it. */
+function follow(dir: string, arg: string | undefined): string | undefined {
+	if (arg === undefined || /[$`(]/.test(arg)) return undefined;
+	const target = resolve(dir, arg.replace(/^~(?=\/|$)/, homedir()));
+	return existsSync(target) ? target : undefined;
+}
+
+function isSafe(tokens: string[]): boolean {
+	if (tokens[0] === "git") {
+		const sub = tokens.slice(1).find((t, i, all) => !t.startsWith("-") && all[i - 1] !== "-C" && all[i - 1] !== "-c") ?? "";
+		if (sub === "fetch") return !tokens.some((t) => t.includes(":"));
+		if (sub === "branch") return !tokens.some((t) => /^-[a-zA-Z]*[fDmMcC]/.test(t) || t === "--force");
+		return SAFE_GIT.has(sub);
 	}
-	return [undefined];
+	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
+}
+
+function landsOnBase(l: Extract<Landing, { kind: "merge" }>, dir: string): boolean {
+	const where = l.dir ? follow(dir, l.dir) : dir;
+	if (where === undefined) return true;
+	const base = baseBranch(where);
+	return base !== undefined && currentBranch(where) === base;
+}
+
+/** The refs a landing puts on the base; `undefined` for a PR/MR merge whose head isn't known locally. */
+function targets(l: Exclude<Landing, { kind: "commit" }>, where: string, base: string): Array<string | undefined> {
+	const onBase = currentBranch(where) === base;
+	if (l.kind === "merge") return l.refs;
+	if (l.kind === "push") return pushedToBase(l, base, onBase);
+	if (l.target !== undefined && (/^\d+$/.test(l.target) || l.target.includes("://") || /^[#!]/.test(l.target))) return [undefined];
+	if (!l.merge && l.target === undefined) return ["HEAD"];
+	const branch = l.target ?? currentBranch(where);
+	if (!branch) return [undefined];
+	// gh merges the remote head: check it, and the local branch too when it differs.
+	const refs = [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`].filter((r) => git(where, ["rev-parse", "--verify", "--quiet", r]));
+	return refs.length === 0 ? [undefined] : refs;
 }
 
 function uncovered(where: string, projectDir: string, base: string, ref: string, options: ReviewGateOptions, root?: string): string | undefined {
@@ -182,7 +244,8 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 	if (own === "") return undefined;
 
 	const reviews = readReviews(projectDir, root).slice(0, CANDIDATES);
-	const match = reviews.find((r) => r.sha === sha) ?? reviews.find((r) => ownChange(where, upstream, r.sha, prefix, options.workDocs) === own);
+	// The newest review of the same change decides, whether it saw this exact commit or not.
+	const match = reviews.find((r) => r.sha === sha || ownChange(where, upstream, r.sha, prefix, options.workDocs) === own);
 	if (!match) {
 		const last = reviews[0];
 		return last ? `the last review covers ${short(last.sha)}; ${short(sha)} changes code it didn't see.` : `no reviewer verdict recorded for ${short(sha)}.`;
@@ -193,31 +256,35 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 }
 
 /**
- * The branch's own change to reviewable files, as a patch id: "" when it changes none, undefined when git fails.
- * The same code change on a newer base, or with docs and task files changed around it, gives the same id.
+ * The branch's own change to reviewable files: each changed path with its new mode and content hash, from
+ * where the branch forked off the base. "" when it changes none, undefined when git fails. The same change
+ * on a newer base, or with docs and task files changed around it, gives the same value; any byte of
+ * reviewable content that differs, whitespace and binaries included, gives another.
  */
 function ownChange(where: string, upstream: string, sha: string, prefix: string, workDocs: string[]): string | undefined {
 	const fork = git(where, ["merge-base", upstream, sha]);
 	if (!fork) return undefined;
-	const names = git(where, ["diff", "--name-only", "--no-renames", fork, sha]);
-	if (names === undefined) return undefined;
-	const files = names.split("\n").filter((p) => p && !exempt(p, prefix, workDocs));
-	if (files.length === 0) return "";
-	const diff = git(where, ["diff", "--no-renames", "--no-ext-diff", fork, sha, "--", ...files.map((f) => `:(top)${f}`)]);
-	if (diff === undefined) return undefined;
-	const id = spawnSync("git", ["patch-id", "--stable"], { cwd: where, input: `${diff}\n`, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
-	return id.status === 0 ? (id.stdout.split(" ")[0] ?? "").trim() || `raw:${hash(diff)}` : undefined;
+	const raw = git(where, ["diff", "--raw", "--no-renames", "--no-abbrev", fork, sha]);
+	if (raw === undefined) return undefined;
+	const entries: string[] = [];
+	for (const line of raw.split("\n").filter(Boolean)) {
+		const [meta = "", path = ""] = line.split("\t");
+		if (exempt(path, prefix, workDocs)) continue;
+		const [, newMode = "", , newBlob = ""] = meta.split(" ");
+		entries.push(`${path} ${newMode} ${newBlob}`);
+	}
+	return entries.length === 0 ? "" : hash(entries.sort().join("\n"));
 }
 
-/** Task files, `docs/` and other markdown need no review, except markdown that steers the agent. */
+/** Task files, prose and pictures in `docs/`, and other markdown need no review, except markdown that steers the agent. */
 export function exempt(repoPath: string, prefix: string, workDocs: string[]): boolean {
 	if (!repoPath.startsWith(prefix)) return false;
 	const path = repoPath.slice(prefix.length);
 	if (workDocs.some((d) => path.startsWith(`${d.replace(/\/+$/, "")}/`))) return true;
 	const parts = path.split("/");
 	const name = parts[parts.length - 1]!;
-	if (RULE_FILES.has(name) || parts.slice(0, -1).some((d) => RULE_DIRS.has(d))) return false;
-	return parts[0] === "docs" || /\.mdx?$/i.test(name);
+	if (RULE_FILES.has(name.toLowerCase()) || parts.slice(0, -1).some((d) => RULE_DIRS.has(d.toLowerCase()))) return false;
+	return (parts[0] === "docs" && DOC_FILE.test(name)) || /\.mdx?$/i.test(name);
 }
 
 /** Where a project's review records live. Needs no environment, so every hook process agrees. */
