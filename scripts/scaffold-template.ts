@@ -15,9 +15,14 @@ if (!dest) {
 	console.error("Usage: node scripts/scaffold-template.ts <dir>");
 	process.exit(2);
 }
+if (process.platform === "win32") {
+	// pnpm is a .cmd shim there; spawning it needs a shell, which this script avoids. Use WSL.
+	console.error("Windows is not supported yet: run the script in WSL");
+	process.exit(1);
+}
 const pnpm = spawnSync("pnpm", ["--version"], { encoding: "utf8" });
 if (pnpm.status !== 0) {
-	console.error("pnpm is not installed: see pnpm.io/installation");
+	console.error(`pnpm is not installed or did not start: see pnpm.io/installation${pnpm.error ? ` (${pnpm.error.message})` : ""}`);
 	process.exit(1);
 }
 try {

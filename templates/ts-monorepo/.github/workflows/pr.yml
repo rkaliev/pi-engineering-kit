@@ -47,6 +47,7 @@ jobs:
       - uses: gitleaks/gitleaks-action@<sha>
       - uses: google/osv-scanner-action/osv-scanner-action@<sha>
         with: { scan-args: "--recursive ./" }
+  # kit-init adds the test-hygiene job here when run with --test-hygiene (see ci-quality-gates).
   working-docs:
     runs-on: ubuntu-latest
     timeout-minutes: 5

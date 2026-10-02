@@ -24,8 +24,9 @@ Run exactly these; they mirror CI.
 - `pnpm --filter @repo/web dev`: dev server. Don't run it; it's already open in another terminal
 
 ## Rules
-- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (pure code). Client never imports server code, `@repo/db` or `node:*`; lint enforces it. Type-only imports of router types are allowed.
-- Packages never read `process.env`; only `apps/api/src/config.ts` does.
+- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (`apps/web/src/domain`, pure). Client and domain never import server code, `@repo/db` or Node modules (bare or `node:`, also through `import()`); lint enforces it, and `build` fails if the database package ends up in `dist/`. Type-only imports of router types are allowed.
+- Package source code never reads `process.env` (tooling config files may); only `apps/api/src/config.ts` does, and it owns every default.
+- `/readyz` is 503 until the database has every migration this build ships: run `migrate deploy` before sending traffic.
 - New dependencies need approval; install with an exact pin.
 
 ## Boundaries

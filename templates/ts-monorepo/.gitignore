@@ -4,4 +4,4 @@ dist
 coverage
 src/generated
 .env
-.env.*.local
+.env*.local

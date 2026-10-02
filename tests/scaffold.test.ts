@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
+import { latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
 const versions = { node: "24.1.0", pnpm: "10.0.0" };
 
@@ -112,4 +112,37 @@ test("scaffold pins every registry package to the resolved version and fails whe
 	};
 	const dest2 = join(mkdtempSync(join(tmpdir(), "dest-")), "app");
 	assert.throws(() => scaffold(tpl, dest2, versions, () => ({ status: 0 }), none), /No stable release of express/);
+});
+
+test("pickStable stays within the requested major", () => {
+	const times = { "24.9.0": old, "26.6.3": old, "24.10.1": old };
+	assert.equal(pickStable(times, now, 1440, 24), "24.10.1");
+});
+
+test("pickStable skips entries whose date does not parse", () => {
+	assert.equal(pickStable({ "2.0.0": "not a date", "1.0.0": old }, now, 1440), "1.0.0");
+});
+
+test("latestMajor is the major of a stable latest tag, otherwise undefined", () => {
+	assert.equal(latestMajor({ latest: "7.4.2", next: "9.0.0" }), 7);
+	assert.equal(latestMajor({ latest: "8.0.0-rc.19" }), undefined);
+	assert.equal(latestMajor({}), undefined);
+});
+
+test("parseRegistryInfo names the package when the registry answer is not JSON", () => {
+	assert.throws(() => parseRegistryInfo("zod", "<html>"), /zod/);
+});
+
+test("scaffold resolves @types/node within the major of the running Node and caps others by latest", () => {
+	const tpl = fakeTemplate({ "apps/api": { devDependencies: ["@types/node", "vitest"] } });
+	const dest = join(mkdtempSync(join(tmpdir(), "dest-")), "app");
+	const seen: Record<string, number | undefined> = {};
+	scaffold(tpl, dest, versions, () => ({ status: 0 }), (name, major) => ((seen[name] = major), "1.0.0"));
+	assert.equal(seen["@types/node"], 24);
+	assert.equal(seen["vitest"], undefined);
+});
+
+test("the template's minimumReleaseAge equals the scaffold's", () => {
+	const yaml = readFileSync(join(import.meta.dirname, "..", "templates", "ts-monorepo", "pnpm-workspace.yaml"), "utf8");
+	assert.equal(Number(/^minimumReleaseAge:\s*(\d+)/m.exec(yaml)?.[1]), MIN_RELEASE_AGE_MINUTES);
 });
