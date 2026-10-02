@@ -79,7 +79,7 @@ export function planScaffold(
 ): ScaffoldPlan {
 	void dest;
 	const spec = (name: string): string => (isWorkspace(name) ? `${name}@workspace:*` : pin(name));
-	const copy = walk(template).map((f) => relative(template, f));
+	const copy = walk(template).map((f) => relative(template, f)).filter((f) => f !== "scaffold.json");
 	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
 	const writes = {
 		".nvmrc": `${versions.node}\n`,

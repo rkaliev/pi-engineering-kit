@@ -20,7 +20,7 @@ Run exactly these; they mirror CI.
 - `pnpm turbo run build`: build
 - `pnpm format`: Prettier
 - `docker compose up -d postgres`: local database (needs `POSTGRES_MAJOR` in `.env`)
-- `pnpm --filter @repo/db exec prisma migrate deploy`: apply migrations
+- `pnpm --filter @repo/db exec prisma migrate deploy`: apply migrations. Prisma and `pnpm --filter @repo/api dev` read `.env`; `start` and CI read the process env only
 - `pnpm --filter @repo/web dev`: dev server. Don't run it; it's already open in another terminal
 
 ## Rules

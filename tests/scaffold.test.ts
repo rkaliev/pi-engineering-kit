@@ -46,6 +46,7 @@ test("writes .nvmrc and packageManager", () => {
 	assert.equal(pkg.packageManager, "pnpm@10.0.0");
 	assert.equal(pkg.name, "app");
 	assert.ok(plan.copy.includes("apps/api/package.json"));
+	assert.ok(!plan.copy.includes("scaffold.json"));
 });
 
 test("refuses a non-empty destination", () => {
