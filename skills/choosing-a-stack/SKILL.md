@@ -30,14 +30,14 @@ In an existing codebase the stack is already chosen. Use what is there (changing
    - lock-in.
 3. **Verify facts at the source.** Check the current LTS or stable versions, support windows and SDK requirements in the official docs or release pages. Never state them from memory.
 4. **Recommend one**, with its trade-offs and what would change the decision. Record the decision (a decision record, see writing-documentation) with the date and pinned versions.
-5. **Scaffold with the official tool** for the chosen stack, and set up CI from the start (ci-quality-gates). For web and API products, offer BDD as the acceptance layer; the user decides. Pin exact versions, commit the lockfile, and add formatter, linter, typecheck and test commands from the start. Write them into AGENTS.md (`../../templates/AGENTS.md`) and `.pi/verify.json`.
+5. **Scaffold with the official tool** for the chosen stack, and set up CI from the start (ci-quality-gates). For web and API products, offer BDD as the acceptance layer; the user decides. To scaffold the TypeScript full-stack candidate, follow the profile's scaffold steps. Pin exact versions, commit the lockfile, and add formatter, linter, typecheck and test commands from the start. Write them into AGENTS.md (`../../templates/AGENTS.md`) and `.pi/verify.json`.
 
 ## Reliable defaults (starting points, not rules)
 
 | Area | Default | Consider instead when |
 |---|---|---|
-| Web frontend (then web-frontend) | TypeScript (strict) + React with a mainstream meta-framework, or the company standard | SEO- or content-heavy (SSR/SSG first), very small widget (vanilla or a small library) |
-| Backend / API | TypeScript on Node LTS, Kotlin/Java (Spring) or .NET LTS, Go for small infra services | Heavy transactional or financial domain: prefer JVM or .NET with strong typing and mature DB tooling. Runtime rules: backend-services |
+| Web frontend (then web-frontend) | TypeScript (strict) + React with a mainstream meta-framework, or the company standard | SEO- or content-heavy (SSR/SSG first), very small widget (vanilla or a small library). TypeScript full-stack in one repo: the profile in `references/ts-fullstack-profile.md` is one candidate |
+| Backend / API | TypeScript on Node LTS, Kotlin/Java (Spring) or .NET LTS, Go for small infra services | Heavy transactional or financial domain: prefer JVM or .NET with strong typing and mature DB tooling. Runtime rules: backend-services. TypeScript full-stack in one repo: the profile in `references/ts-fullstack-profile.md` is one candidate |
 | Database | PostgreSQL | Embedded, local or offline: SQLite. Analytics: a columnar store alongside, not instead |
 | Android | Kotlin + Jetpack Compose, Gradle version catalog | Payment or POS terminals: vendor SDK constraints (often Android with a fixed API level) |
 | iOS | Swift + SwiftUI (UIKit where needed), SPM | — |
