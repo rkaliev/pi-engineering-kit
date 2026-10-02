@@ -121,3 +121,13 @@ test("test-hygiene: offered without the flag, the package's own script with it, 
 	assert.equal(item(olderDir, true).status, "merge", "--test-hygiene replaces an older copy");
 	assert.equal(item(project({ [HYGIENE_TARGET]: 'export const VERSION = "999";\n' })).status, "exists", "a newer copy is not called older");
 });
+
+test("then from turbo.json tasks, as one turbo run", () => {
+	const turbo = JSON.stringify({ tasks: { build: {}, lint: {}, test: {}, typecheck: {} } });
+	const s = scripts({ test: "turbo run test" });
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turbo, "pnpm-workspace.yaml": "", "package.json": s })), ["pnpm turbo run typecheck lint test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turbo, "package-lock.json": "{}", "package.json": s })), ["npx turbo run typecheck lint test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": JSON.stringify({ pipeline: { test: {} } }), "yarn.lock": "", "package.json": s })), ["yarn turbo run test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": "{", "package.json": scripts({ test: "vitest run" }) })), ["npm test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": JSON.stringify({ tasks: { build: {} } }), "package.json": scripts({ test: "vitest run" }) })), ["npm test"]);
+});
