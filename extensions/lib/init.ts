@@ -107,12 +107,16 @@ export function detectVerifyCommands(cwd: string): string[] {
 	const has = (rel: string) => existsSync(join(cwd, rel));
 	const pm = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
 	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx", npm: "npx" }[pm];
-	if (has("turbo.json")) {
+	const turboFile = ["turbo.json", "turbo.jsonc"].find(has);
+	if (turboFile) {
 		try {
-			const turbo = JSON.parse(readFileSync(join(cwd, "turbo.json"), "utf8"));
-			const declared = turbo.tasks ?? turbo.pipeline ?? {};
-			// One run over the workspace; `build` is left out on purpose (slow, covered by typecheck and test).
-			const tasks = ["typecheck", "type-check", "lint", "test"].filter((t) => t in declared);
+			// turbo.json allows comments; strip them outside strings before parsing.
+			const text = readFileSync(join(cwd, turboFile), "utf8").replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "$1");
+			const turbo = JSON.parse(text);
+			const keys = Object.keys(turbo.tasks ?? turbo.pipeline ?? {});
+			// A task counts when declared, also per package (`web#test`, `//#lint`).
+			// `build` is left out on purpose: CI builds; verify stays fast.
+			const tasks = ["typecheck", "type-check", "lint", "test"].filter((t) => keys.some((k) => k === t || k.endsWith(`#${t}`)));
 			if (tasks.length > 0) return [`${exec} turbo run ${tasks.join(" ")}`];
 		} catch {
 			// unreadable turbo.json: fall through to the package.json scripts
