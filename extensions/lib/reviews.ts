@@ -3,12 +3,16 @@
  * a reviewer passed exactly the commit being landed. Verdicts are recorded from the reviewer's own
  * report (never by the main agent), one file per reviewer run. Any change after the review (a new
  * commit, an amend, a rebase, a docs edit) is a different commit and needs a new review.
+ *
+ * A verdict covers the range its reviewer names (`Reviewed BASE:`..`Reviewed HEAD:`). A commit is covered
+ * when that range reaches back to the remote base, directly or through earlier rounds whose own ranges do:
+ * a repeat round reviews only the new commits, and the chain keeps the whole branch reviewed.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
@@ -17,10 +21,23 @@ export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
 /** One reviewer run's verdict on one commit. A run that failed counts as Inconclusive for the commit it reviewed. */
 export interface ReviewRecord {
 	sha: string;
+	/** Where the reviewed range starts. Missing for a failed run and for records from before ranges were recorded. */
+	base?: string;
 	verdict: Verdict;
 	/** Reviews from one user prompt combine (parallel reviewers); a later prompt replaces them. */
 	promptId: string;
 	at: number;
+	/** The reviewer's report, so a repeat round reads the open findings from the store, not from the author. */
+	report?: string;
+}
+
+/** The latest round of reviews of one commit: its reviewers' verdicts combined, and the ranges they covered. */
+export interface ReviewRound {
+	sha: string;
+	verdict: Verdict;
+	promptId: string;
+	at: number;
+	bases: string[];
 }
 
 export interface ReviewGateOptions {
@@ -36,19 +53,31 @@ const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2
 // A verdict word followed by `/` or `|` is the unfilled template line, not a verdict.
 const VERDICT = /Ready to merge[*_]*:[*_\s]*(Yes|No|With fixes|Inconclusive)\b(?![*_\s]*[/|])/gi;
 const HEAD = /Reviewed HEAD[*_]*:[*_\s`]*([0-9a-f]{7,40})\b/gi;
+const BASE = /Reviewed BASE[*_]*:[*_\s`]*([0-9a-f]{7,40})\b/gi;
 /** Segments that may run before a landing in one command: they neither commit nor move a ref. */
 const SAFE_COMMANDS = new Set(["cd", "pushd", "echo", "printf", "true", "sleep", "pwd"]);
 const SAFE_GIT = new Set(["status", "diff", "log", "show", "rev-parse", "add", "fetch", "remote", "branch"]);
 const READ_ONLY = new Set(["cat", "less", "head", "tail", "grep", "rg", "ls", "wc", "diff", "stat", "file", "jq"]);
 const READ_ONLY_GIT = new Set(["diff", "show", "log", "status", "blame"]);
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_REPORT = 200_000;
+/** The PRs/MRs the agent opened: `{ "<branch>": <ms> }`, next to the verdict records. */
+const PRS_FILE = "prs.json";
+/** PR/MR creations seen before their call finished: `{ "<tool call id>": { branch, at } }`. */
+const PENDING_FILE = "prs-pending.json";
+const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Rounds a chain may pass through back to the remote base. */
+const MAX_CHAIN = 20;
+/** git calls one coverage check may spend, well inside the hook's 10 s timeout. */
+const MAX_CHAIN_CALLS = 300;
 
-/** The verdict and SHA in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
-export function parseReview(text: string): { sha: string; verdict: Verdict } | undefined {
+/** The range and verdict in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
+export function parseReview(text: string): { base: string; sha: string; verdict: Verdict } | undefined {
 	const verdicts = [...text.matchAll(VERDICT)].map((m) => normalize(m[1]!));
 	const shas = new Set([...text.matchAll(HEAD)].map((m) => m[1]!.toLowerCase()));
-	if (verdicts.length === 0 || shas.size !== 1) return undefined;
-	return { sha: [...shas][0]!, verdict: worst(verdicts) };
+	const bases = new Set([...text.matchAll(BASE)].map((m) => m[1]!.toLowerCase()));
+	if (verdicts.length === 0 || shas.size !== 1 || bases.size !== 1) return undefined;
+	return { base: [...bases][0]!, sha: [...shas][0]!, verdict: worst(verdicts) };
 }
 
 /** The SHA a report names, even when its verdict line is missing: a failed run is charged to that commit. */
@@ -63,15 +92,17 @@ export function reviewedHead(text: string): string | undefined {
  */
 export function recordReview(projectDir: string, text: string, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
 	const parsed = parseReview(text);
-	if (!parsed) return "the report has no single `Reviewed HEAD: <sha>` line with one `Ready to merge:` verdict";
-	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root);
+	if (!parsed) return "the report needs one `Reviewed BASE: <sha>` line, one `Reviewed HEAD: <sha>` line and one `Ready to merge:` verdict";
+	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root, { base: parsed.base, report: text });
 }
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
-export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
+export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
 	const sha = git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
 	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
-	const record: ReviewRecord = { sha, verdict, promptId: ids.promptId, at: Date.now() };
+	const base = extra.base === undefined ? undefined : git(projectDir, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
+	if (extra.base !== undefined && !base) return `Reviewed BASE ${extra.base} is not a commit in this repository`;
+	const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
 	const dir = reviewsDir(projectDir, root);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -84,8 +115,8 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 	return record;
 }
 
-/** Recorded verdicts per reviewed SHA, newest first: the latest prompt's reviews combined to the worst verdict. */
-export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
+/** Recorded rounds per reviewed SHA, newest first: the latest prompt's reviews combined to the worst verdict. */
+export function readReviews(projectDir: string, root?: string): ReviewRound[] {
 	const dir = reviewsDir(projectDir, root);
 	let names: string[];
 	try {
@@ -99,13 +130,137 @@ export function readReviews(projectDir: string, root?: string): ReviewRecord[] {
 		const record = readRecord(join(dir, name));
 		if (record) bySha.set(record.sha, [...(bySha.get(record.sha) ?? []), record]);
 	}
-	const combined: ReviewRecord[] = [];
+	const combined: ReviewRound[] = [];
 	for (const records of bySha.values()) {
 		const latest = records.reduce((a, b) => (b.at > a.at ? b : a));
-		const prompt = records.filter((r) => r.promptId === latest.promptId).map((r) => r.verdict);
-		combined.push({ ...latest, verdict: worst(prompt) });
+		const prompt = records.filter((r) => r.promptId === latest.promptId);
+		const bases = [...new Set(prompt.flatMap((r) => (r.base ? [r.base] : [])))];
+		combined.push({ sha: latest.sha, verdict: worst(prompt.map((r) => r.verdict)), promptId: latest.promptId, at: latest.at, bases });
 	}
 	return combined.sort((a, b) => b.at - a.at);
+}
+
+/**
+ * Before a shell call runs: note the branch of a PR/MR it would open (`--head`/`-s`, else the current branch where
+ * the command starts, following `cd` like checkReview). settlePr registers it once the call has succeeded; a later
+ * push to that branch updates the PR, so it is a landing too.
+ */
+export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
+	let dir: string | undefined = cwd;
+	let outside: string | undefined;
+	let inSubshell = false;
+	const segments = splitSegments(tokenize(stripRedirects(command)));
+	segments.forEach((raw, index) => {
+		// A `cd` inside `( … )` ends with the subshell, as in checkReview; a nested one is not followed.
+		if (raw[0]?.startsWith("(")) {
+			if (inSubshell || raw[0].startsWith("((")) dir = undefined;
+			inSubshell = true;
+			outside = dir;
+		}
+		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
+		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		const l = landing(tokens);
+		if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
+		else if (l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
+			// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
+			const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
+			if (branch) {
+				const pending = readJson(projectDir, PENDING_FILE, root);
+				// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
+				pending[callId] = { branch, at: Date.now(), last: index === segments.length - 1 };
+				writeJson(projectDir, PENDING_FILE, pending, root);
+			}
+		}
+		if (closes) {
+			inSubshell = false;
+			dir = outside;
+		}
+	});
+}
+
+/** After the call: register its noted PR branch if it succeeded (or failed after the PR step), forget it if not. */
+export function settlePr(projectDir: string, callId: string, ok: boolean, root?: string): void {
+	const pending = readJson(projectDir, PENDING_FILE, root);
+	const noted = pending[callId] as { branch?: unknown; last?: unknown } | undefined;
+	if (!noted) return;
+	delete pending[callId];
+	for (const [id, entry] of Object.entries(pending)) {
+		if (Date.now() - Number((entry as { at?: unknown }).at ?? 0) > PENDING_MAX_AGE_MS) delete pending[id];
+	}
+	writeJson(projectDir, PENDING_FILE, pending, root);
+	if ((!ok && noted.last !== false) || typeof noted.branch !== "string") return;
+	const prs = readPrs(projectDir, root);
+	prs[noted.branch] = Date.now();
+	writePrs(projectDir, prs, root);
+}
+
+/**
+ * Branches of the PRs the agent opened that are still open. A merged one is dropped once the PR's head as the
+ * remote last showed it (`<remote>/<branch>`, else the local branch) is on `anchor`; so is one older than 30 days.
+ */
+export function openPrBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string, now = Date.now()): string[] {
+	const prs = readPrs(projectDir, root);
+	let changed = false;
+	for (const [branch, at] of Object.entries(prs)) {
+		const tip = git(where, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]) ?? git(where, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+		if (now - at > MAX_AGE_MS || (tip !== undefined && isAncestor(where, tip, anchor))) {
+			delete prs[branch];
+			changed = true;
+		}
+	}
+	if (changed) writePrs(projectDir, prs, root);
+	return Object.keys(prs);
+}
+
+function readPrs(projectDir: string, root?: string): Record<string, number> {
+	const raw = readJson(projectDir, PRS_FILE, root);
+	return Object.fromEntries(Object.entries(raw).filter((e): e is [string, number] => typeof e[1] === "number"));
+}
+
+function writePrs(projectDir: string, prs: Record<string, number>, root?: string): void {
+	writeJson(projectDir, PRS_FILE, prs, root);
+}
+
+function readJson(projectDir: string, file: string, root?: string): Record<string, unknown> {
+	try {
+		const dir = reviewsDir(projectDir, root);
+		if (!ownDir(dir)) return {};
+		const raw = JSON.parse(readFileSync(join(dir, file), "utf8")) as unknown;
+		return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+	} catch {
+		return {};
+	}
+}
+
+function writeJson(projectDir: string, file: string, value: Record<string, unknown>, root?: string): void {
+	const dir = reviewsDir(projectDir, root);
+	try {
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		if (ownDir(dir)) writeAtomic(join(dir, file), JSON.stringify(value));
+	} catch {
+		// best effort: a lost entry only means a later push to that PR is not gated
+	}
+}
+
+/** The reports of the latest round of reviews of `sha`, for a repeat round to re-check (see scripts/review-log.ts). */
+export function readReports(projectDir: string, sha: string, root?: string): Array<{ run: string; verdict: Verdict; report: string }> {
+	const dir = reviewsDir(projectDir, root);
+	let names: string[];
+	try {
+		if (!ownDir(dir)) return [];
+		names = readdirSync(dir).filter((n) => n.startsWith(`${sha}.`) && n.endsWith(".json"));
+	} catch {
+		return [];
+	}
+	const records = names.flatMap((name) => {
+		const record = readRecord(join(dir, name));
+		return record ? [{ run: name.split(".")[2] ?? "none", record }] : [];
+	});
+	const latest = records.reduce<(typeof records)[number] | undefined>((a, b) => (!a || b.record.at > a.record.at ? b : a), undefined);
+	if (!latest) return [];
+	return records
+		.filter((r) => r.record.promptId === latest.record.promptId)
+		.map((r) => ({ run: r.run, verdict: r.record.verdict, report: r.record.report ?? "(no report stored for this run)" }));
 }
 
 /**
@@ -156,7 +311,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		}
 		const base = baseBranch(where);
 		if (!base) continue;
-		const refs = targets(l, where, base);
+		const refs = targets(l, where, base, l.kind === "push" ? openPrBranches(projectDir, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root) : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -173,12 +328,90 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 }
 
 /**
+ * The reviewer's shell (Claude Code tells the hook which subagent runs the call). Fail closed: only a short list
+ * of inspection commands, git's read-only subcommands without their writing or program-running options, a
+ * worktree at an absolute temp path for another revision, the project's verification commands and the kit's own
+ * review-log. Anything the parser might misread (a backslash, `$`, backticks, parentheses, braces, `<`, a glob, `>`
+ * other than the stderr and null redirections, a background `&`) is refused, so the reviewer can't change what it judges.
+ */
+export function checkReviewerCommand(command: string, cwd: string, verify: string[], kitRoot: string): GuardDecision | undefined {
+	const refuse = (what: string): GuardDecision => ({
+		action: "block",
+		reason: `The reviewer is read-only: ${what} is not allowed in its shell. Use git diff/log/show/blame, \`git worktree add <absolute temp dir> <sha>\` for another revision, cat/head/tail/grep/wc/ls, the project's verification commands and review-log; read files with the Read and Grep tools.`,
+	});
+	// A glob (`*`, `?`, `[`) could expand into a planted file name such as `--output=a.txt`.
+	if (/[\\$`(){}<*?[]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces, `<` or a glob");
+	const bare = command.replace(/(^|\s)(?:2>&1|2>\/dev\/null|&?>\/dev\/null)(?=\s|$)/g, " ");
+	if (bare.includes(">") || /\btee\b/.test(bare)) return refuse("a writing redirection or tee");
+	const all = tokenize(bare);
+	if (all.includes("&")) return refuse("a background `&`");
+	let dir = cwd;
+	for (const tokens of splitSegments(all)) {
+		if (tokens.length === 0) continue;
+		if (tokens[0] === "cd") {
+			const next = tokens.length === 2 && tokens[1] !== "-" ? follow(dir, tokens[1]) : undefined;
+			if (next === undefined) return refuse(`\`${tokens.join(" ")}\` (a cd the guard can't follow)`);
+			dir = next;
+			continue;
+		}
+		if (!reviewerMay(tokens, dir, verify, kitRoot)) return refuse(`\`${tokens.join(" ")}\``);
+	}
+	return undefined;
+}
+
+/** Commands with no option that writes a file or runs a program. */
+const REVIEWER_COMMANDS = new Set(["cat", "head", "tail", "grep", "wc", "ls", "pwd", "echo", "true"]);
+const REVIEWER_GIT = new Set(["diff", "show", "log", "status", "blame", "rev-parse", "merge-base", "ls-files", "ls-tree", "cat-file", "shortlog", "describe"]);
+/** git options that write a file or run a program; git accepts any unambiguous abbreviation of a long option. */
+const GIT_WRITING_OPTIONS = ["--output", "--ext-diff"];
+
+function reviewerMay(tokens: string[], dir: string, verify: string[], kitRoot: string): boolean {
+	const [cmd = ""] = tokens;
+	if (REVIEWER_COMMANDS.has(cmd)) return true;
+	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
+	if (cmd === "node") return tokens.length === 3 && resolve(dir, tokens[1]!) === join(kitRoot, "scripts", "review-log.ts");
+	if (cmd !== "git") return false;
+	let i = 1;
+	// Of git's own options only `-C <dir>` and `--no-pager`: `-c`, `--git-dir`, `--exec-path` and the rest are refused.
+	while (tokens[i]?.startsWith("-")) {
+		if (tokens[i] === "-C" && tokens[i + 1] !== undefined) i += 2;
+		else if (tokens[i] === "--no-pager") i += 1;
+		else return false;
+	}
+	const sub = tokens[i] ?? "";
+	const args = tokens.slice(i + 1);
+	const end = args.indexOf("--");
+	const options = (end === -1 ? args : args.slice(0, end)).filter((t) => t.startsWith("--")).map((t) => t.split("=")[0]!);
+	if (options.some((o) => o.length >= 4 && GIT_WRITING_OPTIONS.some((w) => w.startsWith(o)))) return false;
+	if (REVIEWER_GIT.has(sub)) return true;
+	if (sub !== "worktree") return false;
+	const [action, ...rest] = args;
+	if (action === "list") return rest.length === 0;
+	const flags = rest.filter((t) => t.startsWith("-"));
+	const positional = rest.filter((t) => !t.startsWith("-"));
+	if (action === "add") return flags.every((f) => ["--detach", "-q", "--quiet"].includes(f)) && positional.length === 2 && inTemp(positional[0]!);
+	if (action === "remove") return flags.every((f) => ["--force", "-f"].includes(f)) && positional.length === 1 && inTemp(positional[0]!);
+	return false;
+}
+
+/** Whether an absolute path, written without `..`, is in the temp folder. */
+function inTemp(path: string): boolean {
+	if (!isAbsolute(path) || path.split(/[\\/]/).includes("..")) return false;
+	const target = path.replaceAll("\\", "/");
+	return [tmpdir(), safeRealpath(tmpdir()), "/tmp", "/private/tmp"].some((t) => target.startsWith(`${t.replaceAll("\\", "/")}/`));
+}
+
+/** Writing redirections and `tee` make any command a writer; `2>/dev/null` and `2>&1` don't. */
+function writes(command: string): boolean {
+	return [...command.matchAll(/\d*>>?\s*(&\d+|[^\s;&|]+)/g)].some((m) => m[1] !== "/dev/null" && !m[1]!.startsWith("&")) || /\btee\b/.test(command);
+}
+
+/**
  * Commands that write the review gate's own state: a verdict record (block) or the guard config (ask).
  * The path rules cover Edit/Write; this covers the shell, following `cd`. An interpreter one-liner can still hide a path.
  */
 export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string): GuardDecision | undefined {
-	// Writing redirections and `tee` make any command a writer; `2>/dev/null` and `2>&1` don't.
-	const redirects = [...command.matchAll(/\d*>>?\s*(&\d+|[^\s;&|]+)/g)].some((m) => m[1] !== "/dev/null" && !m[1]!.startsWith("&")) || /\btee\b/.test(command);
+	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
 	let dir = cwd;
@@ -217,9 +450,26 @@ export function stripRedirects(command: string): string {
 	while (i < command.length) {
 		const ch = command[i]!;
 		if (quote) {
-			if (ch === quote) quote = null;
+			// A backslash escapes the next character in "…" and $'…', never in '…'.
+			if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
+				out += command.slice(i, i + 2);
+				i += 2;
+				continue;
+			}
+			if (ch === (quote === "$'" ? "'" : quote)) quote = null;
 			out += ch;
 			i++;
+			continue;
+		}
+		if (ch === "\\") {
+			out += command.slice(i, i + 2);
+			i += 2;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === "'") {
+			quote = "$'";
+			out += "$'";
+			i += 2;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {
@@ -265,6 +515,8 @@ function follow(dir: string, arg: string | undefined): string | undefined {
 }
 
 function isSafe(tokens: string[], verify: string[]): boolean {
+	// `rg --pre <program>` runs that program on every file it searches.
+	if (tokens[0] === "rg" && tokens.some((t) => t.startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
 	if (tokens[0] === "git") {
@@ -284,10 +536,12 @@ function landsOnBase(l: Extract<Landing, { kind: "merge" }>, dir: string): boole
 }
 
 /** The refs a landing puts on the base; `undefined` for a PR/MR merge whose head isn't known locally. */
-function targets(l: Exclude<Landing, { kind: "commit" }>, where: string, base: string): Array<string | undefined> {
-	const onBase = currentBranch(where) === base;
+function targets(l: Exclude<Landing, { kind: "commit" }>, where: string, base: string, prBranches: string[]): Array<string | undefined> {
+	const current = currentBranch(where);
+	const onBase = current === base;
 	if (l.kind === "merge") return l.refs;
-	if (l.kind === "push") return pushedToBase(l, base, onBase);
+	// A push to the branch of an open PR updates the PR, so it lands like a push to the base.
+	if (l.kind === "push") return [...pushedToBase(l, base, onBase), ...prBranches.flatMap((b) => pushedToBase(l, b, current === b))];
 	if (l.target !== undefined && (/^\d+$/.test(l.target) || l.target.includes("://") || /^[#!]/.test(l.target))) return [undefined];
 	if (!l.merge && l.target === undefined) return ["HEAD"];
 	const branch = l.target ?? currentBranch(where);
@@ -303,7 +557,7 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 	// Already on the remote's base branch: nothing new lands. Only a remote-tracking ref proves that; the
 	// local base branch never does, since unreviewed commits may sit on it.
 	const tracking = `refs/remotes/${remote}/${base}`;
-	const landed = git(where, ["rev-parse", "--verify", "--quiet", tracking]) !== undefined && spawnSync("git", ["merge-base", "--is-ancestor", sha, tracking], { cwd: where, timeout: 5000 }).status === 0;
+	const landed = git(where, ["rev-parse", "--verify", "--quiet", tracking]) !== undefined && isAncestor(where, sha, tracking);
 	if (landed) return undefined;
 
 	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see.
@@ -311,19 +565,104 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 	const match = reviews.find((r) => r.sha === sha);
 	if (!match) {
 		// Name an earlier review only when it was of this branch (an ancestor): then the branch changed after it.
-		const earlier = reviews.find((r) => spawnSync("git", ["merge-base", "--is-ancestor", r.sha, sha], { cwd: where, timeout: 5000 }).status === 0);
+		const earlier = reviews.find((r) => isAncestor(where, r.sha, sha));
 		return earlier
 			? `no reviewer verdict recorded for ${short(sha)}; the last review of this branch covers ${short(earlier.sha)}, and the branch changed after it (a new commit, an amend or a rebase), so it needs a new review.`
 			: `no reviewer verdict recorded for ${short(sha)}.`;
 	}
 	// "With fixes" passes only after the fixes and a re-review of them, which gives a new verdict.
 	if (match.verdict !== "Yes") return `the review of ${short(match.sha)} returned "${match.verdict}".`;
-	return undefined;
+	// The reviewed range must reach the remote base, directly or through earlier rounds. Without a tracking
+	// ref (no remote) the local base branch is all there is.
+	const chain: Chain = { where, rounds: reviews, anchor: anchorRef(where, remote, base), memo: new Map(), ancestors: new Map(), calls: 0 };
+	const anchor = chain.anchor;
+	if (match.bases.some((b) => chainOk(chain, b, sha, 1))) return undefined;
+	if (chain.calls >= MAX_CHAIN_CALLS) return `the review of ${short(sha)} chains through more review rounds than the guard checks (${MAX_CHAIN_CALLS} git calls). Review the whole branch from its merge-base.`;
+	const range = match.bases.length > 0 ? `${short(match.bases[0]!)}..${short(sha)}` : "no recorded range (a review from before ranges were recorded)";
+	return `the review of ${short(sha)} does not cover the whole branch: it covers ${range}, and nothing reviewed connects it to ${anchor.replace(/^refs\/(remotes|heads)\//, "")}. Review the whole branch from its merge-base, or the commits before ${short(match.bases[0] ?? sha)}.`;
 }
 
-/** Where a project's review records live. Needs no environment, so every hook process agrees. */
+/**
+ * What a review chain must reach: the push remote's base branch, else origin's, else any remote's. Only a
+ * repository with no remote-tracking ref for the base at all anchors on the local base branch.
+ */
+function anchorRef(where: string, remote: string, base: string): string {
+	for (const ref of [`refs/remotes/${remote}/${base}`, `refs/remotes/origin/${base}`]) {
+		if (git(where, ["rev-parse", "--verify", "--quiet", ref])) return ref;
+	}
+	const other = lines(git(where, ["for-each-ref", "--format=%(refname)", "refs/remotes/"])).find((r) => r === `refs/remotes/${r.split("/")[2]}/${base}`);
+	return other ?? `refs/heads/${base}`;
+}
+
+function lines(text: string | undefined): string[] {
+	return (text ?? "").split("\n").filter(Boolean);
+}
+
+/** One coverage check: the rounds, the anchor, memoized answers and a budget of git calls. */
+interface Chain {
+	where: string;
+	rounds: ReviewRound[];
+	anchor: string;
+	memo: Map<string, boolean>;
+	ancestors: Map<string, boolean>;
+	calls: number;
+}
+
+/**
+ * Whether `base..sha` is a real range that reaches the anchor, directly or through recorded rounds (any verdict:
+ * a repeat round re-checks them). A repeat round must start at the newest reviewed commit below it, so no
+ * round's findings are skipped. Answers are memoized, and the git calls are budgeted: past the budget the
+ * range doesn't count, so a large history can't stall the hook into its timeout.
+ */
+function chainOk(chain: Chain, base: string, sha: string, links: number): boolean {
+	const key = `${base}..${sha}@${links}`;
+	const known = chain.memo.get(key);
+	if (known !== undefined) return known;
+	let ok = false;
+	if (links <= MAX_CHAIN && base !== sha && ancestor(chain, base, sha)) {
+		if (ancestor(chain, base, chain.anchor)) ok = true;
+		else {
+			const round = chain.rounds.find((r) => r.sha === base);
+			const inside = between(chain, base, sha);
+			const skipped = inside === undefined || chain.rounds.some((r) => r.sha !== sha && inside.has(r.sha));
+			ok = round !== undefined && !skipped && round.bases.some((b) => chainOk(chain, b, base, links + 1));
+		}
+	}
+	chain.memo.set(key, ok);
+	return ok;
+}
+
+/** The commits in `base..sha` (one git call), or undefined past the budget or on an error. */
+function between(chain: Chain, base: string, sha: string): Set<string> | undefined {
+	if (chain.calls >= MAX_CHAIN_CALLS) return undefined;
+	chain.calls++;
+	const out = git(chain.where, ["rev-list", `${base}..${sha}`]);
+	return out === undefined ? undefined : new Set(lines(out));
+}
+
+function ancestor(chain: Chain, a: string, b: string): boolean {
+	const key = `${a} ${b}`;
+	const known = chain.ancestors.get(key);
+	if (known !== undefined) return known;
+	if (chain.calls >= MAX_CHAIN_CALLS) return false;
+	chain.calls++;
+	const result = isAncestor(chain.where, a, b);
+	chain.ancestors.set(key, result);
+	return result;
+}
+
+function isAncestor(where: string, ancestor: string, rev: string): boolean {
+	return spawnSync("git", ["merge-base", "--is-ancestor", ancestor, rev], { cwd: where, timeout: 5000 }).status === 0;
+}
+
+/**
+ * Where a project's review records live: keyed by the repository's git common directory (real path), so the
+ * hook, a subfolder and every worktree of the repository agree. Outside a repository, by the folder itself.
+ */
 export function reviewsDir(projectDir: string, root = join(tmpdir(), "eng-kit", "reviews")): string {
-	return join(root, hash(resolve(projectDir)));
+	const dir = resolve(projectDir);
+	const common = git(dir, ["rev-parse", "--git-common-dir"]);
+	return join(root, hash(safeRealpath(common ? resolve(dir, common) : dir)));
 }
 
 function decision(action: "block" | "confirm", problem: string, options: ReviewGateOptions): GuardDecision {
@@ -334,7 +673,9 @@ function readRecord(path: string): ReviewRecord | undefined {
 	try {
 		const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<ReviewRecord>;
 		if (typeof raw.sha !== "string" || typeof raw.at !== "number" || typeof raw.promptId !== "string" || !(String(raw.verdict) in RANK)) return undefined;
-		return { sha: raw.sha, verdict: raw.verdict as Verdict, promptId: raw.promptId, at: raw.at };
+		const base = typeof raw.base === "string" ? raw.base : undefined;
+		const report = typeof raw.report === "string" ? raw.report : undefined;
+		return { sha: raw.sha, base, verdict: raw.verdict as Verdict, promptId: raw.promptId, at: raw.at, report };
 	} catch {
 		return undefined;
 	}

@@ -18,6 +18,7 @@ test("blocks hook bypass", () => {
 
 test("blocks force push but allows --force-with-lease with confirmation", () => {
 	assert.equal(action("git push --force"), "block");
+	assert.equal(action("git push \\\n  --force origin main"), "block", "a line continuation joins the command");
 	assert.equal(action("git push -f origin main"), "block");
 	assert.equal(action("git -C ../other push origin +main"), "block");
 	assert.equal(action("git push --mirror"), "block");
