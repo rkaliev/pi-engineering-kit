@@ -211,7 +211,7 @@ The command shows what it will create, asks about each file and **never overwrit
 
 | File | What it contains |
 |---|---|
-| `.pi/verify.json` | Verification commands: from `## Commands` in AGENTS.md, otherwise from `package.json` scripts (npm/pnpm/yarn/bun by lockfile), otherwise `./gradlew check`, `cargo test`, `go test`, `dotnet test`, `pytest` |
+| `.pi/verify.json` | Verification commands: from `## Commands` in AGENTS.md, otherwise from `package.json` scripts (npm/pnpm/yarn/bun by lockfile; with a `turbo.json`, one `turbo run` of its typecheck, lint and test tasks), otherwise `./gradlew check`, `cargo test`, `go test`, `dotnet test`, `pytest` |
 | `.pi/guard.json` | Empty project guard rules. The built-in rules apply without them, including the task-file rule for `docs/tasks` (the `workDocs` key changes the folders; `[]` turns it off) |
 | `.pi/model-routing.json` | The `deep`, `fast` and `cheap` modes and which command runs in which mode. **Check the model IDs against `pi --list-models`** |
 | `.pi/settings.json` | Adds `npm:pi-subagents` to `packages` and leaves the other keys alone |
