@@ -44,13 +44,13 @@ Databases, caches, queues, e-mail and payment providers are attached through con
 
 ## One store until measured
 
-Start with the Postgres the service already has:
+Start with the relational database the service already has (Postgres shown; MySQL and SQL Server have equivalents):
 
 - a queue with `FOR UPDATE SKIP LOCKED`;
-- a cache table or materialized view;
-- advisory locks for scheduled jobs and mutual exclusion.
+- a cache table or materialized view, and rate-limit counters;
+- advisory locks for scheduled jobs and mutual exclusion (transaction-scoped `pg_advisory_xact_lock` behind a pooler in transaction mode).
 
-Add a separate broker or cache only after a measurement or a hard need (a throughput limit, a feature Postgres lacks). Record it in a decision record (writing-documentation), with the measurement.
+Add a separate broker or cache only after a measurement or a hard need (a throughput limit, a feature the database lacks). Record it in a decision record (writing-documentation), with the measurement.
 
 ## Parity
 
