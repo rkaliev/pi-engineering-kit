@@ -1,0 +1,20 @@
+{
+  ".": {
+    "devDependencies": ["turbo", "prettier", "@repo/prettier-config"]
+  },
+  "packages/eslint-config": {
+    "dependencies": ["@eslint/js", "typescript-eslint"]
+  },
+  "packages/db": {
+    "dependencies": ["kysely", "pg"],
+    "devDependencies": ["prisma", "prisma-kysely", "@types/pg", "@types/node", "typescript", "eslint", "vitest", "@repo/typescript-config", "@repo/eslint-config"]
+  },
+  "apps/api": {
+    "dependencies": ["express", "zod", "@repo/db"],
+    "devDependencies": ["@types/express", "@types/node", "typescript", "eslint", "vitest", "@repo/typescript-config", "@repo/eslint-config"]
+  },
+  "apps/web": {
+    "dependencies": ["react", "react-dom"],
+    "devDependencies": ["vite", "@vitejs/plugin-react", "@types/react", "@types/react-dom", "typescript", "eslint", "vitest", "@repo/typescript-config", "@repo/eslint-config"]
+  }
+}
