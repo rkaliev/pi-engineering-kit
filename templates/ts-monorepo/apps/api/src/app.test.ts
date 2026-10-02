@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { afterEach, test } from "vitest";
 import { createApp, type AppDeps } from "./app.ts";
+import { createLogger, logRequestError } from "./log.ts";
 
 let close: (() => void) | undefined;
 afterEach(() => close?.());
@@ -107,4 +108,78 @@ test("bigint values serialise as strings", async () => {
     },
   });
   assert.deepEqual(await (await fetch(`${base}/n`)).json(), { amount: "12345678901234567890" });
+});
+
+test("a 4xx log carries status and type only: a rejected body never reaches the logs", async () => {
+  const lines: string[] = [];
+  const log = createLogger("debug", (line) => lines.push(line));
+  let raw = "";
+  const base = await start({
+    onError: (err, status) => {
+      raw = (err as Error).message;
+      logRequestError(log, err, status);
+    },
+    routes: (app) => {
+      app.post("/echo", (req, res) => {
+        res.json(req.body);
+      });
+    },
+  });
+  const res = await fetch(`${base}/echo`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{"password": hunter2}',
+  });
+  assert.equal(res.status, 400);
+  assert.match(raw, /hunter2/, "premise: the parser's own message quotes the body");
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0] ?? "", /hunter2/);
+  assert.deepEqual(JSON.parse(lines[0] ?? ""), {
+    level: "warn",
+    msg: "request rejected",
+    status: 400,
+    type: "entity.parse.failed",
+  });
+});
+
+test("a 500 log keeps the name, message and stack", async () => {
+  const lines: string[] = [];
+  const log = createLogger("debug", (line) => lines.push(line));
+  const base = await start({
+    onError: (err, status) => logRequestError(log, err, status),
+    routes: (app) => {
+      app.get("/boom", () => {
+        throw new TypeError("disk on fire");
+      });
+    },
+  });
+  assert.equal((await fetch(`${base}/boom`)).status, 500);
+  const entry = JSON.parse(lines[0] ?? "");
+  assert.equal(entry.level, "error");
+  assert.equal(entry.name, "TypeError");
+  assert.equal(entry.message, "disk on fire");
+  assert.match(entry.stack, /disk on fire/);
+});
+
+test("an error after the response started goes to Express's default handler, not ours", async () => {
+  let reported = 0;
+  const base = await start({
+    onError: () => {
+      reported += 1;
+    },
+    routes: (app) => {
+      app.get("/half", (_req, res) => {
+        res.write("partial");
+        throw new Error("late failure");
+      });
+    },
+  });
+  let text = "aborted";
+  try {
+    text = await (await fetch(`${base}/half`)).text();
+  } catch {
+    // The default handler closes the connection: an aborted body is the expected outcome.
+  }
+  assert.doesNotMatch(text, /internal/);
+  assert.equal(reported, 0);
 });

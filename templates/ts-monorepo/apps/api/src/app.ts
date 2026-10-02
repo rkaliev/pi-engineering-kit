@@ -48,7 +48,9 @@ export function createApp(deps: AppDeps): express.Express {
 
   deps.routes?.(app);
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // The response has started: Express's default handler closes the connection.
+    if (res.headersSent) return next(err);
     const status = statusOf(err);
     deps.onError(err, status);
     res.status(status).json({ error: status === 500 ? "internal" : (clientErrors[status] ?? "client_error") });

@@ -13,3 +13,18 @@ export function createLogger(level: Level, write: (line: string) => void = conso
     };
   return { debug: make("debug"), info: make("info"), warn: make("warn"), error: make("error") };
 }
+
+/**
+ * Log fields for a failed request. A 4xx carries status and type only: parser and validation messages
+ * quote the input (V8's JSON.parse error includes the body), so message and stack stay out of the logs.
+ */
+export function requestErrorFields(err: unknown, status: number): Record<string, unknown> {
+  const e = (err ?? {}) as { type?: unknown; name?: unknown; message?: unknown; stack?: unknown };
+  if (status < 500) return { status, type: typeof e.type === "string" ? e.type : e.name };
+  return { status, name: e.name, message: e.message ?? String(err), stack: e.stack };
+}
+
+export function logRequestError(log: Logger, err: unknown, status: number): void {
+  if (status >= 500) log.error("request failed", requestErrorFields(err, status));
+  else log.warn("request rejected", requestErrorFields(err, status));
+}
