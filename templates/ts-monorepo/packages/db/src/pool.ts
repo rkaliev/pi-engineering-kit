@@ -1,4 +1,4 @@
-import { Kysely, PostgresDialect } from "kysely";
+import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import type { DB } from "./generated/types.ts";
 
@@ -25,4 +25,10 @@ export function poolConfig(env: DbEnv): pg.PoolConfig {
 
 export function createDb(env: DbEnv): Kysely<DB> {
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool: new pg.Pool(poolConfig(env)) }) });
+}
+
+/** True when the database answers a trivial query; for readiness checks. */
+export async function ping(db: Kysely<DB>): Promise<boolean> {
+  await sql`select 1`.execute(db);
+  return true;
 }

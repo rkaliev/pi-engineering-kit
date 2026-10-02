@@ -7,8 +7,7 @@ saveExact: true
 minimumReleaseAge: 1440
 
 # Packages whose install scripts may run; unlisted ones fail the install.
-# The scaffold run confirms this list: add what pnpm reports, remove what it never asks for.
+# Confirmed by the scaffold run: pnpm asks for exactly these two. If a later install reports another, add it here.
 allowBuilds:
-  esbuild: true
   prisma: true
   "@prisma/engines": true

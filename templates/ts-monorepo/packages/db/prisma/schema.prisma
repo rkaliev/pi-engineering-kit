@@ -11,6 +11,7 @@ generator kysely {
 
 // One small model so generate and migrate deploy have something to do. Replace it with the product's.
 model Account {
+  /// @kyselyType(bigint)
   id        BigInt   @id @default(autoincrement())
   email     String   @unique
   createdAt DateTime @default(now()) @db.Timestamptz(3)

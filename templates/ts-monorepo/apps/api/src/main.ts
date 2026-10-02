@@ -1,5 +1,4 @@
-import { sql } from "kysely";
-import { createDb } from "@repo/db";
+import { createDb, ping } from "@repo/db";
 import { createApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 
@@ -7,10 +6,7 @@ const config = loadConfig(process.env);
 const db = createDb(config);
 
 const app = createApp({
-  ready: async () => {
-    await sql`select 1`.execute(db);
-    return true;
-  },
+  ready: () => ping(db),
 });
 
 const server = app.listen(config.PORT, () => {
