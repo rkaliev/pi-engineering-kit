@@ -53,11 +53,11 @@ Also read in full any new file the diff introduces.
   can't approve itself: edits to the rules (the agent manifest, linter or type config, review or
   coding standards) anywhere on the branch are judged against the rules on {RULES_BASE} and apply
   only once merged.
-- If {BASE} is not {RULES_BASE}, this is a repeat round: first run
-  `node {SKILL_DIR}/../../scripts/review-log.ts {BASE}`, review {BASE}..{HEAD} and re-check every
-  finding in the reports it prints (fixed / still valid / withdrawn, with why); the author's
-  summary is not the source. If it prints `no recorded review`, the range starts at a commit
-  nobody reviewed: say Inconclusive. Match findings by the underlying defect, not by
+- First run `node {SKILL_DIR}/../../scripts/review-log.ts {BASE}`. If {BASE} is not {RULES_BASE}, this is
+  a repeat round: review {BASE}..{HEAD} and re-check every finding in the reports it prints
+  (fixed / still valid / withdrawn, with why); the author's summary is not the source, and if it
+  prints `no recorded review`, the range starts at a commit nobody reviewed: say Inconclusive. If
+  {BASE} is {RULES_BASE}, the reports it may print are of code already on the base: set them aside. Match findings by the underlying defect, not by
   wording or rule: the same defect restated is not a new finding.
 - No praise, no empty sections. Never invent a link, path or line number; cite only what you opened.
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
+import { readReviews } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
@@ -544,7 +545,8 @@ test("review gate: a review that ran on unverified edits counts as Inconclusive"
 	git("commit", "-qm", "feat: a");
 	const head = git("rev-parse", "HEAD");
 	const g = fakePi();
-	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	guard(g.pi, { reviewsRoot });
 	const review = () => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
 	const pr = async () => (await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block;
 	try {
@@ -552,6 +554,7 @@ test("review gate: a review that ran on unverified edits counts as Inconclusive"
 		await g.emit("input", { text: "review", source: "interactive" }, ctx(dir));
 		await review();
 		assert.equal(await pr(), true);
+		assert.equal(readReviews(dir, reviewsRoot)[0]?.bases.length, 1, "it keeps its range, so a later round can chain through it");
 		verifyState.unverified = false;
 		await g.emit("input", { text: "again", source: "interactive" }, ctx(dir));
 		await review();

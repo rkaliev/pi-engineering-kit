@@ -517,8 +517,8 @@ test("many parallel bases per round are checked in bounded time", () => {
 		review(report(shas[i]!, "Yes", shas[i - 1]!), `p${i}`, "r1");
 		review(report(shas[i]!, "Yes", shas[i - 2]!), `p${i}`, "r2");
 	}
-	// Walking every path would run out of the git-call budget ("more review rounds than the guard checks");
-	// the memoized walk answers within it.
+	// The skip rule, the cache and the git-call budget keep this walk bounded: it answers "does not cover" and never
+	// runs into the hook's timeout.
 	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
 });
 
