@@ -64,6 +64,6 @@ Each one went wrong in a production monorepo of this shape.
 
 1. Check the current Node LTS at nodejs.org and that `node` runs it. Install the latest pnpm (pnpm.io/installation) and check `pnpm --version`; the script pins it as `packageManager`.
 2. Run `node "<kit root>/scripts/scaffold-template.ts" <dir>`. It copies `templates/ts-monorepo/`, writes `.nvmrc` and `packageManager`, and installs the packages listed in `scaffold.json` with `pnpm add -E`.
-3. Pin each `@<sha>` in the workflow to the action's latest release commit.
+3. Pin each `@<sha>` in the workflow to the action's latest release commit (for an annotated tag, the `^{}` line of `git ls-remote --tags`, not the tag object).
 4. Run `pnpm turbo run typecheck lint test`.
 5. Write a decision record with the installed versions (writing-documentation).
