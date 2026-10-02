@@ -11,7 +11,7 @@ A web UI runs on browsers and devices you don't control, for people and browser 
 
 - **Follow the project's architecture.** Keep its layering (for example FSD), its state manager and data-fetching layer, and its component library and design tokens. A new screen copies an existing screen's structure. Don't introduce a second state or styling approach.
 - **Browser targets come from the project** (`browserslist`, CONTRIBUTING, AGENTS.md), not from memory. Features outside them need a fallback or the user's agreement.
-- **Read the design context first** (`design.md` or design-system docs). Tokens, component variants, fonts and destructive-action copy: `references/design-system.md`. Where state lives, optimistic updates, placeholders and time zones: `references/state-and-data.md`. Animation and gestures: **ui-motion**.
+- **Read the design context first** (`design.md` or design-system docs). Tokens, component variants, fonts and destructive-action copy: `references/design-system.md`. State, optimistic updates, placeholders, time zones and the client/server boundary: `references/state-and-data.md`. Animation and gestures: **ui-motion**.
 
 ## Semantics and accessibility: the practical minimum
 

@@ -42,6 +42,16 @@ Databases, caches, queues, e-mail and payment providers are attached through con
   - exit 0, or exit non-zero if the deadline passed.
 - Work survives a sudden kill: jobs are idempotent and resumable, and messages are acknowledged only after they are processed.
 
+## One store until measured
+
+Start with the Postgres the service already has:
+
+- a queue with `FOR UPDATE SKIP LOCKED`;
+- a cache table or materialized view;
+- advisory locks for scheduled jobs and mutual exclusion.
+
+Add a separate broker or cache only after a measurement or a hard need (a throughput limit, a feature Postgres lacks). Record it in a decision record (writing-documentation), with the measurement.
+
 ## Parity
 
 Run the same kinds of backing services locally and in CI as in production: a Postgres container instead of SQLite, the real broker instead of an in-memory fake. Keep the gap between merge and deploy short.

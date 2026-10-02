@@ -13,6 +13,10 @@ A dependency change is a code change you didn't write. Treat it with the same ca
 - **Ask first** for a major version, a new dependency, a removed one, or a new licence type. Name what it costs: the breaking changes, the size, the maintenance status, and the licence.
 - **Security first.** Start with known advisories (`npm audit`, `pnpm audit`, `osv-scanner`, `pip-audit`, `govulncheck`, `cargo audit`, Dependabot or Renovate alerts). Fix the ones that reach your code before routine bumps.
 - **The package manager edits the lockfile,** never your hands. Commit the manifest and the lockfile together.
+- **Every override or patch carries a reason and a removal condition** (a fixed upstream version, a date) in a comment or decision record. One without an exit is debt; remove it when the condition is met.
+- **Delay new releases.** Use a release-age delay (cooldown) so a version must be out for some days before it is installed (for example pnpm's `minimumReleaseAge`; npm, Renovate and Dependabot have their own settings). List the exceptions (urgent security fixes, your own packages) next to the setting. Unreviewed install scripts fail the install; allow them per package.
+- **No `@latest` or unpinned tools** in MCP servers and tool configs: pin an exact version.
+- **When adding a dependency, choose the highest stable release,** not the registry's `latest` tag, which can point at a pre-release.
 - **Pin the way the project pins.** Follow its version catalog, ranges or exact pins; don't restate versions from memory.
 
 ## Process
@@ -28,6 +32,7 @@ A dependency change is a code change you didn't write. Treat it with the same ca
 - **Mobile:** the target and compile SDK, the Kotlin and AGP matrix, the minimum iOS version and Xcode, and store policy limit what you can take (see mobile-development).
 - **POS and payment terminals:** the vendor SDK fixes the Android API level and often its own library versions (see pos-systems). An update that the vendor hasn't certified is a question for the user, not a bump.
 - **Runtimes and toolchains** (Node, JDK, .NET, Go, Xcode): change the version file the project uses (`.nvmrc`, `global.json`, `go.mod` toolchain, `.tool-versions`) and CI in the same change.
+- **One source for the runtime version.** Derived pins (CI, Dockerfile, `engines`, `packageManager`) are generated from it or checked against it in CI.
 
 ## Red flags
 

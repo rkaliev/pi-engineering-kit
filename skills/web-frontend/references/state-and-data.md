@@ -35,3 +35,10 @@ Don't sync one state into another with effects. If two values must agree, derive
 - Formatting of dates and times names its time zone explicitly; the server and the client, and two users, must not see different values by accident.
 - Server-rendered and client-rendered output is the same tree. Browser-only APIs are read after hydration, behind one named guard, not with ad-hoc `typeof window` branches.
 - Numbers, currency and dates go through the locale-aware formatters with an explicit locale.
+
+## Client and server boundary
+
+In a repo that holds both client and server code, server-only libraries (database clients, secrets, server validation) stay out of the client by tooling, not by review:
+- a lint import rule forbids importing them in client code (type-only imports allowed where the tool supports it);
+- a build-time import guard fails the build on a leak;
+- a CI check fails if a server-only marker is found in the built bundle.
