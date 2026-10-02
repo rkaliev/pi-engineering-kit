@@ -161,11 +161,11 @@ test("a 500 log keeps the name, message and stack", async () => {
   assert.match(entry.stack, /disk on fire/);
 });
 
-test("an error after the response started goes to Express's default handler, not ours", async () => {
-  let reported = 0;
+test("an error after the response started is logged once as a 500, and the connection is aborted", async () => {
+  const statuses: number[] = [];
   const base = await start({
-    onError: () => {
-      reported += 1;
+    onError: (_err, status) => {
+      statuses.push(status);
     },
     routes: (app) => {
       app.get("/half", (_req, res) => {
@@ -181,5 +181,5 @@ test("an error after the response started goes to Express's default handler, not
     // The default handler closes the connection: an aborted body is the expected outcome.
   }
   assert.doesNotMatch(text, /internal/);
-  assert.equal(reported, 0);
+  assert.deepEqual(statuses, [500]);
 });
