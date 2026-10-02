@@ -14,7 +14,7 @@ Don't take it for:
 
 ## Selection filter
 
-- No beta or pre-release packages and no 0.x packages in key roles. An exception is named, with its reason, in the decision record. Kysely is one: stable API, widely used, 0.x only by its versioning habit. Drizzle and the type generators below are also before a stable major, so whichever you choose goes into the record.
+- No beta or pre-release packages and no 0.x packages in key roles. An exception is named, with its reason, in the decision record. Kysely is one: stable API, widely used, 0.x only by its versioning habit. Drizzle and `kysely-codegen` are also 0.x or pre-release: check at the registry and record whichever you choose.
 - No vendor SaaS by default. Error tracking and the like are a separate decision.
 - One tool per role.
 
@@ -27,13 +27,13 @@ Don't take it for:
 | Language | TypeScript strict + `noUncheckedIndexedAccess`; presets in a shared `typescript-config` package | Same rules in every package | — | none (the profile is TypeScript) |
 | Web | React + Vite, TanStack Router + TanStack Query; no global client store (server state lives in the query cache) | Typed routes, one cache | SEO or content-heavy: use SSR | TanStack Start or another meta-framework; Next.js; React Router framework mode |
 | API | Express (current major); `/healthz` liveness, `/readyz` readiness, SIGTERM drain (backend-services) | Mature, widest middleware | A smaller or edge-runtime service | Hono (small, Web-standard, also runs on edge runtimes); Fastify (schema-first validation, throughput) |
-| Contracts | Zod schemas on the server as the single source; tRPC for the own web client; versioned REST `/api/<name>/v1` with OpenAPI generated from the same schemas for integrators. The client imports only router types from the server (`import type`); the boundary lint rule allows type-only imports | One schema, two consumers | No external integrators: skip REST | ts-rest or oRPC; OpenAPI-first codegen |
+| Contracts | Zod schemas on the server as the single source; tRPC for the own web client; versioned REST `/api/<name>/v1` with OpenAPI generated from the same schemas for integrators. The client imports only router types (`import type`), exported from a package with its own tsconfig so the web typecheck never compiles server code; the boundary lint rule allows type-only imports | One schema, two consumers | No external integrators: skip REST | ts-rest or oRPC; OpenAPI-first codegen |
 | Data | PostgreSQL as the only store: queue (`FOR UPDATE SKIP LOCKED`), cache, rate limits, locks (backend-services). Prisma for schema and migrations only; Kysely for every query, types generated from the schema. Every pooled connection gets `statement_timeout` and `lock_timeout` from config (database-changes) | Fewer moving parts; typed SQL | A measurement shows Postgres can't carry it | Drizzle (schema and queries in one tool) |
-| Migrations | Prisma migrations, transactional, expand/contract. `SET lock_timeout` at the top of each migration (pool timeouts don't reach `prisma migrate deploy`). Down SQL written by hand, because Prisma generates none. Migrations run as their own deploy step (database-changes) | No long locks, rollback possible | — | none (database-changes rules hold with any tool) |
-| Tests | Vitest co-located; integration tests against a real Postgres; one shared `fetch` stub, not per-test overrides of globals; Playwright end-to-end; BDD with Gherkin (playwright-bdd) when the user chooses it (test-driven-development) | Fast loop, real database, real browser | — | Jest |
+| Migrations | Prisma migrations, transactional, expand/contract. `SET lock_timeout` at the top of each migration (pool timeouts don't reach `prisma migrate deploy`). Prisma doesn't create or run down migrations: generate the down SQL with `prisma migrate diff`, review it, apply it with `prisma db execute`. Migrations run as their own deploy step (database-changes) | No long locks, rollback possible | — | none (database-changes rules hold with any tool) |
+| Tests | Vitest co-located; integration tests against a real Postgres; one shared `fetch` stub, not per-test overrides of globals; Playwright end-to-end; BDD with Gherkin (playwright-bdd) when the user chooses it (test-driven-development) | Fast loop, real database, real browser | An existing Jest suite worth keeping | Jest |
 | Quality | ESLint flat config in a shared package, plus custom rules that encode standards; Prettier; commit hooks for fast checks only | Standards enforced, not remembered | Few standards to encode: fewer plugins is simpler | Biome (one tool for lint and format) |
 | Observability | Structured JSON logger with a fixed field schema and redaction, OpenTelemetry traces, Prometheus-style metrics (observability) | Vendor-neutral | The company already runs a vendor APM | Vendor APM (a separate decision) |
-| Dependencies | Exact pins (`saveExact`), committed lockfile, Renovate in a time window, a release-age delay for new versions, every override or patch with a reason and a removal condition (updating-dependencies) | Reproducible, small attack window | The repo is on a platform that ships its own bot | Dependabot |
+| Dependencies | Exact pins (`saveExact`), committed lockfile, Renovate in a time window, a release-age delay for new versions, every override or patch with a reason and a removal condition (updating-dependencies) | Reproducible, small attack window | The team wants only the platform's built-in bot and accepts fewer grouping and schedule options | Dependabot (with its cooldown) |
 
 ## Rules that apply on any choice
 
@@ -53,7 +53,7 @@ Don't take it for:
 Each one went wrong in a production monorepo of this shape.
 
 - Agent rules synced from outside contradicted the binding stack standard: keep one source of truth for stack rules, in the repo.
-- Version drift (three TypeScript versions, two Zod majors, two tsconfig dialects, two Postgres majors): one version per tool repo-wide, checked in CI.
+- Version drift (three TypeScript versions, two Zod majors, two tsconfig dialects for the same runtime, two Postgres majors): one version per tool repo-wide, checked in CI.
 - Beta packages and a preview compiler as the production typecheck, many patches and overrides without an exit, `@latest` in tool configs: apply the filter, give every patch an exit.
 - Thousands of transitive packages and tiny zero-version helpers for trivial jobs: write the ten lines, or take a mature package.
 - Heavy local setup (a dozen-plus compose services, mandatory extra tooling) and CI where setup took ten times longer than the checks: keep local infra to PostgreSQL, measure CI setup.
