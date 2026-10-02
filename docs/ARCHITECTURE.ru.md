@@ -36,8 +36,8 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 │ extensions/init.ts       → /kit-init: .pi/ проекта одной командой       │
 │ skills/   28 скиллов (процесс, старт, платформы, домены), по описанию│
 │ prompts/  9 точек входа: /brainstorm /plan /implement /review …         │
-│ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json   │
-│ scripts/  test-hygiene.ts для CI проекта (/kit-init --test-hygiene)     │
+│ templates/ AGENTS.md, task.md, verify.json, ts-monorepo/, …             │
+│ scripts/  test-hygiene.ts (/kit-init --test-hygiene), scaffold-template │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,7 +92,7 @@ pi-engineering-kit — это пакет для кодинг-агента [pi](h
 | `onboarding-existing-codebase` | CI — это правда, команды доказываются прогоном. На выходе AGENTS.md по шаблону с заполненным разделом Docs и `.pi/verify.json` |
 | `changing-legacy-code` | Characterization tests, seams, sprout/wrap, strangler fig. Удаляй только свои сироты: странная ветка может быть требованием |
 
-**Профиль TypeScript full-stack.** `choosing-a-stack/references/ts-fullstack-profile.md` — один из кандидатов для нового TypeScript-продукта или SaaS с одной командой и Postgres, но не дефолт. По каждой роли там выбор, причина, когда не брать и альтернатива, а версий нет. Если ты выбрал профиль, `node <kit>/scripts/scaffold-template.ts <папка>` копирует `templates/ts-monorepo/` (pnpm workspaces, Turbo, веб-приложение на Vite, API на Express, Prisma с Kysely, CI). В шаблоне нет версий: скрипт ставит каждый пакет в старшем стабильном релизе не моложе суток, но не выше мажора стабильного тега `latest`, с точной фиксацией; `@types/node` ставится по мажору Node, а пакеты воркспейса — как `workspace:*`. Четыре практики этого стека лежат в скиллах без привязки к стеку: CI монорепы в ci-quality-gates (только затронутое, при сбое — всё, один gate), одно хранилище, пока нет замера, в backend-services и database-changes (Postgres для очереди, кеша и блокировок, пока замер не покажет, что нужен отдельный сервис), проверяемая граница клиент/сервер в web-frontend и дисциплина зависимостей в updating-dependencies (у каждого override и патча есть причина и условие снятия).
+**Профиль TypeScript full-stack.** `choosing-a-stack/references/ts-fullstack-profile.md` — один из кандидатов для нового TypeScript-продукта или SaaS с одной командой и Postgres, но не дефолт. По каждой роли там выбор, причина, когда не брать и альтернатива, а версий нет. Если ты выбрал профиль, `node <kit>/scripts/scaffold-template.ts <папка>` (из корня плагина или клона кита) копирует `templates/ts-monorepo/` (pnpm workspaces, Turbo, веб-приложение на Vite, API на Express, Prisma с Kysely, CI). В шаблоне нет версий: скрипт ставит каждый пакет в старшем стабильном релизе не моложе суток, но не выше мажора стабильного тега `latest`, с точной фиксацией; `@types/node` ставится по мажору Node, а пакеты воркспейса — как `workspace:*`. Четыре практики этого стека лежат в скиллах без привязки к стеку: CI монорепы в ci-quality-gates (только затронутое, при сбое — всё, один gate), одно хранилище, пока нет замера, в backend-services (существующая база несёт очередь, кеш и блокировки, пока замер не покажет, что нужен отдельный сервис), проверяемая граница клиент/сервер в web-frontend и дисциплина зависимостей в updating-dependencies (у каждого override и патча есть причина и условие снятия).
 
 ### Платформы
 
