@@ -50,6 +50,54 @@ test("an unhandled error is a generic 500 without a stack, and is reported", asy
   assert.equal(seen.length, 1);
 });
 
+test("a malformed JSON body is a 400 bad_request, reported with its status", async () => {
+  const seen: number[] = [];
+  const base = await start({
+    onError: (_err, status) => seen.push(status),
+    routes: (app) => {
+      app.post("/echo", (req, res) => {
+        res.json(req.body);
+      });
+    },
+  });
+  const res = await fetch(`${base}/echo`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{not json",
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: "bad_request" });
+  assert.deepEqual(seen, [400]);
+});
+
+test("a 4xx error keeps its class with a generic message; a 5xx stays internal", async () => {
+  const seen: number[] = [];
+  const base = await start({
+    onError: (_err, status) => seen.push(status),
+    routes: (app) => {
+      app.get("/missing", () => {
+        throw Object.assign(new Error("no such account 42"), { status: 404 });
+      });
+      app.get("/odd", () => {
+        throw Object.assign(new Error("teapot"), { statusCode: 418 });
+      });
+      app.get("/bad-gateway", () => {
+        throw Object.assign(new Error("upstream"), { status: 502 });
+      });
+    },
+  });
+  const missing = await fetch(`${base}/missing`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: "not_found" });
+  const odd = await fetch(`${base}/odd`);
+  assert.equal(odd.status, 418);
+  assert.deepEqual(await odd.json(), { error: "client_error" });
+  const gateway = await fetch(`${base}/bad-gateway`);
+  assert.equal(gateway.status, 500);
+  assert.deepEqual(await gateway.json(), { error: "internal" });
+  assert.deepEqual(seen, [404, 418, 500]);
+});
+
 test("bigint values serialise as strings", async () => {
   const base = await start({
     routes: (app) => {

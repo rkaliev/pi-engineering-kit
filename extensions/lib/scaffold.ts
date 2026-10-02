@@ -42,14 +42,15 @@ const compare = (a: number[], b: number[]): number => (a[0]! - b[0]! || a[1]! - 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
 /**
- * The highest release without a pre-release part that is at least `minAgeMinutes` old, within `major` when given.
+ * The highest release without a pre-release part that is at least `minAgeMinutes` old.
+ * `exactMajor` keeps only that major (a type package that follows the runtime); `maxMajor` skips higher majors.
  * `times` is the registry `time` map: versions, plus `created` and `modified`, which are ignored.
  */
 export function pickStable(
 	times: Record<string, string>,
 	now: Date,
 	minAgeMinutes: number,
-	major?: number,
+	limits: { exactMajor?: number; maxMajor?: number } = {},
 ): string | undefined {
 	let best: { version: string; key: number[] } | undefined;
 	for (const [version, published] of Object.entries(times)) {
@@ -58,7 +59,8 @@ export function pickStable(
 		const age = now.getTime() - new Date(published).getTime();
 		if (Number.isNaN(age) || age < minAgeMinutes * 60_000) continue;
 		const key = [Number(m[1]), Number(m[2]), Number(m[3])];
-		if (major !== undefined && key[0] !== major) continue;
+		if (limits.exactMajor !== undefined && key[0] !== limits.exactMajor) continue;
+		if (limits.maxMajor !== undefined && key[0]! > limits.maxMajor) continue;
 		if (!best || compare(key, best.key) > 0) best = { version, key };
 	}
 	return best?.version;
@@ -84,6 +86,15 @@ export function parseRegistryInfo(name: string, text: string): RegistryInfo {
 	}
 }
 
+/**
+ * What to install: the newest old-enough stable release. Never above the major of a stable `latest` tag
+ * (a stable-looking release under `next` must not win); `exactMajor` replaces that cap.
+ */
+export function pickRelease(info: RegistryInfo, now: Date, minAgeMinutes: number, exactMajor?: number): string | undefined {
+	const limits = exactMajor !== undefined ? { exactMajor } : { maxMajor: latestMajor(info["dist-tags"]) };
+	return pickStable(info.time, now, minAgeMinutes, limits);
+}
+
 /** Same release-age delay as the template's pnpm-workspace.yaml. */
 export const MIN_RELEASE_AGE_MINUTES = 1440;
 
@@ -94,8 +105,7 @@ const registryResolve: Resolve = (name, major) => {
 	if (r.error) throw new Error(`pnpm view ${name} could not start: ${r.error.message}`);
 	if (r.status !== 0) throw new Error(`pnpm view ${name} failed\n${r.stdout}${r.stderr}`);
 	const info = parseRegistryInfo(name, r.stdout);
-	const cap = major ?? latestMajor(info["dist-tags"]);
-	const version = pickStable(info.time, new Date(), MIN_RELEASE_AGE_MINUTES, cap);
+	const version = pickRelease(info, new Date(), MIN_RELEASE_AGE_MINUTES, major);
 	if (!version) throw new Error(`No stable release of ${name} older than ${MIN_RELEASE_AGE_MINUTES} minutes`);
 	return version;
 };

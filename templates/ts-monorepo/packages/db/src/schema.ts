@@ -1,3 +1,4 @@
+import "./marker.ts";
 import { readdirSync } from "node:fs";
 import { sql, type Kysely } from "kysely";
 import type { DB } from "./generated/types.ts";

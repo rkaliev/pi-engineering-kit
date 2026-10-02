@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
+import { latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
 const versions = { node: "24.1.0", pnpm: "10.0.0" };
 
@@ -114,9 +114,34 @@ test("scaffold pins every registry package to the resolved version and fails whe
 	assert.throws(() => scaffold(tpl, dest2, versions, () => ({ status: 0 }), none), /No stable release of express/);
 });
 
-test("pickStable stays within the requested major", () => {
-	const times = { "24.9.0": old, "26.6.3": old, "24.10.1": old };
-	assert.equal(pickStable(times, now, 1440, 24), "24.10.1");
+test("pickStable with exactMajor stays in that major", () => {
+	assert.equal(pickStable({ "24.9.0": old, "26.6.3": old }, now, 1440, { exactMajor: 24 }), "24.9.0");
+	assert.equal(pickStable({ "24.9.0": old, "24.10.1": old, "26.6.3": old }, now, 1440, { exactMajor: 24 }), "24.10.1");
+});
+
+test("pickStable with maxMajor skips only higher majors", () => {
+	assert.equal(pickStable({ "7.10.0": old, "8.1.0": old }, now, 1440, { maxMajor: 7 }), "7.10.0");
+	assert.equal(pickStable({ "6.2.0": old, "7.1.0": old }, now, 1440, { maxMajor: 7 }), "7.1.0");
+});
+
+test("a stable latest tag caps the major; a young new major under it is skipped by age", () => {
+	const info = {
+		time: { "7.10.0": old, "8.0.0": "2026-10-02T11:00:00Z" },
+		"dist-tags": { latest: "8.0.0" },
+	};
+	assert.equal(pickRelease(info, now, 1440), "7.10.0");
+});
+
+test("a stable latest tag keeps a stable-numbered release under next out", () => {
+	const info = { time: { "7.10.0": old, "8.0.0": old }, "dist-tags": { latest: "7.10.0", next: "8.0.0" } };
+	assert.equal(pickRelease(info, now, 1440), "7.10.0");
+});
+
+test("a pre-release latest tag caps nothing, and exactMajor wins over the cap", () => {
+	const rc = { time: { "7.10.0": old, "8.0.0-rc.1": old }, "dist-tags": { latest: "8.0.0-rc.1" } };
+	assert.equal(pickRelease(rc, now, 1440), "7.10.0");
+	const node = { time: { "24.9.0": old, "26.6.3": old }, "dist-tags": { latest: "26.6.3" } };
+	assert.equal(pickRelease(node, now, 1440, 24), "24.9.0");
 });
 
 test("pickStable skips entries whose date does not parse", () => {

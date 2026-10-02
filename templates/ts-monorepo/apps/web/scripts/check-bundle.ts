@@ -2,9 +2,10 @@
 // The marker string is exported by @repo/db (packages/db/src/marker.ts); a db test keeps the two equal.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const marker = "repo-db-server-only-marker";
-const dist = new URL("../dist", import.meta.url).pathname;
+const dist = fileURLToPath(new URL("../dist", import.meta.url));
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

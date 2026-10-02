@@ -11,7 +11,11 @@ const required = shippedMigrations();
 
 const app = createApp({
   ready: async () => (await ping(db)) && (await schemaReady(db, required)),
-  onError: (err) => log.error("unhandled error", { err: err instanceof Error ? err.message : String(err) }),
+  onError: (err, status) => {
+    const fields = { status, err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined };
+    if (status >= 500) log.error("request failed", fields);
+    else log.warn("request rejected", fields);
+  },
 });
 
 const server = app.listen(config.PORT, () => {

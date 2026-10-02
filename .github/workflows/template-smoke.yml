@@ -41,7 +41,7 @@ jobs:
           node-version: lts/*
       # Node 25+ no longer bundles corepack: install pnpm with the action. `version` is required
       # because the scaffold folder has no packageManager yet.
-      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: latest
       - name: Scaffold
@@ -49,7 +49,7 @@ jobs:
       - name: Typecheck, lint, test
         working-directory: ${{ runner.temp }}/app
         run: pnpm turbo run typecheck lint test build
-      # Criterion 5: each forbidden import must fail lint, and each must be reported by line.
+      # Criterion 5: each forbidden import must fail lint, reported on exactly its own line.
       - name: Client and domain boundary
         working-directory: ${{ runner.temp }}/app/apps/web
         run: |
@@ -60,18 +60,29 @@ jobs:
           import "fs";
           import "node:fs";
           export const dynamic = import("@repo/db");
+          export const literal = import(`node:fs`);
           TS
           cat > src/domain/__boundary.ts <<'TS'
           import "node:fs";
           export const dynamic = import("@repo/db");
           TS
-          if pnpm lint > "$RUNNER_TEMP/boundary.log" 2>&1; then echo "::error::lint passed with forbidden imports"; exit 1; fi
-          cat "$RUNNER_TEMP/boundary.log"
-          for file in src/client/__boundary.ts src/domain/__boundary.ts; do
-            grep -q "$file" "$RUNNER_TEMP/boundary.log" || { echo "::error::$file was not reported"; exit 1; }
-          done
-          # six cases in the client file, two in the domain file
-          test "$(grep -c ' error ' "$RUNNER_TEMP/boundary.log")" -ge 8 || { echo "::error::a boundary case was not reported"; exit 1; }
+          pnpm exec eslint -f json . > "$RUNNER_TEMP/boundary.json" || true
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const report = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/boundary.json", "utf8"));
+            const expected = { "src/client/__boundary.ts": [1, 2, 3, 4, 5, 6, 7], "src/domain/__boundary.ts": [1, 2] };
+            let failed = false;
+            for (const [file, lines] of Object.entries(expected)) {
+              const result = report.find((r) => r.filePath.endsWith(file));
+              const got = (result?.messages ?? []).filter((m) => m.severity === 2).map((m) => m.line);
+              const ok = JSON.stringify([...new Set(got)].sort()) === JSON.stringify(lines);
+              console.log(file, "reported lines", got.join(","), ok ? "ok" : "EXPECTED " + lines.join(","));
+              failed ||= !ok;
+            }
+            const others = report.filter((r) => !r.filePath.includes("__boundary") && r.errorCount > 0);
+            if (others.length > 0) { console.log("other files fail lint:", others.map((r) => r.filePath).join(", ")); failed = true; }
+            process.exit(failed ? 1 : 0);
+          '
           rm src/client/__boundary.ts src/domain/__boundary.ts
           pnpm lint
       # /readyz is 503 until migrations ran; then 200. SIGTERM must end the process with exit 0.

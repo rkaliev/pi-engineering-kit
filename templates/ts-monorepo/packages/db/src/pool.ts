@@ -1,3 +1,4 @@
+import "./marker.ts";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import type { DB } from "./generated/types.ts";

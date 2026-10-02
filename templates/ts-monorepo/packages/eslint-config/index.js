@@ -51,6 +51,10 @@ export const boundary = {
         message: MESSAGE,
       },
       {
+        selector: `ImportExpression[source.type='TemplateLiteral'][source.expressions.length=0][source.quasis.0.value.cooked=/${selectorRegex}/]`,
+        message: MESSAGE,
+      },
+      {
         selector: `CallExpression[callee.name='require'][arguments.0.value=/${selectorRegex}/]`,
         message: MESSAGE,
       },

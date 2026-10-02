@@ -15,6 +15,6 @@
   },
   "apps/web": {
     "dependencies": ["react", "react-dom"],
-    "devDependencies": ["vite", "@vitejs/plugin-react", "@types/react", "@types/react-dom", "typescript", "eslint", "vitest", "@repo/typescript-config", "@repo/eslint-config"]
+    "devDependencies": ["vite", "@vitejs/plugin-react", "@types/react", "@types/react-dom", "@types/node", "typescript", "eslint", "vitest", "@repo/typescript-config", "@repo/eslint-config"]
   }
 }

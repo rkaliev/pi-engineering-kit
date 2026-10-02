@@ -20,3 +20,10 @@ test("the web bundle check looks for the same marker", () => {
   const script = readFileSync(new URL("../../../apps/web/scripts/check-bundle.ts", import.meta.url), "utf8");
   assert.ok(script.includes(SERVER_ONLY_MARKER));
 });
+
+test("every database module carries the server-only marker", () => {
+  for (const file of ["index.ts", "pool.ts", "schema.ts"]) {
+    const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+    assert.match(source, /^import "\.\/marker\.ts";$/m, file);
+  }
+});
