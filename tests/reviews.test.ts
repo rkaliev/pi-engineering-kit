@@ -451,6 +451,8 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 		"rg --pre rm x .", "sort -o f x", "uniq a b", "file -C -m x", "sed -i s/a/b/ f", "npm run build",
 		"cd /tmp && cd - && ls", "cd no-such-dir-xyz && ls", "pushd /tmp", "( cd /tmp ) && ls", "cd",
 		"node examples/scripts/review-log.ts x", "node -e 'require(\"fs\").writeFileSync(\"x\", \"\")'",
+		// A glob can expand into a planted file name such as `--output=a.txt`.
+		"git diff HEAD *", "git log -- src/?.ts", "cat [a-z]*",
 	];
 	for (const command of bad) assert.equal(check(command), "block", command);
 	assert.match(String(checkReviewerCommand("rm f", project, [], kit)?.reason), /reviewer is read-only/);
@@ -470,6 +472,13 @@ test("a backslash-escaped quote doesn't hide a landing from the gate", () => {
 		assert.equal(action(check(sneaky)), "block", sneaky);
 	}
 	assert.equal(stripRedirects("echo \\' > f").replace(/\s+/g, " ").trim(), "echo \\'", "an escaped quote opens no quote");
+});
+
+test("a backslash line continuation joins the command, as the shell does", () => {
+	const { check } = repo();
+	for (const continued of ["git push \\\n  origin feat/a:main", "gh pr \\\ncreate --fill", 'git push "origin" \\\n feat/a:main']) {
+		assert.equal(action(check(continued)), "block", JSON.stringify(continued));
+	}
 });
 
 test("a push to a remote with no tracking ref still anchors the chain on the remote base, not the local one", () => {
@@ -508,9 +517,9 @@ test("many parallel bases per round are checked in bounded time", () => {
 		review(report(shas[i]!, "Yes", shas[i - 1]!), `p${i}`, "r1");
 		review(report(shas[i]!, "Yes", shas[i - 2]!), `p${i}`, "r2");
 	}
-	const started = Date.now();
+	// Walking every path would run out of the git-call budget ("more review rounds than the guard checks");
+	// the memoized walk answers within it.
 	assert.match(String(check("gh pr create --fill")?.reason), /does not cover/);
-	assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
 });
 
 test("a PR opened but not confirmed by the tool result isn't registered; an old entry expires after 30 days", () => {
@@ -533,4 +542,29 @@ test("gate files: >| and >&file are writes too", () => {
 		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", write);
 	}
 	assert.equal(checkGateFiles("cat .pi/guard.json >&2", project, project, ".pi/guard.json"), undefined, ">&2 is not a file");
+});
+
+test("a PR created inside a compound command is registered, even when a later step fails or a subshell moved", () => {
+	const { dir, root } = repo();
+	const open = () => openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root);
+	notePr(dir, "t1", "(cd /tmp) && gh pr create --fill", dir, root);
+	settlePr(dir, "t1", true, root);
+	assert.deepEqual(open(), ["feat/a"], "the subshell's cd ends with it");
+	const other = repo();
+	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
+	settlePr(other.dir, "t2", false, other.root);
+	assert.deepEqual(openPrBranches(other.dir, other.dir, "origin", "refs/remotes/origin/main", other.root), ["feat/a"], "the call failed after the PR step: it may exist");
+});
+
+test("without a tracking ref for the base, a remote branch that merely ends in /<base> is not the anchor", () => {
+	const { git, commit, check, review } = repo();
+	git("remote", "remove", "origin");
+	git("switch", "-qc", "other", "main");
+	const x = commit({ "src/x.ts": "export const x = 1;\n" });
+	git("update-ref", "refs/remotes/up/team/main", x);
+	git("switch", "-qc", "feat/b", x);
+	const c = commit({ "src/c.ts": "export const c = 1;\n" });
+	review(report(c, "Yes", x));
+	git("switch", "-q", "main");
+	assert.match(String(check("git merge feat/b")?.reason), /does not cover/, "x is on up/team/main, not on the local main");
 });

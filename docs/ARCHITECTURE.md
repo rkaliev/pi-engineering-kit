@@ -263,7 +263,7 @@ The plan names the test for each criterion, and the PR body says how each new te
 
 **Not verified:** guard for `powershell` on Windows (the logic is the same, but it has not been run); a live `worker` run with its reporting contract (the contract is text in executing-plans); the review gate with real pi-subagents (the result format is verified only on a fake; background and workflow runs don't write a verdict record).
 
-**Known limits of the review gate:** an interpreter one-liner can still hide a path from the shell checks; the gate protects against a forgotten review, not against an agent that deliberately feeds the reviewer a verdict; it sees only PRs this agent opened; it trusts the range the reviewer names; remote-tracking refs are local, so `git update-ref` can fake a merged PR or an already-landed commit; the reviewer's read-only rule is an instruction, because pi doesn't tell the guard which agent runs a call; with no resolvable base branch (no `origin/HEAD`, no `main`/`master`) it does nothing.
+**Known limits of the review gate:** an interpreter one-liner can still hide a path from the shell checks; the gate protects against a forgotten review, not against an agent that deliberately feeds the reviewer a verdict; it sees only PRs this agent opened; it trusts the range the reviewer names; remote-tracking refs are local, so `git update-ref` can fake a merged PR or an already-landed commit; the command parser doesn't follow heredocs or `#` comments, so a landing after one of them may go unseen; the reviewer's read-only rule is an instruction, because pi doesn't tell the guard which agent runs a call; with no resolvable base branch (no `origin/HEAD`, no `main`/`master`) it does nothing.
 
 ---
 

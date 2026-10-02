@@ -100,7 +100,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			// A review counts only for code that passed the checks: one that ran on unverified edits is Inconclusive.
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
 			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd).commands.length > 0) {
-				recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot);
+				recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput });
 				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
 				return;
 			}

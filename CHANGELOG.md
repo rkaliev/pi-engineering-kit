@@ -5,12 +5,12 @@
 - **The review gate covers the whole branch.** The reviewer ends with three lines: `Reviewed BASE:`, `Reviewed HEAD:` and `Ready to merge:`. A `Yes` counts only when its range reaches the remote base (`origin/<base>`, or the local base without a remote), directly or through earlier rounds whose own ranges do, up to 20 rounds. A review of only the last commit, an empty range and a chain broken by a rebase cover nothing. **Records written by 0.13.0 have no range: after updating, review each branch once more.**
 - **Earlier findings come from the store.** The guard keeps each reviewer run's report with its verdict, and `scripts/review-log.ts <rev>` prints a commit's latest round. A repeat round's reviewer runs it itself, so the author no longer passes the findings on.
 - **A PR the agent opened is a landing.** After a successful `gh pr create` or `glab mr create`, the guard asks before a push to that branch unless the same review covers it. The branch is forgotten once the PR's head is on the base, or after 30 days. PRs opened elsewhere are not seen.
-- The reviewer reads the project's rules at the merge-base with the remote base (`{RULES_BASE}`) in every round, and starts by running review-log on `{BASE}`. A parallel security-focused `reviewer` run is required for money, auth, permissions, secrets, schema, CI and release or deploy config. `/review` asks for the BASE line.
+- The reviewer reads the project's rules at the merge-base with the remote base (`{RULES_BASE}`) in every round; in a repeat round it starts by running review-log on `{BASE}`. A parallel security-focused `reviewer` run is required for money, auth, permissions, secrets, schema, CI and release or deploy config. `/review` asks for the BASE line.
 - Review records are keyed by the repository's git common directory, so the guard, review-log in a subfolder or worktree, and a symlinked checkout all find them.
 - A repeat round can't skip a newer reviewed commit, and the chain check is memoized and budgeted (300 git calls).
 - A push to a remote that doesn't track the base still anchors the chain on the remote base (`origin`'s), not the local branch.
-- The guard's parser honours backslash escapes and `$'…'`: `echo \' ; <command> ; echo \'` no longer hides the command. `rg --pre` is no longer a safe step before a landing.
-- A PR's branch is the one where `gh pr create` started (`--head owner:branch` gives `branch`), registered when the call succeeds. A report without one of the three verdict lines counts as Inconclusive.
+- The guard's parser honours backslash escapes and `$'…'`: `echo \' ; <command> ; echo \'` no longer hides the command. A backslash line continuation joins the command. `rg --pre` is no longer a safe step before a landing.
+- A PR's branch is the one where `gh pr create` started (`--head owner:branch` gives `branch`), registered when the call succeeds, or fails after the PR step. A report without one of the three verdict lines counts as Inconclusive.
 
 ## 0.13.0
 

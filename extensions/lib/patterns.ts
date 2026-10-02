@@ -197,6 +197,11 @@ export function tokenize(command: string): string[] {
 		if (quote) {
 			// In "…" a backslash escapes only " \ $ ` and a newline; in $'…' it escapes anything.
 			const next = command[i + 1];
+			// A backslash-newline inside "…" is a line continuation: both characters vanish.
+			if (ch === "\\" && next === "\n" && quote === '"') {
+				i++;
+				continue;
+			}
 			if (ch === "\\" && next !== undefined && (quote === "$'" || /["\\$`\n]/.test(next))) {
 				current += next;
 				i++;
@@ -205,6 +210,11 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "\\") {
+			// A backslash-newline is a line continuation: the shell joins the lines.
+			if (command[i + 1] === "\n") {
+				i++;
+				continue;
+			}
 			if (i + 1 < command.length) current += command[++i];
 			has = true;
 			continue;

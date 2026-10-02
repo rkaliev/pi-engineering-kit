@@ -147,34 +147,48 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
 	let dir: string | undefined = cwd;
-	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
-		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		if (isCd(tokens)) {
-			dir = dir === undefined ? undefined : follow(dir, tokens[1]);
-			continue;
+	let outside: string | undefined;
+	let inSubshell = false;
+	const segments = splitSegments(tokenize(stripRedirects(command)));
+	segments.forEach((raw, index) => {
+		// A `cd` inside `( … )` ends with the subshell, as in checkReview; a nested one is not followed.
+		if (raw[0]?.startsWith("(")) {
+			if (inSubshell || raw[0].startsWith("((")) dir = undefined;
+			inSubshell = true;
+			outside = dir;
 		}
+		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
+		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
-		if (l?.kind !== "pr" || l.merge || l.repo || dir === undefined) continue;
-		// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
-		const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
-		if (!branch) continue;
-		const pending = readJson(projectDir, PENDING_FILE, root);
-		pending[callId] = { branch, at: Date.now() };
-		writeJson(projectDir, PENDING_FILE, pending, root);
-	}
+		if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
+		else if (l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
+			// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
+			const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
+			if (branch) {
+				const pending = readJson(projectDir, PENDING_FILE, root);
+				// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
+				pending[callId] = { branch, at: Date.now(), last: index === segments.length - 1 };
+				writeJson(projectDir, PENDING_FILE, pending, root);
+			}
+		}
+		if (closes) {
+			inSubshell = false;
+			dir = outside;
+		}
+	});
 }
 
-/** After the call: register its noted PR branch if it succeeded, forget it if not. */
+/** After the call: register its noted PR branch if it succeeded (or failed after the PR step), forget it if not. */
 export function settlePr(projectDir: string, callId: string, ok: boolean, root?: string): void {
 	const pending = readJson(projectDir, PENDING_FILE, root);
-	const noted = pending[callId] as { branch?: unknown } | undefined;
+	const noted = pending[callId] as { branch?: unknown; last?: unknown } | undefined;
 	if (!noted) return;
 	delete pending[callId];
 	for (const [id, entry] of Object.entries(pending)) {
 		if (Date.now() - Number((entry as { at?: unknown }).at ?? 0) > PENDING_MAX_AGE_MS) delete pending[id];
 	}
 	writeJson(projectDir, PENDING_FILE, pending, root);
-	if (!ok || typeof noted.branch !== "string") return;
+	if ((!ok && noted.last !== false) || typeof noted.branch !== "string") return;
 	const prs = readPrs(projectDir, root);
 	prs[noted.branch] = Date.now();
 	writePrs(projectDir, prs, root);
@@ -317,15 +331,16 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
  * The reviewer's shell (Claude Code tells the hook which subagent runs the call). Fail closed: only a short list
  * of inspection commands, git's read-only subcommands without their writing or program-running options, a
  * worktree at an absolute temp path for another revision, the project's verification commands and the kit's own
- * review-log. Anything the parser might misread (a backslash, `$`, backticks, parentheses, braces, `<`, `>` other
- * than the stderr and null redirections, a background `&`) is refused, so the reviewer can't change what it judges.
+ * review-log. Anything the parser might misread (a backslash, `$`, backticks, parentheses, braces, `<`, a glob, `>`
+ * other than the stderr and null redirections, a background `&`) is refused, so the reviewer can't change what it judges.
  */
 export function checkReviewerCommand(command: string, cwd: string, verify: string[], kitRoot: string): GuardDecision | undefined {
 	const refuse = (what: string): GuardDecision => ({
 		action: "block",
 		reason: `The reviewer is read-only: ${what} is not allowed in its shell. Use git diff/log/show/blame, \`git worktree add <absolute temp dir> <sha>\` for another revision, cat/head/tail/grep/wc/ls, the project's verification commands and review-log; read files with the Read and Grep tools.`,
 	});
-	if (/[\\$`(){}<]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces or `<`");
+	// A glob (`*`, `?`, `[`) could expand into a planted file name such as `--output=a.txt`.
+	if (/[\\$`(){}<*?[]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces, `<` or a glob");
 	const bare = command.replace(/(^|\s)(?:2>&1|2>\/dev\/null|&?>\/dev\/null)(?=\s|$)/g, " ");
 	if (bare.includes(">") || /\btee\b/.test(bare)) return refuse("a writing redirection or tee");
 	const all = tokenize(bare);
@@ -575,7 +590,7 @@ function anchorRef(where: string, remote: string, base: string): string {
 	for (const ref of [`refs/remotes/${remote}/${base}`, `refs/remotes/origin/${base}`]) {
 		if (git(where, ["rev-parse", "--verify", "--quiet", ref])) return ref;
 	}
-	const other = lines(git(where, ["for-each-ref", "--format=%(refname)", "refs/remotes/"])).find((r) => r.endsWith(`/${base}`));
+	const other = lines(git(where, ["for-each-ref", "--format=%(refname)", "refs/remotes/"])).find((r) => r === `refs/remotes/${r.split("/")[2]}/${base}`);
 	return other ?? `refs/heads/${base}`;
 }
 
