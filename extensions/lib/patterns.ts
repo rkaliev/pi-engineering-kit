@@ -28,7 +28,6 @@ export interface GuardConfig {
 const ALLOW: GuardDecision = { action: "allow" };
 
 const CONFIRM_RULES: Array<[RegExp, string]> = [
-	[/\b(gh\s+pr|glab\s+mr)\s+merge\b/, "merges a PR/MR"],
 	[/\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+release\s+create\b|\bfastlane\b/, "publishes a release"],
 	[/\b(npm|pnpm|yarn|bun)\s+(run\s+)?deploy\b|\b(vercel|netlify|fly|flyctl|firebase|wrangler)\b.*\b(deploy|--prod)\b/, "deploys"],
 	[/\bterraform\s+(apply|destroy)\b|\bpulumi\s+(up|destroy)\b/, "changes infrastructure"],
@@ -62,7 +61,7 @@ export function isSecretPath(path: string): boolean {
 }
 
 /** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
-export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd): GuardDecision {
+export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
 	const segments = splitSegments(tokenize(command));
 
 	for (const segment of segments) {
@@ -76,7 +75,7 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushes(segments, dir);
+	const push = checkPushSetup(segments) ?? checkPushes(command, dir, env);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
@@ -269,88 +268,104 @@ export function splitSegments(tokens: string[]): string[][] {
 
 const PUSH_WORDS = /\bgit\b.*\bpush\b/;
 const PUSH_CONFIRM: GuardDecision = { action: "confirm", reason: "This command pushes to a remote." };
-const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--atomic", "--porcelain"]);
-const GIT_SAFE_GLOBALS = new Set(["--no-pager", "-p", "--paginate", "--no-optional-locks"]);
+const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--porcelain"]);
+/** Any of these in a command means the shell is not plain: a refused character ends the allowlist. */
+const PUSH_REFUSED_CHARS = /[;&|\n\r\0(){}<>`$\\'"*?[\]~#=]/;
+/** Environment that can redirect git's repository, config or transport. */
+const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND"];
 
-/** A question for the first push that is not the agent's own work branch to a configured remote. */
-function checkPushes(segments: string[][], dir: string): GuardDecision | undefined {
-	// A `cd` earlier in the command moves the push elsewhere; the classifier does not follow it.
-	const moved = segments.some((s) => /^\(*(cd|pushd|popd)$/.test(s[0]!));
-	for (const segment of segments) {
-		if (!PUSH_WORDS.test(segment.join(" "))) continue;
-		if (segment[0] !== "git") return PUSH_CONFIRM;
-		if (!segment.includes("push")) continue;
-		if (moved || classifyPush(segment, dir) !== "allow") return PUSH_CONFIRM;
-	}
-	return undefined;
+/** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
+function checkPushes(command: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
+	if (!PUSH_WORDS.test(command)) return undefined;
+	return ownBranchPush(command, dir, env) ? undefined : PUSH_CONFIRM;
 }
 
 /**
- * `allow` when a `git push` segment pushes the current non-base branch to a configured remote by name,
- * with no tags, deletes, options or config that could redirect it. Anything uncertain is `confirm`.
- * Force and mirror pushes are blocked by checkSegment before this runs.
+ * A strict allowlist: true only for exactly `git [-C <path>] push [safe options] [<remote> [<refspec>]]` as the
+ * whole command, from a clean environment, naming the current non-base branch (or nothing) on a configured
+ * remote whose config cannot redirect or enlarge the push. Everything else is false, so it asks.
  */
-export function classifyPush(tokens: string[], cwd: string): "allow" | "confirm" {
-	if (tokens[0] !== "git" || tokens.some((t) => /[$`~]/.test(t))) return "confirm";
+export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	if (PUSH_REFUSED_CHARS.test(command)) return false;
+	if (GIT_ENV_REDIRECTS.some((name) => env[name] !== undefined)) return false;
+	const tokens = command.trim().split(/\s+/);
+	if (tokens[0] !== "git") return false;
 	let dir = cwd;
 	let i = 1;
-	while (i < tokens.length && tokens[i]!.startsWith("-")) {
-		const t = tokens[i]!;
-		if (t === "-C") {
-			if (tokens[i + 1] === undefined) return "confirm";
-			dir = resolve(dir, tokens[i + 1]!);
-			i += 2;
-		} else if (GIT_SAFE_GLOBALS.has(t)) i++;
-		else return "confirm"; // -c, --git-dir, --work-tree, anything unknown
+	if (tokens[i] === "-C") {
+		if (tokens[i + 1] === undefined) return false;
+		dir = resolve(cwd, tokens[i + 1]!);
+		i += 2;
 	}
-	if (tokens[i] !== "push") return "confirm";
-
+	if (tokens[i] !== "push") return false;
 	const positional: string[] = [];
 	for (const t of tokens.slice(i + 1)) {
-		if (t === "--") return "confirm";
 		if (t.startsWith("-")) {
-			if (!PUSH_SAFE_OPTIONS.has(t) && !/^-[uqvn]+$/.test(t)) return "confirm";
+			if (!PUSH_SAFE_OPTIONS.has(t)) return false;
 		} else positional.push(t);
 	}
+	if (positional.length > 2) return false;
 
-	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return "confirm";
+	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
-	if (!base) return "confirm";
+	if (!branch || !base || branch === base) return false;
 	const config = gitConfig(dir);
-	if (!config) return "confirm";
+	if (!config) return false;
 
 	const remotes = new Set<string>();
 	for (const key of config.keys()) {
 		const m = /^remote\.(.+)\.url$/.exec(key);
 		if (m) remotes.add(m[1]!);
 	}
-	const [given, ...specs] = positional;
-	const remote = given ?? (branch && (config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`))) ?? "origin";
-	if (!remotes.has(remote)) return "confirm";
-	// A configured refspec or mirror redirects what a bare push sends.
-	if (config.has(`remote.${remote}.push`) || config.has(`remote.${remote}.mirror`)) return "confirm";
+	const [given, spec] = positional;
+	const remote = given ?? config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`) ?? "origin";
+	if (!remotes.has(remote)) return false;
 
-	if (specs.length === 0) {
-		if (!branch) return "confirm";
-		const pd = config.get("push.default");
-		if (pd !== undefined && pd !== "simple" && pd !== "current") return "confirm";
-		return branch === base ? "confirm" : "allow";
+	for (const key of config.keys()) {
+		if (/^url\..+\.(push)?insteadof$/.test(key)) return false;
 	}
-	for (const spec of specs) {
-		if (/[*^~?[\\ ]/.test(spec) || spec.startsWith(":") || spec.endsWith(":")) return "confirm";
-		const [src = "", dst = src, extra] = spec.split(":");
-		if (extra !== undefined) return "confirm";
-		let target = dst;
-		if (dst === "HEAD" || dst === "@") {
-			if (!branch) return "confirm";
-			target = branch;
-		} else if (dst.startsWith("refs/heads/")) target = dst.slice("refs/heads/".length);
-		else if (dst.startsWith("refs/")) return "confirm";
-		else if (spec === dst && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${dst}`]) === undefined) return "confirm";
-		if (!src || target === base || target === "") return "confirm";
+	for (const name of ["mirror", "push", "receivepack"]) if (config.has(`remote.${remote}.${name}`)) return false;
+	const follow = config.get("push.followtags");
+	if (follow !== undefined && !/^(false|no|off|0)$/i.test(follow)) return false;
+	if (config.has("push.pushoption")) return false;
+	const submodules = config.get("push.recursesubmodules");
+	if (submodules !== undefined && submodules !== "no" && submodules !== "false") return false;
+	const pd = config.get("push.default");
+	if (pd !== undefined && pd !== "simple" && pd !== "current") return false;
+
+	if (spec === undefined) return true;
+	const here = new Set([branch, "HEAD", "@", `refs/heads/${branch}`]);
+	const [src, dst, extra] = spec.split(":");
+	if (extra !== undefined) return false;
+	if (dst === undefined) return here.has(src!);
+	const srcOk = src === branch || src === "HEAD" || src === "@";
+	return srcOk && (dst === branch || dst === `refs/heads/${branch}`);
+}
+
+/** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
+function checkPushSetup(segments: string[][]): GuardDecision | undefined {
+	const setup: GuardDecision = { action: "confirm", reason: "This command changes where or what git pushes." };
+	for (const tokens of segments) {
+		const lower = tokens.map((t) => t.toLowerCase());
+		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
+			const at = tokens.indexOf(tool);
+			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
+			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
+		}
+		const at = tokens.indexOf("git");
+		if (at === -1) continue;
+		let v = at + 1;
+		while (v < tokens.length && tokens[v]!.startsWith("-")) v += tokens[v] === "-C" || tokens[v] === "-c" ? 2 : 1;
+		const sub = tokens[v];
+		if (sub === "remote" && ["add", "set-url", "rename"].includes(tokens[v + 1] ?? "")) return setup;
+		if (sub === "config") {
+			const args = lower.slice(v + 1);
+			if (args.some((t) => ["--get", "--list", "-l", "--get-all", "--get-regexp"].includes(t))) continue;
+			if (args.some((t) => /^(remote|url|push|branch|alias)\./.test(t))) return setup;
+		}
 	}
-	return "allow";
+	return undefined;
 }
 
 /** Effective git config as lowercase-section keys, last value winning; undefined when unreadable. */

