@@ -146,3 +146,12 @@ test("turbo detection edge cases", () => {
 	// package-scoped task keys
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "web#test": {}, "//#lint": {} }), "package-lock.json": "{}" })), ["npx --no turbo run lint test"]);
 });
+
+test("CI coverage ignores the no-download flags kit-init adds to npx and bunx", async () => {
+	const { ciCoverage } = await import("../extensions/lib/ci.ts");
+	const ci = (run: string) => project({ ".github/workflows/ci.yml": `jobs:\n  t:\n    steps:\n      - run: ${run}\n` });
+	assert.deepEqual(ciCoverage(ci("npx turbo run typecheck lint test"), ["npx --no turbo run typecheck lint test"]).missing, []);
+	assert.deepEqual(ciCoverage(ci("npx --no turbo run test"), ["npx turbo run test"]).missing, []);
+	assert.deepEqual(ciCoverage(ci("bunx turbo run test"), ["bunx --no-install turbo run test"]).missing, []);
+	assert.deepEqual(ciCoverage(ci("npx turbo run lint"), ["npx --no turbo run test"]).missing, ["npx --no turbo run test"]);
+});

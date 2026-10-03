@@ -1,4 +1,5 @@
 import express from "express";
+import { clientStatusOf } from "./log.ts";
 
 export type AppDeps = {
   /** Resolves true when the service can take traffic (the database answers and its schema is current). */
@@ -21,13 +22,14 @@ const clientErrors: Record<number, string> = {
 };
 
 /**
- * A 4xx passes through only from an error that marks itself safe to show (`expose: true`, the http-errors
- * and body-parser convention). A bare `status` on any other error is not trusted: it is a 500.
+ * A 4xx passes through when the error marks itself safe to show (`expose: true`, the http-errors and
+ * body-parser convention), or is the URIError Express raises for a malformed path parameter (status 400,
+ * no `expose`). A bare `status` on any other error is not trusted: it is a 500.
  */
 function statusOf(err: unknown): number {
-  const { status, statusCode, expose } = (err ?? {}) as { status?: unknown; statusCode?: unknown; expose?: unknown };
-  const code = typeof status === "number" ? status : statusCode;
-  return expose === true && typeof code === "number" && code >= 400 && code <= 499 ? code : 500;
+  const { expose } = (err ?? {}) as { expose?: unknown };
+  const code = clientStatusOf(err);
+  return code !== undefined && (expose === true || (err instanceof URIError && code === 400)) ? code : 500;
 }
 
 export function createApp(deps: AppDeps): express.Express {

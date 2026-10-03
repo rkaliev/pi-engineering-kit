@@ -14,15 +14,23 @@ export function createLogger(level: Level, write: (line: string) => void = conso
   return { debug: make("debug"), info: make("info"), warn: make("warn"), error: make("error") };
 }
 
+/** The 4xx status an error carries (`status` or `statusCode`), exposed or not. */
+export function clientStatusOf(err: unknown): number | undefined {
+  const { status, statusCode } = (err ?? {}) as { status?: unknown; statusCode?: unknown };
+  const code = typeof status === "number" ? status : statusCode;
+  return typeof code === "number" && code >= 400 && code <= 499 ? code : undefined;
+}
+
 /**
- * Log fields for a failed request. A 4xx, and a Postgres data exception (class 22), carry type (and code) only:
- * parser, validation and driver messages quote the input (V8's JSON.parse error includes the body), so message
- * and stack stay out of the logs.
+ * Log fields for a failed request. An error that carries a 4xx status (exposed or not) logs its type only,
+ * with the status sent and its own: parser, validation and routing messages quote the input (V8's JSON.parse
+ * error includes the body, Express's includes the raw parameter). A Postgres data exception (class 22) logs
+ * type and code only. Any other 5xx keeps name, message and stack.
  */
 export function requestErrorFields(err: unknown, status: number): Record<string, unknown> {
   const e = (err ?? {}) as { type?: unknown; name?: unknown; message?: unknown; stack?: unknown; code?: unknown };
-  if (status < 500) return { status, type: typeof e.type === "string" ? e.type : e.name };
-  // Postgres data exceptions (class 22, such as 22P02) quote the offending value in the message.
+  const errorStatus = clientStatusOf(err);
+  if (errorStatus !== undefined) return { status, errorStatus, type: typeof e.type === "string" ? e.type : e.name };
   if (typeof e.code === "string" && e.code.startsWith("22")) return { status, type: e.name, code: e.code };
   return { status, name: e.name, message: e.message ?? String(err), stack: e.stack };
 }

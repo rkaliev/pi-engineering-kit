@@ -37,7 +37,12 @@ export function findCiFiles(cwd: string): string[] {
 /** Which verification commands the project's CI doesn't run (a plain text match, whitespace-normalized). */
 export function ciCoverage(cwd: string, commands: string[]): CiCoverage {
 	const files = findCiFiles(cwd);
-	const norm = (s: string) => s.replace(/\s+/g, " ");
+	// kit-init adds `--no` / `--no-install` so verification never downloads a tool; CI text may lack them.
+	const norm = (s: string) =>
+		s
+			.replace(/\s+/g, " ")
+			.replace(/\bnpx --no(?:-install)?(?![\w-])/g, "npx")
+			.replace(/\bbunx --no-install\b/g, "bunx");
 	const text = norm(files.map((f) => readFileSync(join(cwd, f), "utf8")).join("\n"));
 	return {
 		files,

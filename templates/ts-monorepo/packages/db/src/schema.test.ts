@@ -21,13 +21,20 @@ test("the web bundle check looks for the same marker", () => {
   assert.ok(script.includes(SERVER_ONLY_MARKER));
 });
 
-test("every database module carries the server-only marker", () => {
-  const files = readdirSync(new URL("./", import.meta.url)).filter(
-    (name) => name.endsWith(".ts") && !name.endsWith(".test.ts") && name !== "marker.ts",
-  );
+function sources(dir: URL): URL[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory()) return entry.name === "generated" ? [] : sources(new URL(`${entry.name}/`, dir));
+    const skip = !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts") || entry.name === "marker.ts";
+    return skip ? [] : [new URL(entry.name, dir)];
+  });
+}
+
+test("every database module, in subfolders too, carries the server-only marker", () => {
+  const files = sources(new URL("./", import.meta.url));
   assert.ok(files.length >= 3, "expected the db modules");
   for (const file of files) {
-    const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
-    assert.match(source, /^import "\.\/marker\.ts";$/m, file);
+    const depth = file.pathname.split("/src/")[1]?.split("/").length ?? 1;
+    const expected = `import "${depth > 1 ? "../".repeat(depth - 1) : "./"}marker.ts";`;
+    assert.ok(readFileSync(file, "utf8").split("\n").includes(expected), file.pathname);
   }
 });

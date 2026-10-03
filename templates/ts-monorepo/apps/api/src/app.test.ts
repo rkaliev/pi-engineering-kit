@@ -99,10 +99,15 @@ test("a 4xx error keeps its class with a generic message; a 5xx stays internal",
   assert.deepEqual(seen, [404, 418, 500]);
 });
 
-test("a status on an error that does not expose itself is not trusted: it is a 500", async () => {
+test("a status on an error that does not expose itself is a 500, and its message stays out of the log", async () => {
+  const lines: string[] = [];
+  const log = createLogger("debug", (line) => lines.push(line));
   const seen: number[] = [];
   const base = await start({
-    onError: (_err, status) => seen.push(status),
+    onError: (err, status) => {
+      seen.push(status);
+      logRequestError(log, err, status);
+    },
     routes: (app) => {
       app.get("/auth", () => {
         throw Object.assign(new Error("token for ada@example.com rejected"), { status: 401 });
@@ -113,6 +118,33 @@ test("a status on an error that does not expose itself is not trusted: it is a 5
   assert.equal(res.status, 500);
   assert.deepEqual(await res.json(), { error: "internal" });
   assert.deepEqual(seen, [500]);
+  assert.doesNotMatch(lines[0] ?? "", /ada@example\.com/);
+  assert.deepEqual(JSON.parse(lines[0] ?? ""), {
+    level: "error",
+    msg: "request failed",
+    status: 500,
+    errorStatus: 401,
+    type: "Error",
+  });
+});
+
+test("a malformed path parameter is a 400, and the raw value stays out of the log", async () => {
+  const lines: string[] = [];
+  const log = createLogger("debug", (line) => lines.push(line));
+  const base = await start({
+    onError: (err, status) => logRequestError(log, err, status),
+    routes: (app) => {
+      app.get("/x/:id", (req, res) => {
+        res.json({ id: req.params["id"] });
+      });
+    },
+  });
+  const res = await fetch(`${base}/x/%E0%A4%A`);
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: "bad_request" });
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0] ?? "", /%E0/);
+  assert.equal(JSON.parse(lines[0] ?? "").level, "warn");
 });
 
 test("bigint values serialise as strings", async () => {
@@ -154,6 +186,7 @@ test("a 4xx log carries status and type only: a rejected body never reaches the 
     level: "warn",
     msg: "request rejected",
     status: 400,
+    errorStatus: 400,
     type: "entity.parse.failed",
   });
 });

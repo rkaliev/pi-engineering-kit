@@ -27,7 +27,7 @@ Not run by the verify hooks.
 - `pnpm --filter @repo/web dev`: dev server. Don't run it; it's already open in another terminal
 
 ## Rules
-- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (`apps/web/src/domain`, pure). Client and domain never import server code, `@repo/db` or Node modules (bare or `node:`, also through `import()`); lint enforces it, and the `build` bundle check is a backstop for `@repo/db` modules. Type-only imports of router types are allowed. Computed specifiers and `module.require` are not caught by lint; the bundle check is the backstop. A browser polyfill named like a Node builtin is a reviewed exception added to the rule.
+- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (`apps/web/src/domain`, pure). Client and domain never import server code, `@repo/db` or Node modules (bare or `node:`, also through `import()`); lint enforces it, and the `build` bundle check is a backstop for `@repo/db` modules. Type-only imports of router types are allowed. Computed specifiers and `module.require` are not caught by lint; the bundle check catches them only for `@repo/db` modules. A browser polyfill named like a Node builtin is a reviewed exception added to the rule.
 - Package source code never reads `process.env` (tooling config files may); only `apps/api/src/config.ts` does, and it owns every default.
 - Validate input before it reaches the driver; 4xx logs carry status and type only.
 - `/readyz` is 503 until the database has every migration this build ships: run `migrate deploy` before sending traffic.
