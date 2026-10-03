@@ -33,13 +33,14 @@ const CONFIRM_RULES: Array<[RegExp, string]> = [
 	[/\b(npm|pnpm|yarn|bun)\s+(run\s+)?deploy\b|\b(vercel|netlify|fly|flyctl|firebase|wrangler)\b.*\b(deploy|--prod)\b/, "deploys"],
 	[/\bterraform\s+(apply|destroy)\b|\bpulumi\s+(up|destroy)\b/, "changes infrastructure"],
 	[/\bkubectl\s+(apply|delete|replace|rollout|scale|patch|edit)\b|\bhelm\s+(install|upgrade|uninstall|rollback)\b/, "changes a cluster"],
+	[/\bprisma\s+(db\s+execute|migrate\s+resolve)\b/, "changes the database outside migrations"],
 	[
-		/\bprisma\s+(migrate\s+(deploy|reset)|db\s+push)\b|\brails\s+db:(migrate|drop|reset|rollback)\b|\balembic\s+(upgrade|downgrade)\b|\bflyway\s+(migrate|clean)\b|\bknex\s+migrate\b|\bdb:migrate\b|\bmanage\.py\s+migrate\b|\bmigrate\s+(up|deploy|reset)\b/,
+		/\bprisma\s+(migrate\s+(deploy|reset)|db\s+push)\b|\brails\s+db:(migrate|drop|reset|rollback)\b|\balembic\s+(upgrade|downgrade)\b|\bflyway\s+(migrate|clean)\b|\bknex\s+migrate\b|\bdb:migrate\b|\bmanage\.py\s+migrate\b|\bmigrate\s+(up|deploy|reset)\b|\bmigrate[:\s](down|rollback)\b|\b(node|tsx|ts-node|bun|deno)\b[^;&|\n]*\bmigrate-down\.ts\b/,
 		"runs a database migration",
 	],
 	[/\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE)\b/i, "destroys database data"],
 	[/\bgit\b.*\breset\s+--hard\b|\bgit\b.*\bclean\b.*\s-[a-zA-Z]*f|\bgit\b.*\bbranch\b.*\s-D\b|\bgit\b.*\bstash\s+(drop|clear)\b|\bgit\b.*\b(checkout|restore)\s+(--\s+)?\.(\s|$)|\bgit\b.*\bfilter-(branch|repo)\b/, "discards local git work"],
-	[/\bsudo\b/, "runs as root"],
+	[/\b(sudo|doas|run0|pkexec)\b/, "runs as root"],
 	[/\b(curl|wget)\b[^|]*\|\s*(ba|z)?sh\b/, "pipes a remote script into a shell"],
 	[/\bchmod\s+-R\s+777\b|\bdocker\s+(system|volume)\s+prune\b|\bdd\s+if=|\bmkfs\b/, "is destructive"],
 ];
@@ -76,7 +77,7 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments) ?? checkPushes(command, segments, cwd, dir, env);
+	const push = checkPushSetup(segments, command) ?? checkPushes(command, segments, cwd, dir, env);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
@@ -129,10 +130,10 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 }
 
 function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined {
-	if (tokens.includes("--no-verify")) {
+	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
+	if (tokens.includes("--no-verify") || words.includes("--no-verify")) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
-	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
 	const gitAt = words.indexOf("git");
 	if (gitAt !== -1) {
 		const rest = words.slice(gitAt + 1);
@@ -275,7 +276,7 @@ export function splitSegments(tokens: string[]): string[][] {
 
 /** Git's ways to send commits to a remote. */
 const PUSH_VERBS = new Set(["push", "send-pack", "http-push"]);
-const PUSH_WORDS = /\bgit\b.*\b(push|send-pack|http-push)\b/;
+const PUSH_WORDS = /\bgit\b.*\b(push|send-pack|http-push|svn\s+dcommit|p4\s+(submit|commit))\b/;
 const PUSH_CONFIRM: GuardDecision = { action: "confirm", reason: "This command pushes to a remote." };
 const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--porcelain"]);
 /** Any of these in a command means the shell is not plain: a refused character ends the allowlist. */
@@ -293,7 +294,13 @@ function checkPushes(command: string, segments: string[][], project: string, dir
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
 		parseGitCalls(tokens).some((call) => call.sub !== undefined && (PUSH_VERBS.has(call.sub) || !/^[a-z][a-z0-9-]*$/.test(call.sub))),
 	);
-	if (!pushToken && !PUSH_WORDS.test(command)) return undefined;
+	// A git-like token with a push verb after it, whatever wrapper or option sits between.
+	const pushAfterGit = segments.some((tokens) => {
+		const words = tokens.map(unwrapToken);
+		const at = words.findIndex(gitLike);
+		return at !== -1 && words.slice(at + 1).some((t) => PUSH_VERBS.has(t));
+	});
+	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command)) return undefined;
 	return ownBranchPush(command, dir, env, project) ? undefined : PUSH_CONFIRM;
 }
 
@@ -370,10 +377,18 @@ const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--na
 /** Git's own options that take no value. Any other option before the subcommand is unknown, so it asks. */
 const GIT_FLAG_OPTIONS = new Set(["-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice", "--version", "--help", "-h"]);
 const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
-const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
+/** Config keys whose value is a command git runs (pager, editor, helpers, drivers, filters). */
+const COMMAND_KEYS =
+	"core[.](pager|editor|askpass)|sequence[.]editor|diff[.]external|gpg[.]([^.]+[.])?program|filter[.]|pager[.]|diff[.].+[.](command|textconv)|merge[.].+[.]driver|(difftool|mergetool)[.].+[.]cmd|submodule[.].+[.]update|credential[.](.+[.])?helper";
+/** Keys that move where git pushes, fetches or what it executes, besides the command-valued ones. */
+const EXEC_KEYS = `${COMMAND_KEYS}|core[.](sshcommand|gitproxy|hookspath|fsmonitor)|http[.]proxy`;
+const COMMAND_KEY = new RegExp(`^(${COMMAND_KEYS})`);
+/** Values of a command key that run nothing of interest. */
+const HARMLESS_COMMAND = /^(|cat|true|:)$/;
+const WATCHED_CONFIG = new RegExp(`^((remote|url|push|branch|alias|include|includeif)[.]|${EXEC_KEYS})`);
 
 /** Words that run the command after them, so a git token behind one is a git call. */
-const WRAPPERS = new Set(["xargs", "parallel", "env", "command", "exec", "nice", "nohup", "time", "timeout", "strace", "script", "sudo"]);
+const WRAPPERS = new Set(["xargs", "parallel", "env", "command", "exec", "nice", "nohup", "time", "timeout", "strace", "script", "sudo", "stdbuf", "flock", "ionice", "taskset", "chrt", "setsid", "unbuffer", "doas"]);
 /** Shell keywords that start a command without being one. */
 const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "(", "((", "&&", "||"]);
 /** A token that opens a group, substitution or backticks: the git inside it is a call of its own. */
@@ -384,7 +399,7 @@ function gitLike(token: string): boolean {
 	return !token.includes("/") || /^(\/|\.\/)/.test(token);
 }
 /** Config keys that move where git pushes, fetches from, or what it executes. */
-const RISKY_CONFIG = /^(alias|remote|url|push|branch|include|includeif|protocol|uploadpack|receivepack)[.]|^(core[.](sshcommand|gitproxy|hookspath|fsmonitor)|credential[.]helper|http[.]proxy)$/;
+const RISKY_CONFIG = new RegExp(`^((alias|remote|url|push|branch|include|includeif|protocol|uploadpack|receivepack)[.]|${EXEC_KEYS})`);
 
 interface GitCall {
 	at: number;
@@ -437,8 +452,12 @@ function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 			issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
 		}
 		if (t === "-c" || /^-c./.test(t)) {
-			const key = (t === "-c" ? (tokens[v + 1] ?? "") : t.slice(2)).split("=")[0]!.toLowerCase();
-			if (RISKY_CONFIG.test(key)) issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
+			const setting = t === "-c" ? (tokens[v + 1] ?? "") : t.slice(2);
+			const eq = setting.indexOf("=");
+			const key = (eq === -1 ? setting : setting.slice(0, eq)).toLowerCase();
+			// A pager or editor set to `cat`, `true`, `:` or nothing runs nothing; credential helpers are always programs.
+			const harmless = eq !== -1 && COMMAND_KEY.test(key) && !key.startsWith("credential") && HARMLESS_COMMAND.test(setting.slice(eq + 1));
+			if (RISKY_CONFIG.test(key) && !harmless) issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
 		}
 		const named = t.includes("=") ? t.slice(0, t.indexOf("=")) : undefined;
 		if (!["--version", "--help", "-h"].includes(t)) bare = false;
@@ -461,16 +480,52 @@ function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
 }
 
+/**
+ * `gh api` / `glab api` at `at` (the binary): true unless it is a plain GET. The API verb is the first word after
+ * the binary that is not an option (or the value of -R/--repo); a method other than GET, or fields or an input
+ * body (gh then defaults to POST), write. The graphql endpoint writes unless it carries an inline query without `mutation`.
+ */
+/** `$` or a backtick in a `query=` value that is unquoted or double-quoted: the shell fills it in. Single quotes keep GraphQL variables literal. */
+const SHELL_EXPANDS_QUERY = /query=(?:"[^"]*[$`]|[^'"\s]*[$`])/;
+
+function apiWrite(words: string[], at: number, command: string): boolean {
+	let i = at + 1;
+	while (i < words.length && words[i]!.startsWith("-")) i += /^(-R|--repo|--hostname)$/.test(words[i]!) ? 2 : 1;
+	if (words[i] !== "api") return false;
+	const args = words.slice(i + 1);
+	const graphql = args.includes("graphql");
+	let method: string | undefined;
+	let input = false;
+	const fields: string[] = [];
+	args.forEach((t, k) => {
+		if (t === "-X" || t === "--method") method = args[k + 1] ?? "";
+		else if (t.startsWith("--method=")) method = t.slice(9);
+		else if (t.startsWith("-X")) method = t.slice(2);
+		else if (t === "--input" || t.startsWith("--input=")) input = true;
+		else if (["-f", "-F", "--field", "--raw-field"].includes(t)) fields.push(args[k + 1] ?? "");
+		else if (/^--(raw-)?field=/.test(t)) fields.push(t.slice(t.indexOf("=") + 1));
+		else if (/^-[fF]./.test(t)) fields.push(t.slice(2));
+	});
+	const written = method !== undefined && method.toUpperCase() !== "GET";
+	if (graphql) {
+		// A query with an inline text and no `mutation` only reads; a file, stdin or a mutation does not.
+		const queries = fields.filter((f) => f.startsWith("query="));
+		return input || written || queries.length === 0 || queries.some((q) => q.startsWith("query=@") || /mutation/i.test(q)) || SHELL_EXPANDS_QUERY.test(command);
+	}
+	return method === undefined ? input || fields.length > 0 : written;
+}
+
 /** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
-function checkPushSetup(segments: string[][]): GuardDecision | undefined {
+function checkPushSetup(segments: string[][], command: string): GuardDecision | undefined {
 	const setup: GuardDecision = { action: "confirm", reason: "This command changes where or what git pushes." };
 	const base: GuardDecision = { action: "confirm", reason: "This command changes which branch is the base." };
 	for (const tokens of segments) {
 		const lower = tokens.map((t) => unwrapToken(t).toLowerCase());
 		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
-			const at = tokens.findIndex((t) => BASE_NAME(t) === tool);
-			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
-			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
+			const at = lower.findIndex((t) => BASE_NAME(t) === tool);
+			const n = at === -1 ? -1 : lower.indexOf(noun, at + 1);
+			if (n !== -1 && lower.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
+			if (at !== -1 && apiWrite(tokens.map(unwrapToken), at, command)) return { action: "confirm", reason: "This command calls the API with a write method." };
 		}
 		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
 		const evalAt = tokens.findIndex((t) => t === "eval");
@@ -484,6 +539,8 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 				if (verb !== undefined && ["add", "set-url", "rename"].includes(verb)) return setup;
 				if (verb === "set-head") return base;
 			}
+			// Remote-writing front ends: `git svn dcommit`, `git p4 submit` send commits like a push.
+			if ((sub === "svn" && rest.some((t) => ["dcommit", "branch", "tag", "set-tree"].includes(t))) || (sub === "p4" && rest.some((t) => ["submit", "commit"].includes(t)))) return PUSH_CONFIRM;
 			if (sub === "symbolic-ref") {
 				// Reading one ref (`git symbolic-ref --short HEAD`) is fine; setting, deleting or anything else is not.
 				const operands = rest.filter((t) => !t.startsWith("-"));
@@ -497,6 +554,10 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 				// `git config get|list` (git 2.46+) read like --get/--list.
 				const verb = args.find((t) => !t.startsWith("-"));
 				if (verb === "get" || verb === "list") continue;
+				// One key and no flag but a scope (`git config core.editor`) only reads it.
+				const operands = args.filter((t) => !t.startsWith("-"));
+				const scope = ["--global", "--local", "--system", "--worktree", "--show-origin", "--show-scope"];
+				if (operands.length === 1 && args.every((t) => !t.startsWith("-") || scope.includes(t)) && !["set", "unset", "add"].includes(operands[0]!)) continue;
 				if (args.some((t) => WATCHED_CONFIG.test(t))) return setup;
 			}
 		}
