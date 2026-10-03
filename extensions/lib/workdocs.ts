@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -104,7 +104,9 @@ export function currentBranch(projectDir: string): string | undefined {
 	return git(projectDir, ["branch", "--show-current"]) || undefined;
 }
 
-export function landing(tokens: string[]): Landing | undefined {
+export function landing(raw: string[]): Landing | undefined {
+	// A group or substitution around the command does not hide it.
+	const tokens = raw.map(unwrapToken).filter(Boolean);
 	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
 	for (const tool of ["gh", "glab"]) {
 		const at = words.indexOf(tool);
@@ -139,6 +141,8 @@ export function landing(tokens: string[]): Landing | undefined {
 		case "merge":
 			return { kind: "merge", refs: args.filter((t, i) => !t.startsWith("-") && !MERGE_VALUE_FLAGS.has(args[i - 1] ?? "")), dir };
 		case "push":
+		case "send-pack":
+		case "http-push":
 			return { kind: "push", remote: positional[0], refspecs: positional.slice(1), all: args.includes("--all"), dir };
 		default:
 			return undefined;

@@ -1,4 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
 
@@ -26,7 +29,6 @@ export interface GuardConfig {
 const ALLOW: GuardDecision = { action: "allow" };
 
 const CONFIRM_RULES: Array<[RegExp, string]> = [
-	[/\bgit\b.*\bpush\b/, "pushes to a remote"],
 	[/\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+release\s+create\b|\bfastlane\b/, "publishes a release"],
 	[/\b(npm|pnpm|yarn|bun)\s+(run\s+)?deploy\b|\b(vercel|netlify|fly|flyctl|firebase|wrangler)\b.*\b(deploy|--prod)\b/, "deploys"],
 	[/\bterraform\s+(apply|destroy)\b|\bpulumi\s+(up|destroy)\b/, "changes infrastructure"],
@@ -59,8 +61,8 @@ export function isSecretPath(path: string): boolean {
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
 
-/** Decide what to do with a shell command. */
-export function checkCommand(command: string, cwd: string, config: GuardConfig): GuardDecision {
+/** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
+export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
 	const segments = splitSegments(tokenize(command));
 
 	for (const segment of segments) {
@@ -74,6 +76,8 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig):
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
+	const push = checkPushSetup(segments) ?? checkPushes(command, segments, cwd, dir, env);
+	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
 	}
@@ -128,14 +132,14 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 	if (tokens.includes("--no-verify")) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
-	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
+	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
 	const gitAt = words.indexOf("git");
 	if (gitAt !== -1) {
 		const rest = words.slice(gitAt + 1);
 		if (rest.includes("commit") && rest.some((t) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(t))) {
 			return { action: "block", reason: "git commit -n bypasses hooks. Fix what the hook reports instead." };
 		}
-		if (rest.includes("push")) {
+		if (rest.some((t) => PUSH_VERBS.has(t))) {
 			const forced = rest.some((t) => t === "--force" || t === "--mirror" || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(t) || /^\+\S/.test(t));
 			if (forced) {
 				return {
@@ -253,6 +257,12 @@ export function tokenize(command: string): string[] {
 	return tokens;
 }
 
+/** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
+export function unwrapToken(token: string): string {
+	// `NAME=` in front of a substitution (`x=$(git …)`) is an assignment, not part of the command.
+	return token.replace(/^[A-Za-z_][A-Za-z0-9_]*=(?=\$\(|`)/, "").replace(/^(\$\(|[(`{])+/, "").replace(/[)`};]+$/, "");
+}
+
 /** Group tokens into simple commands separated by control operators. */
 export function splitSegments(tokens: string[]): string[][] {
 	const segments: string[][] = [[]];
@@ -261,4 +271,264 @@ export function splitSegments(tokens: string[]): string[][] {
 		else segments[segments.length - 1]!.push(token);
 	}
 	return segments.filter((s) => s.length > 0);
+}
+
+/** Git's ways to send commits to a remote. */
+const PUSH_VERBS = new Set(["push", "send-pack", "http-push"]);
+const PUSH_WORDS = /\bgit\b.*\b(push|send-pack|http-push)\b/;
+const PUSH_CONFIRM: GuardDecision = { action: "confirm", reason: "This command pushes to a remote." };
+const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--porcelain"]);
+/** Any of these in a command means the shell is not plain: a refused character ends the allowlist. */
+const PUSH_REFUSED_CHARS = /[;&|\n\r\0(){}<>`$\\'"*?[\]~#=]/;
+/** Environment that can redirect git's repository, config or transport. */
+const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND", "GIT_COMMON_DIR", "GIT_EXEC_PATH", "GIT_SSH", "GIT_PROXY_COMMAND", "GIT_NAMESPACE"];
+
+/** The kit's branch naming (git-workflow): only such a branch is pushed without a question. */
+const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
+
+/** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
+function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
+	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
+	const pushToken = segments.some((tokens) =>
+		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
+		parseGitCalls(tokens).some((call) => call.sub !== undefined && (PUSH_VERBS.has(call.sub) || !/^[a-z][a-z0-9-]*$/.test(call.sub))),
+	);
+	if (!pushToken && !PUSH_WORDS.test(command)) return undefined;
+	return ownBranchPush(command, dir, env, project) ? undefined : PUSH_CONFIRM;
+}
+
+/**
+ * A strict allowlist: true only for exactly `git [-C <path>] push [safe options] [<remote> [<refspec>]]` as the
+ * whole command, from a clean environment, naming the current convention-named work branch (or nothing) on a configured
+ * remote whose config cannot redirect or enlarge the push. Everything else is false, so it asks.
+ */
+export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env, project: string = cwd): boolean {
+	// One trailing `2>&1` only merges the output streams.
+	const text = command.trim().replace(/ 2>&1$/, "");
+	if (PUSH_REFUSED_CHARS.test(text)) return false;
+	if (GIT_ENV_REDIRECTS.some((name) => env[name] !== undefined)) return false;
+	const tokens = text.split(/\s+/);
+	if (tokens[0] !== "git") return false;
+	let dir = cwd;
+	let i = 1;
+	if (tokens[i] === "-C") {
+		if (tokens[i + 1] === undefined) return false;
+		dir = resolve(cwd, tokens[i + 1]!);
+		i += 2;
+	}
+	if (tokens[i] !== "push") return false;
+	const positional: string[] = [];
+	for (const t of tokens.slice(i + 1)) {
+		if (t.startsWith("-")) {
+			if (!PUSH_SAFE_OPTIONS.has(t)) return false;
+		} else positional.push(t);
+	}
+	if (positional.length > 2) return false;
+
+	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
+	// Only the project's own repository (or one of its worktrees) is pushed silently.
+	const repoDir = commonDir(dir);
+	if (repoDir === undefined || repoDir !== commonDir(project)) return false;
+	const branch = currentBranch(dir);
+	const base = baseBranch(dir);
+	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;
+	const config = gitConfig(dir);
+	if (!config) return false;
+
+	const remotes = new Set<string>();
+	for (const key of config.keys()) {
+		const m = /^remote\.(.+)\.url$/.exec(key);
+		if (m) remotes.add(m[1]!);
+	}
+	const [given, spec] = positional;
+	const remote = given ?? config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`) ?? "origin";
+	if (!remotes.has(remote)) return false;
+
+	// insteadOf rules may rewrite the URL: the one git would push to must be the one written in the config.
+	const written = config.get(`remote.${remote}.pushurl`) ?? config.get(`remote.${remote}.url`);
+	if (written === undefined || git(dir, ["remote", "get-url", "--push", remote]) !== written) return false;
+	for (const name of ["mirror", "push", "receivepack"]) if (config.has(`remote.${remote}.${name}`)) return false;
+	const follow = config.get("push.followtags");
+	if (follow !== undefined && !/^(false|no|off|0)$/i.test(follow)) return false;
+	if (config.has("push.pushoption")) return false;
+	const submodules = config.get("push.recursesubmodules");
+	if (submodules !== undefined && submodules !== "no" && submodules !== "false") return false;
+	const pd = config.get("push.default");
+	if (pd !== undefined && pd !== "simple" && pd !== "current") return false;
+
+	if (spec === undefined) return true;
+	const here = new Set([branch, "HEAD", "@", `refs/heads/${branch}`]);
+	const [src, dst, extra] = spec.split(":");
+	if (extra !== undefined) return false;
+	if (dst === undefined) return here.has(src!);
+	const srcOk = src === branch || src === "HEAD" || src === "@";
+	return srcOk && (dst === branch || dst === `refs/heads/${branch}`);
+}
+
+/** Git's own options that take a separate value, so the value is not the subcommand. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+/** Git's own options that take no value. Any other option before the subcommand is unknown, so it asks. */
+const GIT_FLAG_OPTIONS = new Set(["-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice", "--version", "--help", "-h"]);
+const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
+const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
+
+/** Words that run the command after them, so a git token behind one is a git call. */
+const WRAPPERS = new Set(["xargs", "parallel", "env", "command", "exec", "nice", "nohup", "time", "timeout", "strace", "script", "sudo"]);
+/** Shell keywords that start a command without being one. */
+const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "(", "((", "&&", "||"]);
+/** A token that opens a group, substitution or backticks: the git inside it is a call of its own. */
+const OPENS_COMMAND = /^([A-Za-z_][A-Za-z0-9_]*=)?(\$\(|[(`{])/;
+/** `git`, `git-<sub>`, or a path to one that is absolute or starts with `./`; `skills/git-workflow` is not git. */
+function gitLike(token: string): boolean {
+	if (!/^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(token))) return false;
+	return !token.includes("/") || /^(\/|\.\/)/.test(token);
+}
+/** Config keys that move where git pushes, fetches from, or what it executes. */
+const RISKY_CONFIG = /^(alias|remote|url|push|branch|include|includeif|protocol|uploadpack|receivepack)[.]|^(core[.](sshcommand|gitproxy|hookspath|fsmonitor)|credential[.]helper|http[.]proxy)$/;
+
+interface GitCall {
+	at: number;
+	v: number;
+	sub: string | undefined;
+	rest: string[];
+	issue?: GuardDecision;
+}
+
+/**
+ * The git calls in a segment. A git-like token is a call only in command position: at the segment start, after
+ * assignments or shell keywords, behind a wrapper such as `sudo`/`xargs`, or opening its own `$(`, backtick or `(`.
+ * Each call carries the subcommand after git's global options, its arguments, and `issue` when something before the
+ * subcommand overrides config, is unknown, or hides the call.
+ */
+function parseGitCalls(raw: string[]): GitCall[] {
+	const tokens = raw.map(unwrapToken);
+	const positions: number[] = [];
+	let territory = true; // a command may start here
+	let wrapped = false; // behind a wrapper, everything after may be the wrapped command
+	tokens.forEach((t, i) => {
+		const opens = OPENS_COMMAND.test(raw[i]!);
+		if (gitLike(t) && (territory || wrapped || opens)) positions.push(i);
+		const word = BASE_NAME(t);
+		if ((territory || wrapped) && WRAPPERS.has(word) && !(word === "command" && /^-[vV]$/.test(tokens[i + 1] ?? ""))) wrapped = true;
+		else if (!wrapped) territory = t === "" || SHELL_KEYWORDS.has(t) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(raw[i]!) || opens;
+	});
+	// Calls that open their own group are separate; plain ones in one segment hide each other.
+	const plain = positions.filter((i) => !OPENS_COMMAND.test(raw[i]!));
+	return positions.map((at) => {
+		const call = parseGit(raw, tokens, at);
+		if (!OPENS_COMMAND.test(raw[at]!)) {
+			if (plain.length > 1) call.issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+			else if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) call.issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
+		}
+		return call;
+	});
+}
+
+function parseGit(raw: string[], tokens: string[], at: number): GitCall {
+	let issue: GuardDecision | undefined;
+	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
+	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
+	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1) };
+	let v = at + 1;
+	let bare = true; // only --version/--help/-h so far
+	while (v < tokens.length && tokens[v]!.startsWith("-")) {
+		const t = tokens[v]!;
+		if (t === "--config-env" || t.startsWith("--config-env=")) {
+			issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
+		}
+		if (t === "-c" || /^-c./.test(t)) {
+			const key = (t === "-c" ? (tokens[v + 1] ?? "") : t.slice(2)).split("=")[0]!.toLowerCase();
+			if (RISKY_CONFIG.test(key)) issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
+		}
+		const named = t.includes("=") ? t.slice(0, t.indexOf("=")) : undefined;
+		if (!["--version", "--help", "-h"].includes(t)) bare = false;
+		if (GIT_VALUE_OPTIONS.has(t)) v += 2;
+		else if (GIT_FLAG_OPTIONS.has(t) || (named !== undefined && GIT_VALUE_OPTIONS.has(named)) || /^-c./.test(t)) v += 1;
+		else {
+			issue ??= { action: "confirm", reason: "Unknown git option before the subcommand." };
+			bare = false;
+			v += 1;
+		}
+	}
+	// No subcommand (`xargs git`) or git as the subcommand (`strace -o git git …`): a wrapper hides the real call.
+	if ((v >= tokens.length && !(bare && v > at + 1)) || (v < tokens.length && gitLike(tokens[v]!))) {
+		issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+	}
+	// A substitution or variable in the subcommand or before it hides what git runs.
+	if (raw.slice(at + 1, v + 1).some((t) => /[$`()]/.test(t.replace(/[)`};]+$/, "")))) {
+		issue ??= { action: "confirm", reason: "The git subcommand is not a literal word, so the guard can't see it." };
+	}
+	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
+}
+
+/** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
+function checkPushSetup(segments: string[][]): GuardDecision | undefined {
+	const setup: GuardDecision = { action: "confirm", reason: "This command changes where or what git pushes." };
+	const base: GuardDecision = { action: "confirm", reason: "This command changes which branch is the base." };
+	for (const tokens of segments) {
+		const lower = tokens.map((t) => unwrapToken(t).toLowerCase());
+		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
+			const at = tokens.findIndex((t) => BASE_NAME(t) === tool);
+			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
+			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
+		}
+		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
+		const evalAt = tokens.findIndex((t) => t === "eval");
+		const from = shell !== -1 ? shell : evalAt;
+		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(t))) return { action: "confirm", reason: "This command runs git through a shell string." };
+		for (const call of parseGitCalls(tokens)) {
+			if (call.issue) return call.issue;
+			const { sub, rest } = call;
+			if (sub === "remote") {
+				const verb = rest.find((t) => !t.startsWith("-"));
+				if (verb !== undefined && ["add", "set-url", "rename"].includes(verb)) return setup;
+				if (verb === "set-head") return base;
+			}
+			if (sub === "symbolic-ref") {
+				// Reading one ref (`git symbolic-ref --short HEAD`) is fine; setting, deleting or anything else is not.
+				const operands = rest.filter((t) => !t.startsWith("-"));
+				if (operands.length !== 1 || rest.some((t) => t.startsWith("-") && !["--short", "-q", "--quiet"].includes(t))) return base;
+			}
+			if (sub === "update-ref" && rest.some((t) => t === "--stdin" || t.includes("refs/remotes/"))) return base;
+			if (sub === "config") {
+				const args = lower.slice(call.v + 1);
+				if (args.some((t) => t === "-e" || t === "--edit")) return setup;
+				if (args.some((t) => ["--get", "--list", "-l", "--get-all", "--get-regexp"].includes(t))) continue;
+				// `git config get|list` (git 2.46+) read like --get/--list.
+				const verb = args.find((t) => !t.startsWith("-"));
+				if (verb === "get" || verb === "list") continue;
+				if (args.some((t) => WATCHED_CONFIG.test(t))) return setup;
+			}
+		}
+	}
+	return undefined;
+}
+
+/** The real path of a repository's common git directory (shared by its worktrees), or undefined. */
+function commonDir(dir: string): string | undefined {
+	const out = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	if (!out) return undefined;
+	try {
+		return realpathSync(out);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Effective git config as lowercase-section keys, last value winning; undefined when unreadable. */
+function gitConfig(dir: string): Map<string, string> | undefined {
+	const out = git(dir, ["config", "--list"]);
+	if (out === undefined) return undefined;
+	const map = new Map<string, string>();
+	for (const line of out.split("\n")) {
+		const eq = line.indexOf("=");
+		if (eq === -1) map.set(line, "");
+		else map.set(line.slice(0, eq), line.slice(eq + 1));
+	}
+	return map;
+}
+
+function git(cwd: string, args: string[]): string | undefined {
+	const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5000 });
+	return r.status === 0 ? r.stdout.trim() : undefined;
 }

@@ -640,7 +640,7 @@ test("review gate: after a successful gh pr create, a push of a new unreviewed c
 		return c.asked.join("\n");
 	};
 	await bashResult("gh pr create --fill", true);
-	assert.doesNotMatch(await pushAsked(), /Review gate/, "a failed PR creation opened nothing");
+	assert.equal(await pushAsked(), "", "a failed PR creation opened nothing: pushing the own work branch asks nothing");
 	await bashResult("gh pr create --fill", false);
 	assert.match(await pushAsked(), /Review gate: no reviewer verdict recorded/);
 });
