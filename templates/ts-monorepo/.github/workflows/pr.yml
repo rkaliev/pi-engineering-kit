@@ -57,9 +57,30 @@ jobs:
       - run: |
           leaks=$(git ls-files 'docs/tasks/*.md')
           test -z "$leaks" || { echo "::error::Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
+  # Reversible migrations on a real database: deploy, revert the latest, schema must be empty, deploy again, schema must match schema.prisma.
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@<sha>
+      - uses: pnpm/action-setup@<sha>        # reads packageManager
+      - uses: actions/setup-node@<sha>
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:up
+      - name: Migration down and up again
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app
+        run: |
+          pnpm --filter @repo/db exec prisma migrate deploy
+          latest=$(ls packages/db/prisma/migrations | grep -E '^[0-9]{14}_' | sort | tail -n 1)
+          pnpm --filter @repo/db migrate:down "$latest"
+          pnpm --filter @repo/db exec prisma migrate diff --from-config-datasource --to-empty --exit-code
+          pnpm --filter @repo/db exec prisma migrate deploy
+          pnpm --filter @repo/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
   gate:
     if: always()
-    needs: [verify, security, working-docs]
+    needs: [verify, security, working-docs, db]
     runs-on: ubuntu-latest
     steps:
       - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"

@@ -91,3 +91,22 @@ test("kit-init verifies the scaffolded project with one turbo run, and its CI ru
 	assert.deepEqual(commands, ["pnpm turbo run typecheck lint test"]);
 	assert.deepEqual(ciCoverage(dir, commands).missing, []);
 });
+
+test("the Postgres version lives in .postgres-version at scaffold, and the template runs it through pnpm db:up", () => {
+	assert.equal(existsSync(join(template, ".postgres-version")), false, "the template has no .postgres-version");
+	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
+	assert.equal(pkg.scripts["db:up"], "POSTGRES_MAJOR=$(cat .postgres-version) docker compose up -d --wait postgres");
+	assert.equal(pkg.scripts["db:down"], "POSTGRES_MAJOR=$(cat .postgres-version) docker compose down");
+	assert.doesNotMatch(readFileSync(join(template, ".env.example"), "utf8"), /POSTGRES_MAJOR/);
+	assert.match(readFileSync(join(template, "docker-compose.yml"), "utf8"), /\$\{POSTGRES_MAJOR:\?[^}]*\.postgres-version[^}]*pnpm db:up[^}]*\}/);
+});
+
+test("the template CI has a db job in the gate, with no literal Postgres image", () => {
+	const yaml = readFileSync(join(template, ".github", "workflows", "pr.yml"), "utf8").replace(/^\s*#.*$/gm, "");
+	assert.doesNotMatch(yaml, /postgres:\d/);
+	const db = /^  db:\n([\s\S]*?)(?=^  \S|$(?![\s\S]))/m.exec(yaml)?.[1] ?? "";
+	assert.match(db, /run: pnpm db:up/);
+	assert.match(db, /migrate deploy/);
+	assert.match(db, /migrate:down/);
+	assert.match(yaml, /needs: \[[^\]]*\bdb\b[^\]]*\]/);
+});

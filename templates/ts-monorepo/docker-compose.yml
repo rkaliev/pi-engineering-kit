@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:${POSTGRES_MAJOR:?set POSTGRES_MAJOR in .env}
+    image: postgres:${POSTGRES_MAJOR:?POSTGRES_MAJOR comes from .postgres-version, start the database with pnpm db:up}
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

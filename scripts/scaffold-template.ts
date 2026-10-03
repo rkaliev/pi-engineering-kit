@@ -1,18 +1,22 @@
 /**
  * Scaffold the ts-monorepo template into a new folder with current dependency versions.
  *
- *   node <kit>/scripts/scaffold-template.ts <dir>
+ *   node <kit>/scripts/scaffold-template.ts <dir> --postgres <major>
  *
  * Copies `templates/ts-monorepo/`, writes `.nvmrc` and `packageManager` from the running Node and pnpm,
+ * `.postgres-version` from `--postgres` (the current supported major, postgresql.org/support/versioning),
  * and installs the packages in `scaffold.json` with `pnpm add -E`. Refuses a non-empty folder.
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { checkPnpm, scaffold } from "../extensions/lib/scaffold.ts";
 
-const dest = process.argv[2];
+const args = process.argv.slice(2);
+const flag = args.indexOf("--postgres");
+const postgres = flag === -1 ? undefined : args[flag + 1];
+const dest = flag === -1 ? args[0] : args.filter((_, i) => i !== flag && i !== flag + 1)[0];
 if (!dest) {
-	console.error("Usage: node scripts/scaffold-template.ts <dir>");
+	console.error("Usage: node scripts/scaffold-template.ts <dir> --postgres <major>");
 	process.exit(2);
 }
 if (process.platform === "win32") {
@@ -34,6 +38,7 @@ try {
 	scaffold(join(import.meta.dirname, "..", "templates", "ts-monorepo"), resolve(dest), {
 		node: process.versions.node,
 		pnpm: pnpm.stdout.trim(),
+		postgres,
 	});
 	console.log(`Scaffolded ${resolve(dest)}`);
 } catch (e) {

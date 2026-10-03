@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { checkPnpm, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
-const versions = { node: "24.1.0", pnpm: "10.0.0" };
+const versions = { node: "24.1.0", pnpm: "10.0.0", postgres: "18" };
 
 function fakeTemplate(scaffoldJson: unknown): string {
 	const dir = mkdtempSync(join(tmpdir(), "tpl-"));
@@ -49,6 +49,21 @@ test("writes .nvmrc and packageManager", () => {
 	assert.ok(!plan.copy.includes("scaffold.json"));
 });
 
+test("writes .postgres-version next to .nvmrc", () => {
+	const plan = planScaffold(fakeTemplate({}), "/unused", versions);
+	assert.equal(plan.writes[".postgres-version"], "18\n");
+});
+
+test("refuses a missing or non-integer Postgres major", () => {
+	const hint = /pass --postgres <major>: the current supported major from postgresql\.org\/support\/versioning/;
+	for (const postgres of [undefined, "", "18.1", "abc", "0", "-3", " 18"]) {
+		assert.throws(() => planScaffold(fakeTemplate({}), "/unused", { node: "24.1.0", pnpm: "10.0.0", postgres }), hint, String(postgres));
+	}
+	const dest = join(mkdtempSync(join(tmpdir(), "dest-")), "app");
+	assert.throws(() => scaffold(fakeTemplate({}), dest, { node: "24.1.0", pnpm: "10.0.0", postgres: "18.1" }, () => ({ status: 0 })), hint);
+	assert.equal(existsSync(dest), false, "nothing is copied before the refusal");
+});
+
 test("refuses a non-empty destination", () => {
 	const dest = mkdtempSync(join(tmpdir(), "dest-"));
 	writeFileSync(join(dest, "keep.txt"), "x");
@@ -68,6 +83,7 @@ test("copies, writes, then runs install and the planned installs in order", () =
 	};
 	scaffold(fakeTemplate({ "apps/api": { dependencies: ["express", "@repo/db"] } }), dest, versions, run, () => "1.2.3");
 	assert.equal(readFileSync(join(dest, ".nvmrc"), "utf8"), "24.1.0\n");
+	assert.equal(readFileSync(join(dest, ".postgres-version"), "utf8"), "18\n");
 	assert.ok(existsSync(join(dest, "apps", "api", "package.json")));
 	assert.deepEqual(calls, [
 		["pnpm", "install"],
