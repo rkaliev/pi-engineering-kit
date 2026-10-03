@@ -35,7 +35,7 @@ const CONFIRM_RULES: Array<[RegExp, string]> = [
 	[/\bkubectl\s+(apply|delete|replace|rollout|scale|patch|edit)\b|\bhelm\s+(install|upgrade|uninstall|rollback)\b/, "changes a cluster"],
 	[/\bprisma\s+(db\s+execute|migrate\s+resolve)\b/, "changes the database outside migrations"],
 	[
-		/\bprisma\s+(migrate\s+(deploy|reset)|db\s+push)\b|\brails\s+db:(migrate|drop|reset|rollback)\b|\balembic\s+(upgrade|downgrade)\b|\bflyway\s+(migrate|clean)\b|\bknex\s+migrate\b|\bdb:migrate\b|\bmanage\.py\s+migrate\b|\bmigrate\s+(up|deploy|reset)\b|\bmigrate[:\s-]?(down|rollback)\b/,
+		/\bprisma\s+(migrate\s+(deploy|reset)|db\s+push)\b|\brails\s+db:(migrate|drop|reset|rollback)\b|\balembic\s+(upgrade|downgrade)\b|\bflyway\s+(migrate|clean)\b|\bknex\s+migrate\b|\bdb:migrate\b|\bmanage\.py\s+migrate\b|\bmigrate\s+(up|deploy|reset)\b|\bmigrate[:\s](down|rollback)\b|\b(node|tsx|ts-node)\s+\S*migrate-down\.ts\b/,
 		"runs a database migration",
 	],
 	[/\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE)\b/i, "destroys database data"],
@@ -485,7 +485,7 @@ function parseGit(raw: string[], tokens: string[], at: number): GitCall {
  * the binary that is not an option (or the value of -R/--repo); a method other than GET, or fields or an input
  * body (gh then defaults to POST), write. The graphql endpoint writes unless it carries an inline query without `mutation`.
  */
-function apiWrite(words: string[], at: number): boolean {
+function apiWrite(words: string[], at: number, raw: string[]): boolean {
 	let i = at + 1;
 	while (i < words.length && words[i]!.startsWith("-")) i += /^(-R|--repo|--hostname)$/.test(words[i]!) ? 2 : 1;
 	if (words[i] !== "api") return false;
@@ -507,7 +507,7 @@ function apiWrite(words: string[], at: number): boolean {
 	if (graphql) {
 		// A query with an inline text and no `mutation` only reads; a file, stdin or a mutation does not.
 		const queries = fields.filter((f) => f.startsWith("query="));
-		return input || written || queries.length === 0 || queries.some((q) => q.startsWith("query=@") || /mutation/i.test(q));
+		return input || written || queries.length === 0 || queries.some((q) => q.startsWith("query=@") || /[$`]/.test(q) || /mutation/i.test(q)) || raw.some((t) => /query=.*[$`]/.test(t));
 	}
 	return method === undefined ? input || fields.length > 0 : written;
 }
@@ -522,7 +522,7 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 			const at = lower.findIndex((t) => BASE_NAME(t) === tool);
 			const n = at === -1 ? -1 : lower.indexOf(noun, at + 1);
 			if (n !== -1 && lower.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
-			if (at !== -1 && apiWrite(tokens.map(unwrapToken), at)) return { action: "confirm", reason: "This command calls the API with a write method." };
+			if (at !== -1 && apiWrite(tokens.map(unwrapToken), at, tokens)) return { action: "confirm", reason: "This command calls the API with a write method." };
 		}
 		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
 		const evalAt = tokens.findIndex((t) => t === "eval");

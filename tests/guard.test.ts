@@ -344,7 +344,7 @@ test("changing where or what git pushes asks, from any position", () => {
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x", "git config core.quotepath off", "git config color.ui auto", "git config user.email a@b", "git config diff.algorithm patience", "git config get core.pager", "git config credential.helper", "git config core.editor", "git config --global core.pager", "git config remote.origin.url", "git --no-pager log", "gh pr create --fill", "gh pr view 12"]) {
+	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x", "git config core.quotepath off", "git config color.ui auto", "git config user.email a@b", "git config diff.algorithm patience", "git config get core.pager", "git config credential.helper", "git config core.editor", "git config --global core.pager", "git config remote.origin.url", "git --no-pager log", "gh pr create --fill", "gh pr view 12", "git add packages/db/scripts/migrate-down.ts", "git commit -m \"feat(db): add migrate-down script\""]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}
 });
@@ -366,13 +366,16 @@ test("gh api and glab api ask for writes, not for reads", () => {
 		"gh api graphql --input q.json",
 		"gh api graphql -f query='mutation { x }'",
 		"gh api graphql -f query='MuTaTiOn{ x }'",
+		"Q='mutation { x }'; gh api graphql -f query=\"$Q\"",
+		"gh api graphql -F query=\"$(cat m.graphql)\"",
+		"gh api graphql -f query=`cat m.graphql`",
 		"gh api graphql -f query='{ a }' -X POST",
 		"gh -R o/r api -X POST x",
 		"glab api projects/1/merge_requests/2/merge -X PUT",
 		"/opt/homebrew/bin/gh api -X POST x",
 		"(gh api -X POST x)",
 		"echo $(gh api -X DELETE x)",
-		"doas gh api -X POST x",
+		"timeout 5 gh api -X POST x",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
@@ -382,7 +385,7 @@ test("gh api and glab api ask for writes, not for reads", () => {
 });
 
 test("git svn and git p4 writes ask", () => {
-	for (const cmd of ["git svn dcommit", "git svn branch x", "git svn tag x", "git svn set-tree HEAD", "git p4 submit", "git-svn dcommit", "git-p4 submit", "git -C sub svn dcommit", "(git svn dcommit)", "doas git p4 submit", "git svn --username bob dcommit", "git p4 commit"]) {
+	for (const cmd of ["git svn dcommit", "git svn branch x", "git svn tag x", "git svn set-tree HEAD", "git p4 submit", "git-svn dcommit", "git-p4 submit", "git -C sub svn dcommit", "(git svn dcommit)", "stdbuf -oL git p4 submit", "git svn --username bob dcommit", "git p4 commit"]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	for (const cmd of ["git svn fetch", "git svn rebase", "git svn info", "git p4 sync", "git p4 clone //depot/x"]) assert.equal(action(cmd), "allow", cmd);
@@ -464,11 +467,9 @@ test("indirect git calls ask: wrappers, no subcommand, git as the subcommand, gi
 		"chrt -i 0 git remote add evil https://x/r.git",
 		"setsid git remote add evil https://x/r.git",
 		"unbuffer git remote add evil https://x/r.git",
-		"doas git remote add evil https://x/r.git",
 		"stdbuf -oL git pu''sh origin x",
 		"caffeinate git pu''sh origin x",
 		"setsid git pu''sh origin x",
-		"doas git pu\\sh origin x",
 		"X=1 git remote add evil https://x/r.git",
 		"if git remote add evil https://x/r.git; then echo ok; fi",
 		"/usr/bin/git remote add evil https://x/r.git",
@@ -492,6 +493,12 @@ test("indirect git calls ask: wrappers, no subcommand, git as the subcommand, gi
 		"eval git push origin main",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
+	}
+	// doas is a wrapper of its own: the reason must come from the git call, not from the root rule.
+	for (const cmd of ["doas git remote add evil https://x/r.git", "doas git pu\\sh origin x"]) {
+		const d = checkCommand(cmd, cwd, none);
+		assert.equal(d.action, "confirm", cmd);
+		assert.doesNotMatch(d.reason ?? "", /root/, cmd);
 	}
 	for (const cmd of ["bash -c 'npm test'", "sh script.sh", "echo done"]) {
 		assert.equal(action(cmd), "allow", cmd);

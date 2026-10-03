@@ -102,7 +102,9 @@ export function ciCoverage(cwd: string, commands: string[]): CiCoverage {
 	const raw = files.map((f) => readFileSync(join(cwd, f), "utf8")).join("\n");
 	const text = norm(raw);
 	// Split before whitespace is collapsed, so a newline separates commands as `&&` does.
+	// A GitHub expression (`${{ secrets.X }}`) is one word, whatever it holds.
 	const turboRuns = raw
+		.replace(/\$\{\{.*?\}\}/gs, (m) => m.replace(/\s+/g, ""))
 		.split(/\r?\n|&&|\|\||;/)
 		.map((c) => parseTurboRun(collapse(c).replace(/["']+$/, "")))
 		.filter((t): t is TurboRun => t !== null && !t.narrowing);
