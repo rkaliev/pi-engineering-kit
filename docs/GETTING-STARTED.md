@@ -217,7 +217,7 @@ The command shows what it will create, asks about each file and **never overwrit
 | `.pi/settings.json` | Adds `npm:pi-subagents` to `packages` and leaves the other keys alone |
 
 - If the project has no `AGENTS.md`, the command offers to run `/onboard`: the agent studies the repository, runs the commands and proposes an AGENTS.md.
-- The command also reports CI that doesn't run every verification command or lacks the `working-docs` job (the ci-quality-gates skill adds both).
+- The command also reports CI that doesn't run every verification command or lacks the `working-docs` job (the ci-quality-gates skill adds both). A Turbo verify command counts as covered by a CI `turbo run` that includes its tasks (any order, `--affected` and other harmless flags; `--filter` and `--dry-run` don't cover).
 - `/kit-init --yes` creates everything missing without questions. This is handy for scripts.
 - `/kit-init --test-hygiene` also copies the stack-independent test-hygiene check for CI into `.ci/test-hygiene.mts` (the ci-quality-gates skill adds its job), or replaces an older copy. Without the flag it is only offered. Flags combine (`/kit-init --yes --test-hygiene`), and the command completes each of them.
 
