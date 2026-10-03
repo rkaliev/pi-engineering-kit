@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
-import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordFailure, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
+import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
@@ -108,8 +108,11 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (typeof result === "string") {
 				// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel
 				// reviewer's Yes on that commit can't stand alone; a review of a later commit is unaffected.
-				// With no resolvable commit (several repositories in a plain folder) everything recorded this prompt is charged.
-				recordFailure(ctx.cwd, reviewedHead(run.finalOutput ?? ""), ids, options.reviewsRoot);
+				const named = reviewedHead(run.finalOutput ?? "");
+				// A SHA that isn't a commit here (a typo) falls back to HEAD, so the failure is never lost.
+				if (named === undefined || typeof recordVerdict(ctx.cwd, named, "Inconclusive", ids, options.reviewsRoot) === "string") {
+					recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot);
+				}
 				if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
 			}
 		});
