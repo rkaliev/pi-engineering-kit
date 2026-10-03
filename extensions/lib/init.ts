@@ -105,6 +105,25 @@ export function detectVerifyCommands(cwd: string): string[] {
 	if (fromAgents.source === "AGENTS.md" && fromAgents.commands.length > 0) return fromAgents.commands;
 
 	const has = (rel: string) => existsSync(join(cwd, rel));
+	const pm = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
+	// Never download a tool to verify a project: these run only a locally installed turbo
+	// (`npx --no` refuses to install; `bunx --no-install` skips installation; pnpm and yarn run local bins only).
+	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx --no-install", npm: "npx --no" }[pm];
+	const turboFile = ["turbo.json", "turbo.jsonc"].find(has);
+	if (turboFile) {
+		try {
+			// turbo.json allows comments; strip them outside strings before parsing.
+			const text = readFileSync(join(cwd, turboFile), "utf8").replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "$1");
+			const turbo = JSON.parse(text);
+			const keys = Object.keys(turbo.tasks ?? turbo.pipeline ?? {});
+			// A task counts when declared, also per package (`web#test`, `//#lint`).
+			// `build` is left out on purpose: CI builds; verify stays fast.
+			const tasks = ["typecheck", "type-check", "lint", "test"].filter((t) => keys.some((k) => k === t || k.endsWith(`#${t}`)));
+			if (tasks.length > 0) return [`${exec} turbo run ${tasks.join(" ")}`];
+		} catch {
+			// unreadable turbo.json: fall through to the package.json scripts
+		}
+	}
 	if (has("package.json")) {
 		let scripts: Record<string, string> = {};
 		try {
@@ -112,7 +131,6 @@ export function detectVerifyCommands(cwd: string): string[] {
 		} catch {
 			// unreadable package.json: fall through to other tools
 		}
-		const pm = has("pnpm-lock.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
 		const commands: string[] = [];
 		for (const name of ["typecheck", "type-check", "lint", "test", "build"]) {
 			const body = scripts[name];

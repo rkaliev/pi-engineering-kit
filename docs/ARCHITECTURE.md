@@ -36,8 +36,8 @@ This document describes how the package is built and why it is built this way. H
 │ extensions/init.ts       → /kit-init: the project's .pi/ in one command         │
 │ skills/   28 skills (process, start, platforms, domains), by description        │
 │ prompts/  9 entry points: /brainstorm /plan /implement /review …                │
-│ templates/ AGENTS.md, task.md, settings.json, guard.json, verify.json           │
-│ scripts/  test-hygiene.ts for the project's CI (/kit-init --test-hygiene)       │
+│ templates/ AGENTS.md, task.md, verify.json, ts-monorepo/, …                     │
+│ scripts/  test-hygiene.ts (/kit-init --test-hygiene), scaffold-template.ts, …   │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,6 +91,8 @@ Thanks to this split, the package does not duplicate itself: the definition-of-d
 | `choosing-a-stack` | The stack is chosen for reliability in the domain. A table of defaults per platform. **Choosing a stack is always a fork for the user.** Versions are checked against official sources, not memory |
 | `onboarding-existing-codebase` | CI is the truth; commands are proven by running them. The output is an AGENTS.md from the template, with its Docs section filled in, and `.pi/verify.json` |
 | `changing-legacy-code` | Characterization tests, seams, sprout/wrap, strangler fig. Delete only your own orphans: a strange branch may be a requirement |
+
+**TypeScript full-stack profile.** `choosing-a-stack/references/ts-fullstack-profile.md` is one candidate for a new TypeScript web product or SaaS with one team and Postgres, never a default. Per role it gives a choice, the reason, when not to take it and an alternative, and it names no versions. If you pick it, `node <kit>/scripts/scaffold-template.ts <absolute dir>` (`<kit>` is the folder the kit package is installed in, or a clone of the kit) copies `templates/ts-monorepo/` (pnpm workspaces, Turbo, a Vite web app, an Express API, Prisma with Kysely, CI). The template holds no versions: the script installs each package at its highest stable release that is at least a day old, capped at the major of a stable `latest` tag and pinned exactly, with `@types/node` at the Node major and workspace packages as `workspace:*`. Four practices of that stack live in skills with no stack attached: monorepo CI in ci-quality-gates (affected-only, falls back to everything, one gate), one store until measured in backend-services (the existing database carries the queue, cache and locks until a measurement shows a separate service is needed), an enforced client/server boundary in web-frontend, and dependency discipline in updating-dependencies (every override and patch has a reason and a removal condition).
 
 ### Platforms
 
@@ -207,6 +209,7 @@ Before asking questions, the agent builds a **context map** (`brainstorming/refe
   - `--junit <dir>` alone checks only the reports: missing or empty, or a declared count that differs from the cases that ran (a crashed shard).
 
   In an existing project it is a ratchet: only lines the change adds count (renames are followed), and pre-existing debt is counted in the summary, not blocking (`--all` checks every line). Without a merge base it stops with a message: CI needs `fetch-depth: 0` and, on GitLab, an explicit fetch of the target branch. `test-hygiene: allow <reason>` marks a line where the pattern is the behavior under test; an allow without a reason is itself reported, and one that hides a forbidden skip, retry or sleep needs your agreement. `.ci/test-hygiene.json` adds test files, ignores and patterns. Next to it go the stack's native linters (table in `ci-quality-gates/references/ci-templates.md`).
+- **Verify commands in a Turbo monorepo.** With a `turbo.json` (or `turbo.jsonc`, comments allowed) `kit-init` detects one `<exec> turbo run typecheck lint test` built from the tasks it declares; a `pkg#task` key declares `task`, and `<exec>` is `pnpm`, `yarn`, `bunx --no-install` or `npx --no` by lockfile, so only a locally installed turbo runs. A manifest's Commands still win, and a `turbo.json` that can't be read or declares none of those tasks falls through to the `package.json` scripts. `pnpm-workspace.yaml` alone selects pnpm.
 - **Linking the loops:**
   - `kit-init` mechanically checks that CI runs every verification command, has the `working-docs` job and runs `.ci/test-hygiene.mts` when the project has it, and reports a copy older than the package's;
   - review treats a command missing from CI as Important, and a removed, skipped or retried check as Critical.
@@ -258,7 +261,9 @@ The plan names the test for each criterion, and the PR body says how each new te
   - `/kit-init` (including the test-hygiene item: offered, copied with `--test-hygiene`, an older copy reported and replaced with the flag, a CI that doesn't run it reported in the same run; completion of several flags);
   - the verify state shared with the guard across extensions loaded in separate module graphs;
   - the package manifest and the linter for all skills and prompts.
+  - the `ts-monorepo` template (no versions, `scaffold.json` names real workspaces, pinned action SHAs) and the scaffold script (refuses a non-empty folder, the planned installs, `.nvmrc` and `packageManager`);
 - **`npm run typecheck`** against pi's real types.
+- **`template-smoke`** (`.github/workflows/template-smoke.yml` in the kit's own CI, weekly and on PRs that touch the template or the scaffold script): scaffolds `ts-monorepo` into a clean folder, runs `pnpm turbo run typecheck lint test` and `prisma migrate deploy` against Postgres. It is outside `gate` and the release: red means the ecosystem moved and the template needs a fix.
 - **An end-to-end pi run** with a local mock LLM on a copy of `examples/demo`: bootstrap in all requests, guard blocks reading `.env`, `rm -rf ~/…` and `git push --force`, the verify gate fires on "Done!", `run_verification` runs the project's tests.
 
 **Not verified:** guard for `powershell` on Windows (the logic is the same, but it has not been run); a live `worker` run with its reporting contract (the contract is text in executing-plans); the review gate with real pi-subagents (the result format is verified only on a fake; background and workflow runs don't write a verdict record).
@@ -271,4 +276,5 @@ The plan names the test for each criterion, and the PR body says how each new te
 
 - A new skill is written with `writing-skills`: first a scenario without the skill (RED), then a minimal skill. Then `npm test` and a line in this document.
 - A rule that can be checked mechanically lives in guard, verify or CI, not in a skill's text.
+- A template holds no versions: they are installed from the registry at scaffold, and `template-smoke` shows when the ecosystem has moved.
 - Domain packages for a specific company (a specific acquirer, fiscal data operator) are better built as a separate pi package on top of this one.

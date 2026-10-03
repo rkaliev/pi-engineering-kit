@@ -1,0 +1,19 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Exact versions only; a new release must be older than a day (minutes) before it installs.
+saveExact: true
+minimumReleaseAge: 1440
+# Install scripts that are not listed in allowBuilds fail the install instead of being skipped silently.
+strictDepBuilds: true
+# An urgent security fix younger than the delay: list the package here with the reason and a removal date,
+# and delete the entry once the delay has passed. Never turn the delay off.
+# minimumReleaseAgeExclude:
+#   - some-package   # why; remove after YYYY-MM-DD
+
+# Packages whose install scripts may run; unlisted ones fail the install.
+# Confirmed by the scaffold run: pnpm asks for exactly these two. If a later install reports another, add it here.
+allowBuilds:
+  prisma: true
+  "@prisma/engines": true

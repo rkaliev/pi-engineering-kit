@@ -1,0 +1,104 @@
+name: Template smoke
+
+# Scaffolds templates/ts-monorepo for real and runs its checks. Red means the ecosystem moved
+# and the template needs a fix. It is not part of the CI `gate` and does not block a release.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "templates/ts-monorepo/**"
+      - "scripts/scaffold-template.ts"
+      - "extensions/lib/scaffold.ts"
+      - ".github/workflows/template-smoke.yml"
+
+concurrency:
+  group: template-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18   # current supported major (postgresql.org/support/versioning); bump with the template
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+      # Node 25+ no longer bundles corepack: install pnpm with the action. `version` is required
+      # because the scaffold folder has no packageManager yet.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: latest
+      - name: Scaffold
+        run: node scripts/scaffold-template.ts "$RUNNER_TEMP/app"
+      - name: Typecheck, lint, test
+        working-directory: ${{ runner.temp }}/app
+        run: pnpm turbo run typecheck lint test build
+      # Criterion 5: each forbidden import must fail lint, reported on exactly its own line.
+      - name: Client and domain boundary
+        working-directory: ${{ runner.temp }}/app/apps/web
+        run: |
+          cat > src/client/__boundary.ts <<'TS'
+          import "@repo/db";
+          import "../../../../packages/db/src/index.ts";
+          import "../../../api/src/app.ts";
+          import "fs";
+          import "node:fs";
+          export const dynamic = import("@repo/db");
+          export const literal = import(`node:fs`);
+          import "../server";
+          TS
+          cat > src/domain/__boundary.ts <<'TS'
+          import "node:fs";
+          export const dynamic = import("@repo/db");
+          TS
+          pnpm exec eslint -f json . > "$RUNNER_TEMP/boundary.json" || true
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const report = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/boundary.json", "utf8"));
+            const expected = { "src/client/__boundary.ts": [1, 2, 3, 4, 5, 6, 7, 8], "src/domain/__boundary.ts": [1, 2] };
+            let failed = false;
+            for (const [file, lines] of Object.entries(expected)) {
+              const result = report.find((r) => r.filePath.endsWith(file));
+              const got = (result?.messages ?? []).filter((m) => m.severity === 2).map((m) => m.line);
+              const ok = JSON.stringify([...new Set(got)].sort()) === JSON.stringify(lines);
+              console.log(file, "reported lines", got.join(","), ok ? "ok" : "EXPECTED " + lines.join(","));
+              failed ||= !ok;
+            }
+            const others = report.filter((r) => !r.filePath.includes("__boundary") && r.errorCount > 0);
+            if (others.length > 0) { console.log("other files fail lint:", others.map((r) => r.filePath).join(", ")); failed = true; }
+            process.exit(failed ? 1 : 0);
+          '
+          rm src/client/__boundary.ts src/domain/__boundary.ts
+          pnpm lint
+      # /readyz is 503 until migrations ran; then 200. SIGTERM must end the process with exit 0.
+      - name: API starts, drains and checks its schema
+        working-directory: ${{ runner.temp }}/app
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app
+          PORT: "3100"
+        run: |
+          node apps/api/src/main.ts &
+          pid=$!
+          for _ in $(seq 1 30); do curl -fs localhost:3100/healthz > /dev/null && break; sleep 1; done
+          curl -fs localhost:3100/healthz
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3100/readyz)" = 503
+          pnpm --filter @repo/db exec prisma migrate deploy
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3100/readyz)" = 200
+          kill -TERM "$pid"
+          wait "$pid"

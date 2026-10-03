@@ -1,0 +1,64 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@<sha>        # pin each <sha> to the action's latest release commit
+        with: { fetch-depth: 0 }             # a shallow checkout makes every package count as changed
+      - uses: pnpm/action-setup@<sha>        # reads packageManager
+      - uses: actions/setup-node@<sha>
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache/restore@<sha>
+        if: github.event_name == 'pull_request'
+        with:
+          path: .turbo/cache
+          key: turbo-${{ github.sha }}
+          restore-keys: turbo-
+      - name: Affected packages only
+        if: github.event_name == 'pull_request'
+        run: pnpm turbo run typecheck lint test build --affected
+        env:
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+      - name: Everything
+        if: github.event_name != 'pull_request'
+        run: pnpm turbo run typecheck lint test build
+      - uses: actions/cache/save@<sha>       # the cache is written from main only
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          path: .turbo/cache
+          key: turbo-${{ github.sha }}
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@<sha>
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@<sha>
+      - uses: google/osv-scanner-action/osv-scanner-action@<sha>
+        with: { scan-args: "--recursive ./" }
+  # kit-init adds the test-hygiene job here when run with --test-hygiene (see ci-quality-gates).
+  working-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@<sha>
+      - run: |
+          leaks=$(git ls-files 'docs/tasks/*.md')
+          test -z "$leaks" || { echo "::error::Delete task files before merge; move what lasts into docs/: $leaks"; exit 1; }
+  gate:
+    if: always()
+    needs: [verify, security, working-docs]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"

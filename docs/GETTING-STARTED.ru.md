@@ -211,7 +211,7 @@ git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 
 | Файл | Что в нём |
 |---|---|
-| `.pi/verify.json` | Команды проверки: из `## Commands` в AGENTS.md, иначе из скриптов `package.json` (npm/pnpm/yarn/bun по lockfile), иначе `./gradlew check`, `cargo test`, `go test`, `dotnet test`, `pytest` |
+| `.pi/verify.json` | Команды проверки: из `## Commands` в AGENTS.md, иначе из скриптов `package.json` (npm/pnpm/yarn/bun по lockfile; при `turbo.json` — один `turbo run` его задач typecheck, lint и test), иначе `./gradlew check`, `cargo test`, `go test`, `dotnet test`, `pytest` |
 | `.pi/guard.json` | Пустые проектные правила guard. Встроенные правила действуют и без них, в том числе правило файлов задач для `docs/tasks` (ключ `workDocs` меняет папки, `[]` выключает правило) |
 | `.pi/model-routing.json` | Режимы `deep`, `fast` и `cheap` и какая команда в каком режиме работает. **ID моделей сверь с `pi --list-models`** |
 | `.pi/settings.json` | Добавляет `npm:pi-subagents` в `packages`, остальные ключи не трогает |

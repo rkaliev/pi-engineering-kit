@@ -1,0 +1,12 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "cacheDir": ".turbo/cache",
+  "tasks": {
+    "generate": { "outputs": ["src/generated/**"] },
+    "build": { "dependsOn": ["^build", "generate"], "outputs": ["dist/**"] },
+    "typecheck": { "dependsOn": ["^generate", "generate"] },
+    "lint": { "dependsOn": ["^generate", "generate"] },
+    "test": { "dependsOn": ["^generate", "generate"] },
+    "dev": { "cache": false, "persistent": true }
+  }
+}

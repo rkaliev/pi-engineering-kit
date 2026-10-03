@@ -11,7 +11,8 @@ The agent's session is one line of defence; CI is the other. CI runs on every ch
 
 - **One required aggregating job** (`gate`) that depends on every check, and branch protection requires only that job. Adding a check then never needs a settings change.
 - Checks are never disabled, skipped, marked `continue-on-error`/`allow_failure`, or given retries in order to merge. A red check is fixed at its cause (systematic-debugging).
-- Actions and images are pinned (a commit SHA or a digest, not a moving tag). Dependencies are cached by the lockfile hash. Long suites run in parallel shards.
+- Actions and images are pinned (a commit SHA or a digest, not a moving tag; for an annotated tag, the peeled `^{}` commit). A smoke job outside the gate whose purpose is to track the newest release may track moving tool and image versions; its actions stay pinned by SHA. Dependencies are cached by the lockfile hash. Long suites run in parallel shards.
+- In a monorepo, PRs run only the affected packages and main runs everything (`references/ci-templates.md`, Monorepo); that counts as running the verification commands.
 - Each job has a timeout. Failures upload their evidence: test reports, traces, screenshots and logs.
 
 ## Layers

@@ -130,6 +130,29 @@ gate:
 
 Protect the main branch and require the pipeline to succeed before merge (Settings → Merge requests), with the user's agreement.
 
+## Monorepo
+
+For a workspace of packages (the `ts-monorepo` template has a working example), keep one `gate` and make the checks affected-only:
+
+- **Pull requests:** `turbo run <tasks> --affected` (or the tool's equivalent: `nx affected`), with `fetch-depth: 0`. Set `TURBO_SCM_BASE` to the PR base SHA. A shallow checkout makes Turborepo treat every package as changed, so it falls back to everything, which is slow but safe.
+- **Main:** run everything, with no filter.
+- **Cache:** restore it on pull requests and save it only from main, so a branch can't poison it. Turborepo's local cache is `.turbo/cache`.
+- **Slow job:** once one job is the bottleneck, give it a per-package matrix built from the affected list. If the list can't be computed, the fallback is the full matrix, never an empty one.
+
+```yaml
+      - uses: actions/cache/restore@<sha>
+        if: github.event_name == 'pull_request'
+        with: { path: .turbo/cache, key: "turbo-${{ github.sha }}", restore-keys: "turbo-" }
+      - run: pnpm turbo run typecheck lint test build --affected
+        if: github.event_name == 'pull_request'
+        env: { TURBO_SCM_BASE: "${{ github.event.pull_request.base.sha }}" }
+      - run: pnpm turbo run typecheck lint test build
+        if: github.event_name != 'pull_request'
+      - uses: actions/cache/save@<sha>
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with: { path: .turbo/cache, key: "turbo-${{ github.sha }}" }
+```
+
 ## Code owners
 
 `.github/CODEOWNERS` (GitHub) or `CODEOWNERS` (GitLab). The last matching line wins, so the catch-all goes first. Keep only the lines for files the project has, and use real team handles; never guess them.
