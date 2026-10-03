@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
@@ -75,7 +76,7 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments) ?? checkPushes(command, segments, dir, env);
+	const push = checkPushSetup(segments) ?? checkPushes(command, segments, cwd, dir, env);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
@@ -278,14 +279,15 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
 /** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, segments: string[][], dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
+function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
 	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
 	const pushToken = segments.some((tokens) => {
 		const call = parseGit(tokens);
-		return call !== undefined && call.sub === "push";
+		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
+		return call !== undefined && (call.sub === "push" || !/^[a-z][a-z0-9-]*$/.test(call.sub ?? ""));
 	});
 	if (!pushToken && !PUSH_WORDS.test(command)) return undefined;
-	return ownBranchPush(command, dir, env) ? undefined : PUSH_CONFIRM;
+	return ownBranchPush(command, dir, env, project) ? undefined : PUSH_CONFIRM;
 }
 
 /**
@@ -293,7 +295,7 @@ function checkPushes(command: string, segments: string[][], dir: string, env: No
  * whole command, from a clean environment, naming the current convention-named work branch (or nothing) on a configured
  * remote whose config cannot redirect or enlarge the push. Everything else is false, so it asks.
  */
-export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env): boolean {
+export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env, project: string = cwd): boolean {
 	if (PUSH_REFUSED_CHARS.test(command)) return false;
 	if (GIT_ENV_REDIRECTS.some((name) => env[name] !== undefined)) return false;
 	const tokens = command.trim().split(/\s+/);
@@ -315,6 +317,9 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	if (positional.length > 2) return false;
 
 	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
+	// Only the project's own repository (or one of its worktrees) is pushed silently.
+	const repoDir = commonDir(dir);
+	if (repoDir === undefined || repoDir !== commonDir(project)) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
 	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;
@@ -391,6 +396,10 @@ function parseGit(tokens: string[]): { at: number; v: number; sub: string | unde
 	if (v >= tokens.length || BASE_NAME(tokens[v]!) === "git") {
 		issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
 	}
+	// A substitution or variable in the subcommand or before it hides what git runs.
+	if (tokens.slice(at, v + 1).some((t) => /[$`()]/.test(t))) {
+		issue ??= { action: "confirm", reason: "The git subcommand is not a literal word, so the guard can't see it." };
+	}
 	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
 }
 
@@ -427,6 +436,17 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 		}
 	}
 	return undefined;
+}
+
+/** The real path of a repository's common git directory (shared by its worktrees), or undefined. */
+function commonDir(dir: string): string | undefined {
+	const out = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	if (!out) return undefined;
+	try {
+		return realpathSync(out);
+	} catch {
+		return undefined;
+	}
 }
 
 /** Effective git config as lowercase-section keys, last value winning; undefined when unreadable. */

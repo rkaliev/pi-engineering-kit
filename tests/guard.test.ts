@@ -138,7 +138,8 @@ function pushRepo(withOriginHead = true) {
 	return repo;
 }
 
-const ask = (cmd: string, dir: string, env: NodeJS.ProcessEnv = process.env) => checkCommand(cmd, "/elsewhere", none, dir, env).action;
+// The project is the repository the command runs in, unless a test says otherwise.
+const ask = (cmd: string, dir: string, env: NodeJS.ProcessEnv = process.env, project = dir) => checkCommand(cmd, project, none, dir, env).action;
 
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();
@@ -161,7 +162,7 @@ test("pushing the own work branch to a configured remote asks nothing", () => {
 	]) {
 		assert.equal(ask(cmd, repo), "allow", cmd);
 	}
-	assert.equal(checkCommand("git -C repo push", "/elsewhere", none, dirname(repo)).action, "allow", "-C relative to the command's dir");
+	assert.equal(checkCommand("git -C repo push", repo, none, dirname(repo)).action, "allow", "-C relative to the command's dir");
 });
 
 test("a push that reaches the base, another branch, a tag, a delete or an unknown place still asks", () => {
@@ -454,4 +455,38 @@ test("every git-like token counts: a second one, or xargs/parallel feeding git, 
 	}
 	assert.equal(action("git-lfs status"), "allow");
 	assert.equal(action("cat git-out"), "allow");
+});
+
+test("a git subcommand that is not a literal word asks", () => {
+	for (const cmd of [
+		"X=remote; git $X add evil https://x/r.git",
+		"X=push; git $X origin HEAD:main",
+		"git `echo push` origin HEAD:main",
+		"git $(echo push) origin HEAD:main",
+		"git -C $(pwd) status",
+		"git ${X} status",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git commit -m \"$(date)\""), "allow", "substitution in an argument is not the subcommand");
+});
+
+test("the silent push needs the push's repository to be the project's", () => {
+	const repo = pushRepo();
+	const origin = join(dirname(repo), "origin.git");
+	const clone = join(dirname(repo), "clone");
+	sh(dirname(repo), "clone", "-q", origin, clone);
+	sh(clone, "switch", "-q", "-c", "feat/x");
+	assert.equal(checkCommand(`git -C ${clone} push origin feat/x`, repo, none, repo).action, "confirm", "another repository");
+	assert.equal(checkCommand("git push origin feat/x", repo, none, clone).action, "confirm", "the command runs in another repository");
+	assert.equal(checkCommand("git push", "/nonexistent/project", none, repo).action, "confirm", "the project is not a repository");
+
+	const tree = join(dirname(repo), "tree");
+	sh(repo, "worktree", "add", "-q", "-b", "feat/w", tree);
+	assert.equal(checkCommand("git push", repo, none, tree).action, "allow", "a worktree of the project repository");
+	assert.equal(checkCommand(`git -C ${tree} push`, repo, none, repo).action, "allow", "-C into a worktree");
+
+	mkdirSync(join(repo, "sub"));
+	assert.equal(checkCommand("git -C sub push", repo, none, repo).action, "allow", "a subfolder of the project");
+	assert.equal(checkCommand("git push", repo, none, join(repo, "sub")).action, "allow", "running in a subfolder");
 });
