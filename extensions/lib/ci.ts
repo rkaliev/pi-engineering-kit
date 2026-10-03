@@ -51,6 +51,12 @@ const HARMLESS_TURBO_FLAGS: Record<string, boolean> = {
 	"--output-logs": true,
 	"--ui": true,
 	"--log-order": true,
+	"--no-daemon": false,
+	"--token": true,
+	"--team": true,
+	"--env-mode": true,
+	"--cache": true,
+	"--force": false,
 };
 
 /** Parse `[<exec>] turbo run <tasks…> [flags]`; null when the command is not a turbo run. */
@@ -77,6 +83,8 @@ const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
 
 /** The tasks of a verify command of the form `<exec> turbo run <tasks>` (no flags), else null. */
 function verifyTurboTasks(command: string): string[] | null {
+	// a chain (`a && turbo run test`) or pipe is matched as text: its turbo part alone is not the whole command
+	if (/&&|\|\||;|\|/.test(command)) return null;
 	const parsed = parseTurboRun(collapse(command));
 	// a verify command with flags of its own is matched as text instead
 	return parsed && !/\bturbo run\b.*\s-/.test(command) && parsed.tasks.length > 0 ? parsed.tasks : null;
@@ -96,7 +104,7 @@ export function ciCoverage(cwd: string, commands: string[]): CiCoverage {
 	// Split before whitespace is collapsed, so a newline separates commands as `&&` does.
 	const turboRuns = raw
 		.split(/\r?\n|&&|\|\||;/)
-		.map((c) => parseTurboRun(collapse(c)))
+		.map((c) => parseTurboRun(collapse(c).replace(/["']+$/, "")))
 		.filter((t): t is TurboRun => t !== null && !t.narrowing);
 	const covered = (c: string) => {
 		const tasks = verifyTurboTasks(c);
