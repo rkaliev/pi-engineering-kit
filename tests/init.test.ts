@@ -155,3 +155,32 @@ test("CI coverage ignores the no-download flags kit-init adds to npx and bunx", 
 	assert.deepEqual(ciCoverage(ci("bunx turbo run test"), ["bunx --no-install turbo run test"]).missing, []);
 	assert.deepEqual(ciCoverage(ci("npx turbo run lint"), ["npx --no turbo run test"]).missing, ["npx --no turbo run test"]);
 });
+
+test("CI coverage treats a turbo run as covering the verify tasks it includes (followups 0.17, criterion 2)", async () => {
+	const { ciCoverage } = await import("../extensions/lib/ci.ts");
+	const ci = (run: string) =>
+		project({ ".github/workflows/ci.yml": `jobs:\n  t:\n    steps:\n      - run: |\n${run.split("\n").map((l) => `          ${l}`).join("\n")}\n` });
+	const verify = "pnpm turbo run typecheck lint test";
+	const cases: Array<[string, string, string[], boolean]> = [
+		// [name, CI run block, verify commands, covered]
+		["same tasks, different order", "pnpm turbo run test lint typecheck", [verify], true],
+		["extra build task", "pnpm turbo run build typecheck lint test", [verify], true],
+		["--affected", "pnpm turbo run typecheck lint test --affected", [verify], true],
+		["--cache-dir with value and --continue", "pnpm turbo run typecheck lint test --cache-dir=.turbo --continue --summarize", [verify], true],
+		["pnpm exec turbo", "pnpm exec turbo run typecheck lint test", [verify], true],
+		["bare turbo run in CI", "turbo run typecheck lint test", [verify], true],
+		["npx --no in CI, bunx verify", "npx --no turbo run typecheck lint test", ["bunx --no-install turbo run typecheck lint test"], true],
+		["after && in a longer line", "pnpm install && pnpm turbo run typecheck lint test", [verify], true],
+		["on its own line after other commands", "pnpm install\npnpm turbo run typecheck lint test", [verify], true],
+		["--filter does not cover", "pnpm turbo run typecheck lint test --filter=web", [verify], false],
+		["-F does not cover", "pnpm turbo run typecheck lint test -F web", [verify], false],
+		["--dry-run does not cover", "pnpm turbo run typecheck lint test --dry-run", [verify], false],
+		["a missing task does not cover", "pnpm turbo run typecheck lint", [verify], false],
+		["tasks split over two commands do not cover", "pnpm turbo run typecheck lint\npnpm turbo run test", [verify], false],
+		["non-turbo command: text match still covers", "make check", ["make check"], true],
+		["non-turbo command: other text does not", "make lint", ["make check"], false],
+	];
+	for (const [name, run, commands, covered] of cases) {
+		assert.deepEqual(ciCoverage(ci(run), commands).missing, covered ? [] : commands, name);
+	}
+});
