@@ -113,11 +113,6 @@ process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
-// Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
-process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
-process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
-process.env.GIT_CONFIG_NOSYSTEM = "1";
-
 function sh(cwd: string, ...args: string[]) {
 	const r = spawnSync("git", args, { cwd, encoding: "utf8" });
 	assert.equal(r.status, 0, r.stderr);
@@ -231,7 +226,7 @@ test("a push that reaches the base, another branch, a tag, a delete or an unknow
 
 test("a hook environment that redirects git makes the push ask", () => {
 	const repo = pushRepo();
-	for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND"]) {
+	for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND", "GIT_COMMON_DIR", "GIT_EXEC_PATH", "GIT_SSH", "GIT_PROXY_COMMAND", "GIT_NAMESPACE"]) {
 		assert.equal(ask("git push", repo, { [name]: "x" }), "confirm", name);
 	}
 	assert.equal(ask("git push", repo, {}), "allow");
@@ -259,8 +254,6 @@ test("push config that redirects or enlarges the push asks", () => {
 		[["push.followTags", "true"], "push.followTags"],
 		[["push.pushOption", "ci.skip"], "push.pushOption"],
 		[["push.recurseSubmodules", "on-demand"], "push.recurseSubmodules"],
-		[["url.https://evil/.insteadOf", "https://good/"], "url insteadOf"],
-		[["url.https://evil/.pushInsteadOf", "https://good/"], "url pushInsteadOf"],
 	];
 	for (const [[key, value], what] of cases) {
 		sh(repo, "config", key!, value!);
@@ -320,4 +313,75 @@ test("merging a PR or MR asks, with options anywhere", () => {
 	}
 	assert.equal(action("gh pr create --fill"), "allow");
 	assert.equal(action("gh pr view 12"), "allow");
+});
+
+test("only convention-named work branches push silently", () => {
+	const repo = pushRepo();
+	for (const name of ["develop", "production", "release/2.0", "heads/main", "feat/a/b", "Feat/x", "wip"]) {
+		sh(repo, "switch", "-q", "-C", name);
+		assert.equal(ask("git push", repo), "confirm", name);
+		assert.equal(ask(`git push origin ${name}`, repo), "confirm", `${name} named`);
+	}
+	sh(repo, "switch", "-q", "-C", "heads/main");
+	assert.equal(ask("git push origin HEAD:heads/main", repo), "confirm", "heads/main resolves to the base on the remote");
+	for (const name of ["feat/x", "fix/a-b.c_d", "chore/x1", "docs/readme", "refactor/x", "ci/x", "revert/x"]) {
+		sh(repo, "switch", "-q", "-C", name);
+		assert.equal(ask("git push", repo), "allow", name);
+	}
+	sh(repo, "switch", "-q", "-C", "feat/x");
+	sh(repo, "push", "-q", "origin", "feat/x");
+	sh(repo, "remote", "set-head", "origin", "feat/x");
+	sh(repo, "switch", "-q", "-C", "main");
+	assert.equal(ask("git push", repo), "confirm", "a re-pointed origin/HEAD does not make main a work branch");
+});
+
+test("re-pointing the base asks", () => {
+	for (const cmd of [
+		"git remote set-head origin feat/x",
+		"git remote -v set-head origin feat/x",
+		"git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feat/x",
+		"git update-ref refs/remotes/origin/HEAD HEAD",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git symbolic-ref HEAD"), "allow");
+});
+
+test("git calls that overrule config, and setup hidden behind global options, ask", () => {
+	for (const cmd of [
+		"git -c alias.x=push x origin main",
+		"git -c core.sshCommand=x status",
+		"git --config-env alias.x=VAR status",
+		"git --git-dir /x remote add x https://evil/r.git",
+		"git --namespace n -C sub remote add x https://evil/r.git",
+		"git -C sub -c user.name=x remote add x https://evil/r.git",
+		"git remote -v add x https://evil/r.git",
+		"git config include.path /tmp/evil",
+		"git config includeIf.gitdir:/a.path /tmp/evil",
+		"/usr/bin/git remote add x https://evil/r.git",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git --no-pager log"), "allow");
+});
+
+test("merging with a path-qualified gh or glab asks", () => {
+	for (const cmd of ["/opt/homebrew/bin/gh pr merge 1", "/usr/local/bin/glab mr merge 2", "./gh -R o/r pr merge 1"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+});
+
+test("the effective push URL must be the configured one", () => {
+	const repo = pushRepo();
+	const url = sh(repo, "remote", "get-url", "origin");
+	sh(repo, "config", "url.https://good/.insteadOf", "https://unrelated/");
+	assert.equal(ask("git push origin feat/x", repo), "allow", "an insteadOf that does not touch this remote");
+	sh(repo, "config", "--unset", "url.https://good/.insteadOf");
+	sh(repo, "config", "url.https://evil/.insteadOf", dirname(url) + "/");
+	assert.equal(ask("git push origin feat/x", repo), "confirm", "insteadOf rewrites this remote");
+	sh(repo, "config", "--unset", "url.https://evil/.insteadOf");
+	sh(repo, "config", "url.https://evil/.pushInsteadOf", dirname(url) + "/");
+	assert.equal(ask("git push origin feat/x", repo), "confirm", "pushInsteadOf rewrites this remote");
+	sh(repo, "config", "--unset", "url.https://evil/.pushInsteadOf");
+	assert.equal(ask("git push origin feat/x", repo), "allow");
 });

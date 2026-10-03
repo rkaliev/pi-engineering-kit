@@ -272,7 +272,10 @@ const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v"
 /** Any of these in a command means the shell is not plain: a refused character ends the allowlist. */
 const PUSH_REFUSED_CHARS = /[;&|\n\r\0(){}<>`$\\'"*?[\]~#=]/;
 /** Environment that can redirect git's repository, config or transport. */
-const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND"];
+const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_SSH_COMMAND", "GIT_COMMON_DIR", "GIT_EXEC_PATH", "GIT_SSH", "GIT_PROXY_COMMAND", "GIT_NAMESPACE"];
+
+/** The kit's branch naming (git-workflow): only such a branch is pushed without a question. */
+const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
 /** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
 function checkPushes(command: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
@@ -282,7 +285,7 @@ function checkPushes(command: string, dir: string, env: NodeJS.ProcessEnv): Guar
 
 /**
  * A strict allowlist: true only for exactly `git [-C <path>] push [safe options] [<remote> [<refspec>]]` as the
- * whole command, from a clean environment, naming the current non-base branch (or nothing) on a configured
+ * whole command, from a clean environment, naming the current convention-named work branch (or nothing) on a configured
  * remote whose config cannot redirect or enlarge the push. Everything else is false, so it asks.
  */
 export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -309,7 +312,7 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
-	if (!branch || !base || branch === base) return false;
+	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;
 	const config = gitConfig(dir);
 	if (!config) return false;
 
@@ -322,9 +325,9 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	const remote = given ?? config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`) ?? "origin";
 	if (!remotes.has(remote)) return false;
 
-	for (const key of config.keys()) {
-		if (/^url\..+\.(push)?insteadof$/.test(key)) return false;
-	}
+	// insteadOf rules may rewrite the URL: the one git would push to must be the one written in the config.
+	const written = config.get(`remote.${remote}.pushurl`) ?? config.get(`remote.${remote}.url`);
+	if (written === undefined || git(dir, ["remote", "get-url", "--push", remote]) !== written) return false;
 	for (const name of ["mirror", "push", "receivepack"]) if (config.has(`remote.${remote}.${name}`)) return false;
 	const follow = config.get("push.followtags");
 	if (follow !== undefined && !/^(false|no|off|0)$/i.test(follow)) return false;
@@ -343,26 +346,42 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	return srcOk && (dst === branch || dst === `refs/heads/${branch}`);
 }
 
+/** Git's own options that take a separate value, so the value is not the subcommand. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
+const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
+
 /** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
 function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 	const setup: GuardDecision = { action: "confirm", reason: "This command changes where or what git pushes." };
+	const base: GuardDecision = { action: "confirm", reason: "This command changes which branch is the base." };
 	for (const tokens of segments) {
 		const lower = tokens.map((t) => t.toLowerCase());
 		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
-			const at = tokens.indexOf(tool);
+			const at = tokens.findIndex((t) => BASE_NAME(t) === tool);
 			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
 			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
 		}
-		const at = tokens.indexOf("git");
+		const at = tokens.findIndex((t) => BASE_NAME(t) === "git");
 		if (at === -1) continue;
 		let v = at + 1;
-		while (v < tokens.length && tokens[v]!.startsWith("-")) v += tokens[v] === "-C" || tokens[v] === "-c" ? 2 : 1;
+		while (v < tokens.length && tokens[v]!.startsWith("-")) {
+			const t = tokens[v]!;
+			if (t === "-c" || t === "--config-env" || t.startsWith("--config-env=") || /^-c./.test(t)) return { action: "confirm", reason: "This git call overrides git config on the command line." };
+			v += GIT_VALUE_OPTIONS.has(t) ? 2 : 1;
+		}
 		const sub = tokens[v];
-		if (sub === "remote" && ["add", "set-url", "rename"].includes(tokens[v + 1] ?? "")) return setup;
+		const rest = tokens.slice(v + 1);
+		if (sub === "remote") {
+			const verb = rest.find((t) => !t.startsWith("-"));
+			if (verb !== undefined && ["add", "set-url", "rename"].includes(verb)) return setup;
+			if (verb === "set-head") return base;
+		}
+		if ((sub === "symbolic-ref" || sub === "update-ref") && rest.some((t) => t.includes("refs/remotes/"))) return base;
 		if (sub === "config") {
 			const args = lower.slice(v + 1);
 			if (args.some((t) => ["--get", "--list", "-l", "--get-all", "--get-regexp"].includes(t))) continue;
-			if (args.some((t) => /^(remote|url|push|branch|alias)\./.test(t))) return setup;
+			if (args.some((t) => WATCHED_CONFIG.test(t))) return setup;
 		}
 	}
 	return undefined;
