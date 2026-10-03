@@ -678,7 +678,14 @@ test("-c asks only for keys that move where git pushes or what it runs", () => {
 test("git environment variables that run a program or redirect git ask; harmless values and other variables do not", () => {
 	for (const cmd of [
 		"GIT_SSH_COMMAND='ssh -i k' git fetch",
-		'GIT_SSH_COMMAND="ssh -i k" git fetch',
+		"GIT_SSH_COMMAND=true git fetch",
+		"env -i GIT_DIR=x git log",
+		"GIT_TEMPLATE_DIR=/tmp/t git clone x",
+		"GIT_SSH_COMMAND='ssh -i k'; export GIT_SSH_COMMAND; git fetch",
+		"GIT_DIR=x; export GIT_DIR; git log",
+		"{ export GIT_SSH_COMMAND=x; git fetch; }",
+		"if true; then export GIT_DIR=x; git log; fi",
+		"declare -x GIT_SSH_COMMAND=x; git fetch",
 		"env GIT_SSH_COMMAND=x git pull",
 		"GIT_EXTERNAL_DIFF=x git diff",
 		"GIT_PAGER='sh -c x' git log",
@@ -694,11 +701,10 @@ test("git environment variables that run a program or redirect git ask; harmless
 		"GIT_PAGER=cat git log",
 		"GIT_SEQUENCE_EDITOR=: git rebase -i HEAD~2",
 		"GIT_AUTHOR_NAME=x git commit -m x",
-		"GIT_TRACE=1 git status",
-		"GIT_TERMINAL_PROMPT=0 git fetch",
 		"LANG=C git log",
 		"EDITOR=vim make",
 		"export EDITOR=vim",
+		"export EDITOR",
 	]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}

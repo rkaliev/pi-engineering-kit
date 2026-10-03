@@ -519,7 +519,7 @@ function apiWrite(words: string[], at: number, command: string): boolean {
 const ENV_RUNS = /^(GIT_(SSH_COMMAND|SSH|PROXY_COMMAND|ASKPASS|EXTERNAL_DIFF|PAGER|EDITOR|SEQUENCE_EDITOR)|SSH_ASKPASS)$/;
 const ENV_EDITORS = /^(PAGER|EDITOR|VISUAL)$/;
 const ENV_CONFIG = /^GIT_(CONFIG(_COUNT|_PARAMETERS|_GLOBAL|_SYSTEM)?|CONFIG_(KEY|VALUE)_[0-9]+)$/;
-const ENV_REDIRECTS = /^GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|NAMESPACE)$/;
+const ENV_REDIRECTS = /^GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|NAMESPACE|TEMPLATE_DIR)$/;
 /** Of the program-running variables, the ones whose harmless value (`cat`, `true`, `:`, empty) runs nothing. */
 const ENV_HARMLESS_OK = /^(GIT_(PAGER|EDITOR|SEQUENCE_EDITOR|ASKPASS)|SSH_ASKPASS|PAGER|EDITOR|VISUAL)$/;
 
@@ -533,13 +533,26 @@ function riskyEnvAssignment(token: string, beforeGit: boolean): boolean {
 	return !(ENV_HARMLESS_OK.test(name) && HARMLESS_COMMAND.test(token.slice(eq + 1)));
 }
 
-/** An assignment in front of a git call in this segment, or an `export` anywhere, that sets such a variable. */
+/** `export`, `declare -x` or `typeset -x`, after leading keywords and empty words: the names or assignments it exports. */
+function exportedWords(words: string[]): string[] {
+	let i = 0;
+	while (i < words.length && (words[i] === "" || SHELL_KEYWORDS.has(words[i]!))) i++;
+	const head = words[i];
+	const args = words.slice(i + 1);
+	if (head === "export") return args;
+	if ((head === "declare" || head === "typeset") && args.some((t) => /^-[a-zA-Z]*x/.test(t))) return args;
+	return [];
+}
+
+/** An assignment in front of a git call in this segment, or an export anywhere, that sets such a variable. */
 function gitEnvDecision(tokens: string[], calls: GitCall[]): GuardDecision | undefined {
 	const words = tokens.map(unwrapToken);
 	const first = calls.length > 0 ? Math.min(...calls.map((c) => c.at)) : -1;
 	const before = first === -1 ? [] : words.slice(0, first);
-	const exported = words[0] === "export" ? words.slice(1) : [];
-	if (before.some((t) => riskyEnvAssignment(t, true)) || exported.some((t) => riskyEnvAssignment(t, false))) {
+	// `export NAME` by name exports a value set elsewhere, which the guard cannot see.
+	const byName = (t: string) => ENV_RUNS.test(t) || ENV_CONFIG.test(t) || ENV_REDIRECTS.test(t);
+	const exported = exportedWords(words).filter((t) => !t.startsWith("-"));
+	if (before.some((t) => riskyEnvAssignment(t, true)) || exported.some((t) => (t.includes("=") ? riskyEnvAssignment(t, false) : byName(t)))) {
 		return { action: "confirm", reason: "This command sets a git variable that runs a program or redirects git." };
 	}
 	return undefined;
