@@ -527,3 +527,11 @@ test("read-only git in a substitution stays quiet; the same wrapper around a pus
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 });
+
+test("an assignment before a substitution does not hide git", () => {
+	for (const cmd of ["x=`git remote add evil https://x/r.git`", "x=$(git remote add evil https://x/r.git)", "x=$(git pu''sh origin HEAD:main)"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["x=`git push --force`", "x=$(git push -f origin main)"]) assert.equal(action(cmd), "block", cmd);
+	for (const cmd of ["x=`git describe`", "x=$(git rev-parse HEAD)", "FOO=bar make test"]) assert.equal(action(cmd), "allow", cmd);
+});

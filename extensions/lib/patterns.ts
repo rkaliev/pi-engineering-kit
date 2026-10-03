@@ -257,9 +257,10 @@ export function tokenize(command: string): string[] {
 	return tokens;
 }
 
-/** A token without the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
+/** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
 export function unwrapToken(token: string): string {
-	return token.replace(/^(\$\(|[(`{])+/, "").replace(/[)`};]+$/, "");
+	// `NAME=` in front of a substitution (`x=$(git …)`) is an assignment, not part of the command.
+	return token.replace(/^[A-Za-z_][A-Za-z0-9_]*=(?=\$\(|`)/, "").replace(/^(\$\(|[(`{])+/, "").replace(/[)`};]+$/, "");
 }
 
 /** Group tokens into simple commands separated by control operators. */
