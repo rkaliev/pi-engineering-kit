@@ -142,6 +142,30 @@ export function checkPostgresMajor(major: string | undefined): string {
 	return major;
 }
 
+export const SCAFFOLD_USAGE = "Usage: node scripts/scaffold-template.ts <dir> --postgres <major>";
+
+/** `<dir>` and `--postgres <n>` or `--postgres=<n>`, in any order. Anything else throws the usage line. */
+export function parseScaffoldArgs(argv: string[]): { dest: string; postgres: string | undefined } {
+	let dest: string | undefined;
+	let postgres: string | undefined;
+	let seenPostgres = false;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i] ?? "";
+		if (arg === "--postgres" || arg.startsWith("--postgres=")) {
+			const value = arg === "--postgres" ? argv[++i] : arg.slice("--postgres=".length);
+			if (seenPostgres || !value || value.startsWith("-")) throw new Error(SCAFFOLD_USAGE);
+			seenPostgres = true;
+			postgres = value;
+		} else if (arg.startsWith("-") || dest !== undefined) {
+			throw new Error(SCAFFOLD_USAGE);
+		} else {
+			dest = arg;
+		}
+	}
+	if (!dest) throw new Error(SCAFFOLD_USAGE);
+	return { dest, postgres };
+}
+
 export interface Versions {
 	node: string;
 	pnpm: string;

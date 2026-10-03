@@ -8,8 +8,8 @@
     "test": "turbo run test",
     "build": "turbo run build",
     "format": "prettier --write .",
-    "db:up": "POSTGRES_MAJOR=$(cat .postgres-version) docker compose up -d --wait postgres",
-    "db:down": "POSTGRES_MAJOR=$(cat .postgres-version) docker compose down"
+    "db:up": "node scripts/db.mjs up",
+    "db:down": "node scripts/db.mjs down"
   },
   "prettier": "@repo/prettier-config"
 }

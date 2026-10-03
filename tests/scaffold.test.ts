@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { checkPnpm, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
+import { checkPnpm, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, parseScaffoldArgs, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
 const versions = { node: "24.1.0", pnpm: "10.0.0", postgres: "18" };
 
@@ -193,4 +193,18 @@ test("the copy skips local state: .env files, build output, caches, generated co
 		[".env.example"],
 	);
 	assert.ok(copy.includes("apps/api/package.json"));
+});
+
+test("parseScaffoldArgs takes --postgres <n> and --postgres=<n>, in any position", () => {
+	assert.deepEqual(parseScaffoldArgs(["app", "--postgres", "18"]), { dest: "app", postgres: "18" });
+	assert.deepEqual(parseScaffoldArgs(["--postgres=18", "app"]), { dest: "app", postgres: "18" });
+	assert.deepEqual(parseScaffoldArgs(["--postgres", "18", "app"]), { dest: "app", postgres: "18" });
+	assert.deepEqual(parseScaffoldArgs(["app"]), { dest: "app", postgres: undefined });
+});
+
+test("parseScaffoldArgs rejects unknown options, extra positionals, a missing dir or value, and a repeated flag", () => {
+	const usage = /Usage: node scripts\/scaffold-template\.ts <dir> --postgres <major>/;
+	for (const argv of [["app", "--pg", "18"], ["app", "-x"], ["a", "b", "--postgres", "18"], ["--postgres", "18"], ["app", "--postgres"], ["app", "--postgres="], ["app", "--postgres", "1", "--postgres=2"], ["app", "--postgres", "--other"]]) {
+		assert.throws(() => parseScaffoldArgs(argv), usage, argv.join(" "));
+	}
 });

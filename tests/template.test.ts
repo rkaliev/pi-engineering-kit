@@ -95,8 +95,17 @@ test("kit-init verifies the scaffolded project with one turbo run, and its CI ru
 test("the Postgres version lives in .postgres-version at scaffold, and the template runs it through pnpm db:up", () => {
 	assert.equal(existsSync(join(template, ".postgres-version")), false, "the template has no .postgres-version");
 	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
-	assert.equal(pkg.scripts["db:up"], "POSTGRES_MAJOR=$(cat .postgres-version) docker compose up -d --wait postgres");
-	assert.equal(pkg.scripts["db:down"], "POSTGRES_MAJOR=$(cat .postgres-version) docker compose down");
+	assert.match(pkg.scripts["db:up"], /^node scripts\/db\.mjs up$/);
+	assert.match(pkg.scripts["db:down"], /^node scripts\/db\.mjs down$/);
+	const script = readFileSync(join(template, "scripts", "db.mjs"), "utf8");
+	assert.match(script, /\.postgres-version/, "reads .postgres-version");
+	assert.match(script, /POSTGRES_MAJOR/, "sets POSTGRES_MAJOR");
+	assert.match(script, /"docker"/);
+	assert.match(script, /"compose"/);
+	assert.match(script, /up: \[[^\]]*"up"[^\]]*"--wait"/, "up runs docker compose up with --wait");
+	assert.match(script, /down: \[[^\]]*"down"/);
+	assert.doesNotMatch(script, /shell:\s*true/, "no shell");
+	assert.match(readFileSync(join(template, "docker-compose.yml"), "utf8"), /pg_isready -h 127\.0\.0\.1 -U postgres -d app/, "TCP healthcheck");
 	assert.doesNotMatch(readFileSync(join(template, ".env.example"), "utf8"), /POSTGRES_MAJOR/);
 	assert.match(readFileSync(join(template, "docker-compose.yml"), "utf8"), /\$\{POSTGRES_MAJOR:\?[^}]*\.postgres-version[^}]*pnpm db:up[^}]*\}/);
 });
