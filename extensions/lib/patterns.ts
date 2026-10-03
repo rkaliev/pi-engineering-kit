@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
 
@@ -26,7 +28,7 @@ export interface GuardConfig {
 const ALLOW: GuardDecision = { action: "allow" };
 
 const CONFIRM_RULES: Array<[RegExp, string]> = [
-	[/\bgit\b.*\bpush\b/, "pushes to a remote"],
+	[/\b(gh\s+pr|glab\s+mr)\s+merge\b/, "merges a PR/MR"],
 	[/\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+release\s+create\b|\bfastlane\b/, "publishes a release"],
 	[/\b(npm|pnpm|yarn|bun)\s+(run\s+)?deploy\b|\b(vercel|netlify|fly|flyctl|firebase|wrangler)\b.*\b(deploy|--prod)\b/, "deploys"],
 	[/\bterraform\s+(apply|destroy)\b|\bpulumi\s+(up|destroy)\b/, "changes infrastructure"],
@@ -59,8 +61,8 @@ export function isSecretPath(path: string): boolean {
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
 
-/** Decide what to do with a shell command. */
-export function checkCommand(command: string, cwd: string, config: GuardConfig): GuardDecision {
+/** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
+export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd): GuardDecision {
 	const segments = splitSegments(tokenize(command));
 
 	for (const segment of segments) {
@@ -74,6 +76,8 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig):
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
+	const push = checkPushes(segments, dir);
+	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
 	}
@@ -261,4 +265,108 @@ export function splitSegments(tokens: string[]): string[][] {
 		else segments[segments.length - 1]!.push(token);
 	}
 	return segments.filter((s) => s.length > 0);
+}
+
+const PUSH_WORDS = /\bgit\b.*\bpush\b/;
+const PUSH_CONFIRM: GuardDecision = { action: "confirm", reason: "This command pushes to a remote." };
+const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--atomic", "--porcelain"]);
+const GIT_SAFE_GLOBALS = new Set(["--no-pager", "-p", "--paginate", "--no-optional-locks"]);
+
+/** A question for the first push that is not the agent's own work branch to a configured remote. */
+function checkPushes(segments: string[][], dir: string): GuardDecision | undefined {
+	// A `cd` earlier in the command moves the push elsewhere; the classifier does not follow it.
+	const moved = segments.some((s) => /^\(*(cd|pushd|popd)$/.test(s[0]!));
+	for (const segment of segments) {
+		if (!PUSH_WORDS.test(segment.join(" "))) continue;
+		if (segment[0] !== "git") return PUSH_CONFIRM;
+		if (!segment.includes("push")) continue;
+		if (moved || classifyPush(segment, dir) !== "allow") return PUSH_CONFIRM;
+	}
+	return undefined;
+}
+
+/**
+ * `allow` when a `git push` segment pushes the current non-base branch to a configured remote by name,
+ * with no tags, deletes, options or config that could redirect it. Anything uncertain is `confirm`.
+ * Force and mirror pushes are blocked by checkSegment before this runs.
+ */
+export function classifyPush(tokens: string[], cwd: string): "allow" | "confirm" {
+	if (tokens[0] !== "git" || tokens.some((t) => /[$`~]/.test(t))) return "confirm";
+	let dir = cwd;
+	let i = 1;
+	while (i < tokens.length && tokens[i]!.startsWith("-")) {
+		const t = tokens[i]!;
+		if (t === "-C") {
+			if (tokens[i + 1] === undefined) return "confirm";
+			dir = resolve(dir, tokens[i + 1]!);
+			i += 2;
+		} else if (GIT_SAFE_GLOBALS.has(t)) i++;
+		else return "confirm"; // -c, --git-dir, --work-tree, anything unknown
+	}
+	if (tokens[i] !== "push") return "confirm";
+
+	const positional: string[] = [];
+	for (const t of tokens.slice(i + 1)) {
+		if (t === "--") return "confirm";
+		if (t.startsWith("-")) {
+			if (!PUSH_SAFE_OPTIONS.has(t) && !/^-[uqvn]+$/.test(t)) return "confirm";
+		} else positional.push(t);
+	}
+
+	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return "confirm";
+	const branch = currentBranch(dir);
+	const base = baseBranch(dir);
+	if (!base) return "confirm";
+	const config = gitConfig(dir);
+	if (!config) return "confirm";
+
+	const remotes = new Set<string>();
+	for (const key of config.keys()) {
+		const m = /^remote\.(.+)\.url$/.exec(key);
+		if (m) remotes.add(m[1]!);
+	}
+	const [given, ...specs] = positional;
+	const remote = given ?? (branch && (config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`))) ?? "origin";
+	if (!remotes.has(remote)) return "confirm";
+	// A configured refspec or mirror redirects what a bare push sends.
+	if (config.has(`remote.${remote}.push`) || config.has(`remote.${remote}.mirror`)) return "confirm";
+
+	if (specs.length === 0) {
+		if (!branch) return "confirm";
+		const pd = config.get("push.default");
+		if (pd !== undefined && pd !== "simple" && pd !== "current") return "confirm";
+		return branch === base ? "confirm" : "allow";
+	}
+	for (const spec of specs) {
+		if (/[*^~?[\\ ]/.test(spec) || spec.startsWith(":") || spec.endsWith(":")) return "confirm";
+		const [src = "", dst = src, extra] = spec.split(":");
+		if (extra !== undefined) return "confirm";
+		let target = dst;
+		if (dst === "HEAD" || dst === "@") {
+			if (!branch) return "confirm";
+			target = branch;
+		} else if (dst.startsWith("refs/heads/")) target = dst.slice("refs/heads/".length);
+		else if (dst.startsWith("refs/")) return "confirm";
+		else if (spec === dst && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${dst}`]) === undefined) return "confirm";
+		if (!src || target === base || target === "") return "confirm";
+	}
+	return "allow";
+}
+
+/** Effective git config as lowercase-section keys, last value winning; undefined when unreadable. */
+function gitConfig(dir: string): Map<string, string> | undefined {
+	const out = git(dir, ["config", "--list"]);
+	if (out === undefined) return undefined;
+	const map = new Map<string, string>();
+	for (const line of out.split("\n")) {
+		const eq = line.indexOf("=");
+		if (eq === -1) map.set(line, "");
+		else map.set(line.slice(0, eq), line.slice(eq + 1));
+	}
+	return map;
+}
+
+function git(cwd: string, args: string[]): string | undefined {
+	const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5000 });
+	return r.status === 0 ? r.stdout.trim() : undefined;
 }
