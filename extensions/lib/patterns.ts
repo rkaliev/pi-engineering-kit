@@ -75,7 +75,7 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments) ?? checkPushes(command, dir, env);
+	const push = checkPushSetup(segments) ?? checkPushes(command, segments, dir, env);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
@@ -278,8 +278,13 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
 /** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
-	if (!PUSH_WORDS.test(command)) return undefined;
+function checkPushes(command: string, segments: string[][], dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
+	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
+	const pushToken = segments.some((tokens) => {
+		const call = parseGit(tokens);
+		return call !== undefined && call.sub === "push";
+	});
+	if (!pushToken && !PUSH_WORDS.test(command)) return undefined;
 	return ownBranchPush(command, dir, env) ? undefined : PUSH_CONFIRM;
 }
 
@@ -348,8 +353,35 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 
 /** Git's own options that take a separate value, so the value is not the subcommand. */
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+/** Git's own options that take no value. Any other option before the subcommand is unknown, so it asks. */
+const GIT_FLAG_OPTIONS = new Set(["-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice", "--version", "--help", "-h"]);
 const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
 const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
+
+/**
+ * The git call in a segment: the subcommand after git's global options, its arguments, and `issue` when an
+ * option before the subcommand overrides config or is not one the guard knows.
+ */
+function parseGit(tokens: string[]): { at: number; v: number; sub: string | undefined; rest: string[]; issue?: GuardDecision } | undefined {
+	const at = tokens.findIndex((t) => BASE_NAME(t) === "git");
+	if (at === -1) return undefined;
+	let v = at + 1;
+	let issue: GuardDecision | undefined;
+	while (v < tokens.length && tokens[v]!.startsWith("-")) {
+		const t = tokens[v]!;
+		if (t === "-c" || t === "--config-env" || t.startsWith("--config-env=") || /^-c./.test(t)) {
+			issue ??= { action: "confirm", reason: "This git call overrides git config on the command line." };
+		}
+		const named = t.includes("=") ? t.slice(0, t.indexOf("=")) : undefined;
+		if (GIT_VALUE_OPTIONS.has(t)) v += 2;
+		else if (GIT_FLAG_OPTIONS.has(t) || (named !== undefined && GIT_VALUE_OPTIONS.has(named))) v += 1;
+		else {
+			issue ??= { action: "confirm", reason: "Unknown git option before the subcommand." };
+			v += 1;
+		}
+	}
+	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
+}
 
 /** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
 function checkPushSetup(segments: string[][]): GuardDecision | undefined {
@@ -362,24 +394,19 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
 			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
 		}
-		const at = tokens.findIndex((t) => BASE_NAME(t) === "git");
-		if (at === -1) continue;
-		let v = at + 1;
-		while (v < tokens.length && tokens[v]!.startsWith("-")) {
-			const t = tokens[v]!;
-			if (t === "-c" || t === "--config-env" || t.startsWith("--config-env=") || /^-c./.test(t)) return { action: "confirm", reason: "This git call overrides git config on the command line." };
-			v += GIT_VALUE_OPTIONS.has(t) ? 2 : 1;
-		}
-		const sub = tokens[v];
-		const rest = tokens.slice(v + 1);
+		const call = parseGit(tokens);
+		if (call === undefined) continue;
+		if (call.issue) return call.issue;
+		const { sub, rest } = call;
 		if (sub === "remote") {
 			const verb = rest.find((t) => !t.startsWith("-"));
 			if (verb !== undefined && ["add", "set-url", "rename"].includes(verb)) return setup;
 			if (verb === "set-head") return base;
 		}
-		if ((sub === "symbolic-ref" || sub === "update-ref") && rest.some((t) => t.includes("refs/remotes/"))) return base;
+		if (sub === "symbolic-ref" || (sub === "update-ref" && rest.some((t) => t === "--stdin" || t.includes("refs/remotes/")))) return base;
 		if (sub === "config") {
-			const args = lower.slice(v + 1);
+			const args = lower.slice(call.v + 1);
+			if (args.some((t) => t === "-e" || t === "--edit")) return setup;
 			if (args.some((t) => ["--get", "--list", "-l", "--get-all", "--get-regexp"].includes(t))) continue;
 			if (args.some((t) => WATCHED_CONFIG.test(t))) return setup;
 		}
