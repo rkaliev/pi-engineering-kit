@@ -363,8 +363,11 @@ const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
  * option before the subcommand overrides config or is not one the guard knows.
  */
 function parseGit(tokens: string[]): { at: number; v: number; sub: string | undefined; rest: string[]; issue?: GuardDecision } | undefined {
-	const at = tokens.findIndex((t) => BASE_NAME(t) === "git");
+	const at = tokens.findIndex((t) => /^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(t)));
 	if (at === -1) return undefined;
+	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
+	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
+	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1) };
 	let v = at + 1;
 	let issue: GuardDecision | undefined;
 	while (v < tokens.length && tokens[v]!.startsWith("-")) {
@@ -380,6 +383,10 @@ function parseGit(tokens: string[]): { at: number; v: number; sub: string | unde
 			v += 1;
 		}
 	}
+	// No subcommand (`xargs git`) or git as the subcommand (`strace -o git git …`): a wrapper hides the real call.
+	if (v >= tokens.length || BASE_NAME(tokens[v]!) === "git") {
+		issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+	}
 	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
 }
 
@@ -394,6 +401,10 @@ function checkPushSetup(segments: string[][]): GuardDecision | undefined {
 			const n = at === -1 ? -1 : tokens.indexOf(noun, at + 1);
 			if (n !== -1 && tokens.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
 		}
+		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
+		const evalAt = tokens.findIndex((t) => t === "eval");
+		const from = shell !== -1 ? shell : evalAt;
+		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(t))) return { action: "confirm", reason: "This command runs git through a shell string." };
 		const call = parseGit(tokens);
 		if (call === undefined) continue;
 		if (call.issue) return call.issue;

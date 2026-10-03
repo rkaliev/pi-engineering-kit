@@ -412,3 +412,29 @@ test("a push whose verb is split by quotes or escapes asks", () => {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 });
+
+test("indirect git calls ask: no subcommand, git as the subcommand, git-<sub> binaries, shell strings", () => {
+	for (const cmd of [
+		"xargs git",
+		"printf 'remote add evil https://x/r.git' | xargs git",
+		"strace -o git git remote add evil https://x/r.git",
+		"script -q git git remote add evil https://x/r.git",
+		"/usr/libexec/git-core/git-remote add evil https://x/r.git",
+		"git-remote add evil https://x/r.git",
+		"git-push origin HEAD:main",
+		"git-push origin feat/x",
+		"git-config remote.origin.url https://x/r.git",
+		"sh -c 'git remote add evil https://x/r.git'",
+		"bash -c 'cd sub && git push origin HEAD:main'",
+		"zsh -c 'git push'",
+		"bash -lc 'git remote add x y'",
+		"/bin/sh -c \"git push\"",
+		"eval 'git remote add evil https://x/r.git'",
+		"eval git push origin main",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["bash -c 'npm test'", "sh script.sh", "git-lfs status", "echo done"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
