@@ -8,7 +8,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { scaffold } from "../extensions/lib/scaffold.ts";
+import { checkPnpm, scaffold } from "../extensions/lib/scaffold.ts";
 
 const dest = process.argv[2];
 if (!dest) {
@@ -23,6 +23,11 @@ if (process.platform === "win32") {
 const pnpm = spawnSync("pnpm", ["--version"], { encoding: "utf8" });
 if (pnpm.status !== 0) {
 	console.error(`pnpm is not installed or did not start: see pnpm.io/installation${pnpm.error ? ` (${pnpm.error.message})` : ""}`);
+	process.exit(1);
+}
+const tooOld = checkPnpm(pnpm.stdout);
+if (tooOld) {
+	console.error(tooOld);
 	process.exit(1);
 }
 try {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "vitest";
 import { missingMigrations, shippedMigrations } from "./schema.ts";
 import { SERVER_ONLY_MARKER } from "./marker.ts";
@@ -22,7 +22,11 @@ test("the web bundle check looks for the same marker", () => {
 });
 
 test("every database module carries the server-only marker", () => {
-  for (const file of ["index.ts", "pool.ts", "schema.ts"]) {
+  const files = readdirSync(new URL("./", import.meta.url)).filter(
+    (name) => name.endsWith(".ts") && !name.endsWith(".test.ts") && name !== "marker.ts",
+  );
+  assert.ok(files.length >= 3, "expected the db modules");
+  for (const file of files) {
     const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
     assert.match(source, /^import "\.\/marker\.ts";$/m, file);
   }

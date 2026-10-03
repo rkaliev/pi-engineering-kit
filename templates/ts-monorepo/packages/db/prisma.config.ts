@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "prisma/config";
 
-// Prisma 7 does not read .env itself; load the repo's file when there is one (CI sets the variable).
+// Prisma does not read .env itself; load the repo's file when there is one (CI sets the variable).
 const envFile = fileURLToPath(new URL("../../.env", import.meta.url));
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 

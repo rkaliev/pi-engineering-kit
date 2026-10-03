@@ -106,7 +106,9 @@ export function detectVerifyCommands(cwd: string): string[] {
 
 	const has = (rel: string) => existsSync(join(cwd, rel));
 	const pm = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
-	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx", npm: "npx" }[pm];
+	// Never download a tool to verify a project: these run only a locally installed turbo
+	// (`npx --no` refuses to install; `bunx --no-install` skips installation; pnpm and yarn run local bins only).
+	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx --no-install", npm: "npx --no" }[pm];
 	const turboFile = ["turbo.json", "turbo.jsonc"].find(has);
 	if (turboFile) {
 		try {

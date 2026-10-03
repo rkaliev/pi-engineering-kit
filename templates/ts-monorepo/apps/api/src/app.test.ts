@@ -77,10 +77,10 @@ test("a 4xx error keeps its class with a generic message; a 5xx stays internal",
     onError: (_err, status) => seen.push(status),
     routes: (app) => {
       app.get("/missing", () => {
-        throw Object.assign(new Error("no such account 42"), { status: 404 });
+        throw Object.assign(new Error("no such account 42"), { status: 404, expose: true });
       });
       app.get("/odd", () => {
-        throw Object.assign(new Error("teapot"), { statusCode: 418 });
+        throw Object.assign(new Error("teapot"), { statusCode: 418, expose: true });
       });
       app.get("/bad-gateway", () => {
         throw Object.assign(new Error("upstream"), { status: 502 });
@@ -97,6 +97,22 @@ test("a 4xx error keeps its class with a generic message; a 5xx stays internal",
   assert.equal(gateway.status, 500);
   assert.deepEqual(await gateway.json(), { error: "internal" });
   assert.deepEqual(seen, [404, 418, 500]);
+});
+
+test("a status on an error that does not expose itself is not trusted: it is a 500", async () => {
+  const seen: number[] = [];
+  const base = await start({
+    onError: (_err, status) => seen.push(status),
+    routes: (app) => {
+      app.get("/auth", () => {
+        throw Object.assign(new Error("token for ada@example.com rejected"), { status: 401 });
+      });
+    },
+  });
+  const res = await fetch(`${base}/auth`);
+  assert.equal(res.status, 500);
+  assert.deepEqual(await res.json(), { error: "internal" });
+  assert.deepEqual(seen, [500]);
 });
 
 test("bigint values serialise as strings", async () => {
@@ -182,4 +198,21 @@ test("an error after the response started is logged once as a 500, and the conne
   }
   assert.doesNotMatch(text, /internal/);
   assert.deepEqual(statuses, [500]);
+});
+
+test("a Postgres data-exception error logs its type and code only, never the quoted input", async () => {
+  const lines: string[] = [];
+  const log = createLogger("debug", (line) => lines.push(line));
+  const base = await start({
+    onError: (err, status) => logRequestError(log, err, status),
+    routes: (app) => {
+      app.get("/q", () => {
+        throw Object.assign(new Error('invalid input syntax for type bigint: "hunter2"'), { code: "22P02" });
+      });
+    },
+  });
+  assert.equal((await fetch(`${base}/q`)).status, 500);
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0] ?? "", /hunter2/);
+  assert.deepEqual(JSON.parse(lines[0] ?? ""), { level: "error", msg: "request failed", status: 500, type: "Error", code: "22P02" });
 });

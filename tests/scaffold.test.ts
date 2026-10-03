@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
+import { checkPnpm, latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
 const versions = { node: "24.1.0", pnpm: "10.0.0" };
 
@@ -170,4 +170,26 @@ test("scaffold resolves @types/node within the major of the running Node and cap
 test("the template's minimumReleaseAge equals the scaffold's", () => {
 	const yaml = readFileSync(join(import.meta.dirname, "..", "templates", "ts-monorepo", "pnpm-workspace.yaml"), "utf8");
 	assert.equal(Number(/^minimumReleaseAge:\s*(\d+)/m.exec(yaml)?.[1]), MIN_RELEASE_AGE_MINUTES);
+});
+
+test("checkPnpm refuses a pnpm without allowBuilds, names the floor, and accepts newer", () => {
+	assert.match(checkPnpm("10.25.9") ?? "", /10\.26\.0/);
+	assert.equal(checkPnpm("10.26.0"), undefined);
+	assert.equal(checkPnpm("12.4.1"), undefined);
+	assert.match(checkPnpm("garbage") ?? "", /10\.26\.0/);
+	assert.match(checkPnpm("9.99.0") ?? "", /10\.26\.0/);
+});
+
+test("the copy skips local state: .env files, build output, caches, generated code", () => {
+	const tpl = fakeTemplate({});
+	for (const file of [".env", ".env.local", ".env.production.local", ".env.example", ".turbo/cache/x", "apps/api/dist/main.js", "packages/db/src/generated/types.ts", "apps/api/node_modules/x/index.js"]) {
+		mkdirSync(join(tpl, file, ".."), { recursive: true });
+		writeFileSync(join(tpl, file), "x");
+	}
+	const { copy } = planScaffold(tpl, "/unused", versions);
+	assert.deepEqual(
+		copy.filter((f) => /\.env|\.turbo|dist|generated|node_modules/.test(f)),
+		[".env.example"],
+	);
+	assert.ok(copy.includes("apps/api/package.json"));
 });

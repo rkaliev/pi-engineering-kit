@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { ciCoverage } from "../extensions/lib/ci.ts";
+import { resolveVerifyCommands } from "../extensions/lib/commands.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const template = join(root, "templates", "ts-monorepo");
@@ -26,7 +29,7 @@ test("template package.json files hold no versions", () => {
 	assert.ok(files.length >= 7, "expected a package.json in the root and every workspace");
 	for (const file of files) {
 		const pkg = JSON.parse(readFileSync(file, "utf8"));
-		for (const key of ["dependencies", "devDependencies", "peerDependencies", "packageManager", "engines"]) {
+		for (const key of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "packageManager", "engines", "devEngines", "overrides", "resolutions", "volta", "pnpm"]) {
 			assert.equal(key in pkg, false, `${relative(template, file)} has "${key}"`);
 		}
 	}
@@ -65,4 +68,26 @@ test("workflow actions are pinned at scaffold", () => {
 
 test("the profile states no versions", () => {
 	assert.doesNotMatch(readFileSync(profile, "utf8"), /\b\d+\.\d+(\.\d+)?\b/);
+});
+
+test("pnpm-workspace.yaml pins no versions through catalogs or overrides", () => {
+	const yaml = readFileSync(join(template, "pnpm-workspace.yaml"), "utf8").replace(/^\s*#.*$/gm, "");
+	for (const key of ["catalog", "catalogs", "overrides"]) assert.doesNotMatch(yaml, new RegExp(`^${key}:`, "m"), key);
+});
+
+test("the template workflow reads the Node version from .nvmrc only", () => {
+	const yaml = readFileSync(join(template, ".github", "workflows", "pr.yml"), "utf8").replace(/^\s*#.*$/gm, "");
+	assert.doesNotMatch(yaml, /\bnode-version:/);
+	assert.match(yaml, /node-version-file: \.nvmrc/);
+});
+
+test("kit-init verifies the scaffolded project with one turbo run, and its CI runs it", () => {
+	const dir = mkdtempSync(join(tmpdir(), "tpl-verify-"));
+	const manifest = ["CLAUDE.md", "AGENTS.md"].find((name) => existsSync(join(template, name))) as string;
+	cpSync(join(template, manifest), join(dir, manifest));
+	mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+	cpSync(join(template, ".github", "workflows", "pr.yml"), join(dir, ".github", "workflows", "pr.yml"));
+	const { commands } = resolveVerifyCommands(dir);
+	assert.deepEqual(commands, ["pnpm turbo run typecheck lint test"]);
+	assert.deepEqual(ciCoverage(dir, commands).missing, []);
 });

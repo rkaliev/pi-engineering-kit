@@ -17,7 +17,7 @@ const forbidden = [
   "@repo/db(/.*)?",
   ".*/packages/db(/.*)?",
   ".*/db/src(/.*)?",
-  ".*/server/.*",
+  ".*/server(/.*)?",
   ".*/api/src(/.*)?",
   `(node:)?(${builtinModules.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(/.*)?`,
   "node:.*",

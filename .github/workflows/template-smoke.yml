@@ -61,6 +61,7 @@ jobs:
           import "node:fs";
           export const dynamic = import("@repo/db");
           export const literal = import(`node:fs`);
+          import "../server";
           TS
           cat > src/domain/__boundary.ts <<'TS'
           import "node:fs";
@@ -70,7 +71,7 @@ jobs:
           node --input-type=module -e '
             import { readFileSync } from "node:fs";
             const report = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/boundary.json", "utf8"));
-            const expected = { "src/client/__boundary.ts": [1, 2, 3, 4, 5, 6, 7], "src/domain/__boundary.ts": [1, 2] };
+            const expected = { "src/client/__boundary.ts": [1, 2, 3, 4, 5, 6, 7, 8], "src/domain/__boundary.ts": [1, 2] };
             let failed = false;
             for (const [file, lines] of Object.entries(expected)) {
               const result = report.find((r) => r.filePath.endsWith(file));

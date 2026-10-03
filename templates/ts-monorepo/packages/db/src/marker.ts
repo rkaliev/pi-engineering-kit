@@ -1,6 +1,6 @@
 /**
- * Present in any bundle that includes this package. The web build fails when it finds the string in `dist/`
- * (apps/web/scripts/check-bundle.ts), so the database client can never ship to the browser.
+ * Present in any bundle that includes a module of this package. The web build fails when it finds the string in
+ * `dist/` (apps/web/scripts/check-bundle.ts): a backstop for `@repo/db` modules, behind the lint rule.
  */
 export const SERVER_ONLY_MARKER = "repo-db-server-only-marker";
 

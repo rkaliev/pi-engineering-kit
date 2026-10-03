@@ -27,6 +27,30 @@ function walk(dir: string): string[] {
 	});
 }
 
+/** Files a template folder may hold from local use that must never reach a new project. */
+function isLocalState(rel: string): boolean {
+	const parts = rel.split("/");
+	const name = parts[parts.length - 1] ?? "";
+	return (
+		parts.some((p) => p === "node_modules" || p === ".turbo" || p === "dist") ||
+		rel.includes("src/generated/") ||
+		name === ".env" ||
+		/^\.env.*\.local$/.test(name)
+	);
+}
+
+/** The first pnpm with `allowBuilds` in pnpm-workspace.yaml (pnpm.io); older ones ignore it and run no build scripts or fail. */
+export const MIN_PNPM = "10.26.0";
+
+/** A message when this pnpm is too old for the template, otherwise undefined. */
+export function checkPnpm(version: string): string | undefined {
+	const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+	const min = MIN_PNPM.split(".").map(Number);
+	const have = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+	const ok = have !== undefined && compare(have, min) >= 0;
+	return ok ? undefined : `pnpm ${MIN_PNPM} or newer is required (found "${version.trim()}"): see pnpm.io/installation`;
+}
+
 /** Workspace packages (`@repo/*`) link to the repo; everything else gets the latest release. */
 const isWorkspace = (name: string): boolean => name.startsWith("@repo/");
 
@@ -118,7 +142,7 @@ export function planScaffold(
 ): ScaffoldPlan {
 	void dest;
 	const spec = (name: string): string => (isWorkspace(name) ? `${name}@workspace:*` : pin(name));
-	const copy = walk(template).map((f) => relative(template, f)).filter((f) => f !== "scaffold.json");
+	const copy = walk(template).map((f) => relative(template, f).replaceAll("\\", "/")).filter((f) => f !== "scaffold.json" && !isLocalState(f));
 	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
 	const writes = {
 		".nvmrc": `${versions.node}\n`,

@@ -17,14 +17,17 @@
 Run exactly these; they mirror CI.
 - `pnpm install --frozen-lockfile`: install with the lockfile
 - `pnpm turbo run typecheck lint test`: static checks and tests
-- `pnpm turbo run build`: build
+
+## Other tasks
+Not run by the verify hooks.
+- `pnpm turbo run build`: build (CI runs it)
 - `pnpm format`: Prettier
 - `docker compose up -d postgres`: local database (needs `POSTGRES_MAJOR` in `.env`)
 - `pnpm --filter @repo/db exec prisma migrate deploy`: apply migrations. Prisma and `pnpm --filter @repo/api dev` read `.env`; `start` and CI read the process env only
 - `pnpm --filter @repo/web dev`: dev server. Don't run it; it's already open in another terminal
 
 ## Rules
-- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (`apps/web/src/domain`, pure). Client and domain never import server code, `@repo/db` or Node modules (bare or `node:`, also through `import()`); lint enforces it, and `build` fails if the database package ends up in `dist/`. Type-only imports of router types are allowed. Computed specifiers and `module.require` are not caught by lint; the bundle check is the backstop. A browser polyfill named like a Node builtin is a reviewed exception added to the rule.
+- Layers: client (`apps/web/src/client`), server (`apps/api`), domain (`apps/web/src/domain`, pure). Client and domain never import server code, `@repo/db` or Node modules (bare or `node:`, also through `import()`); lint enforces it, and the `build` bundle check is a backstop for `@repo/db` modules. Type-only imports of router types are allowed. Computed specifiers and `module.require` are not caught by lint; the bundle check is the backstop. A browser polyfill named like a Node builtin is a reviewed exception added to the rule.
 - Package source code never reads `process.env` (tooling config files may); only `apps/api/src/config.ts` does, and it owns every default.
 - Validate input before it reaches the driver; 4xx logs carry status and type only.
 - `/readyz` is 503 until the database has every migration this build ships: run `migrate deploy` before sending traffic.

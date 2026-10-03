@@ -126,7 +126,7 @@ test("then from turbo.json tasks, as one turbo run", () => {
 	const turbo = JSON.stringify({ tasks: { build: {}, lint: {}, test: {}, typecheck: {} } });
 	const s = scripts({ test: "turbo run test" });
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turbo, "pnpm-workspace.yaml": "", "package.json": s })), ["pnpm turbo run typecheck lint test"]);
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turbo, "package-lock.json": "{}", "package.json": s })), ["npx turbo run typecheck lint test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turbo, "package-lock.json": "{}", "package.json": s })), ["npx --no turbo run typecheck lint test"]);
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": JSON.stringify({ pipeline: { test: {} } }), "yarn.lock": "", "package.json": s })), ["yarn turbo run test"]);
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": "{", "package.json": scripts({ test: "vitest run" }) })), ["npm test"]);
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": JSON.stringify({ tasks: { build: {} } }), "package.json": scripts({ test: "vitest run" }) })), ["npm test"]);
@@ -135,14 +135,14 @@ test("then from turbo.json tasks, as one turbo run", () => {
 test("turbo detection edge cases", () => {
 	const tasks = (t: Record<string, unknown>) => JSON.stringify({ tasks: t });
 	const s = scripts({ test: "vitest run" });
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ test: {} }), "bun.lock": "" })), ["bunx turbo run test"]);
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "type-check": {}, test: {} }), "package-lock.json": "{}" })), ["npx turbo run type-check test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ test: {} }), "bun.lock": "" })), ["bunx --no-install turbo run test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "type-check": {}, test: {} }), "package-lock.json": "{}" })), ["npx --no turbo run type-check test"]);
 	assert.deepEqual(detectVerifyCommands(project({ "AGENTS.md": "## Commands\n- `make check`\n", "turbo.json": tasks({ test: {} }) })), ["make check"]);
 	assert.deepEqual(detectVerifyCommands(project({ "pnpm-workspace.yaml": "", "package.json": s })), ["pnpm test"], "without turbo.json the scripts apply");
 	// turbo.json and turbo.jsonc may carry comments
 	const commented = '{\n// a comment\n"url": "http://x", /* block */ "tasks": {"lint": {}}\n}';
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": commented, "package-lock.json": "{}" })), ["npx turbo run lint"]);
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.jsonc": commented, "package-lock.json": "{}" })), ["npx turbo run lint"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": commented, "package-lock.json": "{}" })), ["npx --no turbo run lint"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.jsonc": commented, "package-lock.json": "{}" })), ["npx --no turbo run lint"]);
 	// package-scoped task keys
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "web#test": {}, "//#lint": {} }), "package-lock.json": "{}" })), ["npx turbo run lint test"]);
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "web#test": {}, "//#lint": {} }), "package-lock.json": "{}" })), ["npx --no turbo run lint test"]);
 });

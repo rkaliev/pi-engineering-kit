@@ -20,11 +20,14 @@ const clientErrors: Record<number, string> = {
   429: "too_many_requests",
 };
 
-/** 4xx statuses set by Express and its middleware (`status` or `statusCode`) pass through; everything else is 500. */
+/**
+ * A 4xx passes through only from an error that marks itself safe to show (`expose: true`, the http-errors
+ * and body-parser convention). A bare `status` on any other error is not trusted: it is a 500.
+ */
 function statusOf(err: unknown): number {
-  const { status, statusCode } = (err ?? {}) as { status?: unknown; statusCode?: unknown };
+  const { status, statusCode, expose } = (err ?? {}) as { status?: unknown; statusCode?: unknown; expose?: unknown };
   const code = typeof status === "number" ? status : statusCode;
-  return typeof code === "number" && code >= 400 && code <= 499 ? code : 500;
+  return expose === true && typeof code === "number" && code >= 400 && code <= 499 ? code : 500;
 }
 
 export function createApp(deps: AppDeps): express.Express {
