@@ -30,10 +30,12 @@ function sources(dir: URL): URL[] {
 }
 
 test("every database module, in subfolders too, carries the server-only marker", () => {
-  const files = sources(new URL("./", import.meta.url));
+  const root = new URL("./", import.meta.url);
+  const files = sources(root);
   assert.ok(files.length >= 3, "expected the db modules");
   for (const file of files) {
-    const depth = file.pathname.split("/src/")[1]?.split("/").length ?? 1;
+    // Depth below this folder, never from the absolute path (a project may live under any `src/`).
+    const depth = file.href.slice(root.href.length).split("/").length;
     const expected = `import "${depth > 1 ? "../".repeat(depth - 1) : "./"}marker.ts";`;
     assert.ok(readFileSync(file, "utf8").split("\n").includes(expected), file.pathname);
   }
