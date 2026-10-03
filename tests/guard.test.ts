@@ -675,6 +675,35 @@ test("-c asks only for keys that move where git pushes or what it runs", () => {
 	assert.equal(ask("git -c user.name=x push", repo), "confirm", "-c never pushes silently");
 });
 
+test("git environment variables that run a program or redirect git ask; harmless values and other variables do not", () => {
+	for (const cmd of [
+		"GIT_SSH_COMMAND='ssh -i k' git fetch",
+		'GIT_SSH_COMMAND="ssh -i k" git fetch',
+		"env GIT_SSH_COMMAND=x git pull",
+		"GIT_EXTERNAL_DIFF=x git diff",
+		"GIT_PAGER='sh -c x' git log",
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
+		"export GIT_SSH_COMMAND=x; git fetch",
+		"GIT_DIR=../o/.git git log",
+		"EDITOR=vim git commit",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of [
+		"GIT_EDITOR=true git rebase --continue",
+		"GIT_PAGER=cat git log",
+		"GIT_SEQUENCE_EDITOR=: git rebase -i HEAD~2",
+		"GIT_AUTHOR_NAME=x git commit -m x",
+		"GIT_TRACE=1 git status",
+		"GIT_TERMINAL_PROMPT=0 git fetch",
+		"LANG=C git log",
+		"EDITOR=vim make",
+		"export EDITOR=vim",
+	]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
 test("reading symbolic refs and config is quiet; changing them is not", () => {
 	for (const cmd of ["git symbolic-ref HEAD", "git symbolic-ref --short HEAD", "git symbolic-ref -q HEAD", "git symbolic-ref --quiet --short HEAD", "git config get user.name", "git config list", "git config get remote.origin.url"]) {
 		assert.equal(action(cmd), "allow", cmd);
