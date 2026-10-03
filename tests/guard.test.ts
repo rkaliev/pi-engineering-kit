@@ -133,7 +133,9 @@ function pushRepo(withOriginHead = true) {
 	sh(repo, "remote", "add", "origin", origin);
 	sh(repo, "push", "-q", "origin", "main");
 	sh(repo, "fetch", "-q", "origin");
+	// Newer git creates origin/HEAD on fetch: set it, or remove the symref itself (never its target).
 	if (withOriginHead) sh(repo, "remote", "set-head", "origin", "main");
+	else sh(repo, "update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD");
 	sh(repo, "switch", "-q", "-c", "feat/x");
 	return repo;
 }
@@ -285,7 +287,6 @@ test("a repository without origin/HEAD uses a local main as the base; with neith
 	assert.equal(ask("git push origin feat/x", repo), "allow");
 	assert.equal(ask("git push origin main", repo), "confirm");
 	sh(repo, "branch", "-m", "main", "trunk");
-	sh(repo, "update-ref", "-d", "refs/remotes/origin/HEAD");
 	assert.equal(ask("git push origin feat/x", repo), "confirm", "unknown base");
 });
 
