@@ -438,3 +438,20 @@ test("indirect git calls ask: no subcommand, git as the subcommand, git-<sub> bi
 		assert.equal(action(cmd), "allow", cmd);
 	}
 });
+
+test("every git-like token counts: a second one, or xargs/parallel feeding git, asks", () => {
+	for (const cmd of [
+		"script -q git-out git remote add evil https://x/r.git",
+		"strace -o git-log git push origin HEAD:main",
+		"script -q git-out git pu''sh origin HEAD:main",
+		"printf 'add evil https://x/r.git' | xargs git remote",
+		"printf 'remote.evil.url x' | xargs git config",
+		"xargs -n1 git remote",
+		"parallel git remote add evil ::: https://x/r.git",
+		"/usr/bin/xargs /usr/bin/git config",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git-lfs status"), "allow");
+	assert.equal(action("cat git-out"), "allow");
+});

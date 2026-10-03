@@ -363,13 +363,17 @@ const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
  * option before the subcommand overrides config or is not one the guard knows.
  */
 function parseGit(tokens: string[]): { at: number; v: number; sub: string | undefined; rest: string[]; issue?: GuardDecision } | undefined {
-	const at = tokens.findIndex((t) => /^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(t)));
+	const gitLike = (t: string) => /^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(t));
+	const at = tokens.findIndex(gitLike);
 	if (at === -1) return undefined;
+	let issue: GuardDecision | undefined;
+	// A second git-like token (`script -q git-out git …`) or input feeding git's arguments hides the real call.
+	if (tokens.slice(at + 1).some(gitLike)) issue = { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+	if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
 	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
 	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
-	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1) };
+	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1), issue };
 	let v = at + 1;
-	let issue: GuardDecision | undefined;
 	while (v < tokens.length && tokens[v]!.startsWith("-")) {
 		const t = tokens[v]!;
 		if (t === "-c" || t === "--config-env" || t.startsWith("--config-env=") || /^-c./.test(t)) {
