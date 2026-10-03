@@ -18,6 +18,9 @@ test("blocks hook bypass", () => {
 	assert.equal(action("git commit -n -m x"), "block");
 	assert.equal(action("git push --no-verify"), "block");
 	assert.equal(action("git commit -am 'fix: thing'"), "allow");
+	for (const cmd of ["(git commit --no-verify)", "`git push --no-verify`", "$(git commit --no-verify -m x)", "x=$(git commit --no-verify -m x)"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
 });
 
 test("blocks force push but allows --force-with-lease with confirmation", () => {
@@ -51,6 +54,8 @@ test("asks before outward-facing or destructive commands", () => {
 		"kubectl apply -f k8s/",
 		"helm upgrade api ./chart",
 		"npx prisma migrate deploy",
+		"npx prisma db execute --file x.sql",
+		"prisma migrate resolve --applied 2024_init",
 		"rails db:migrate",
 		"git reset --hard HEAD~3",
 		"git clean -fdx",
@@ -301,10 +306,25 @@ test("changing where or what git pushes asks, from any position", () => {
 		"git config push.default matching",
 		"git config branch.main.remote x",
 		"git config alias.p push",
+		"git config core.pager evil",
+		"git config --global core.editor evil",
+		"git config sequence.editor x",
+		"git config diff.external x",
+		"git config gpg.program x",
+		"git config gpg.x509.program x",
+		"git config filter.x.smudge x",
+		"git config pager.log x",
+		"git config diff.x.textconv x",
+		"git config merge.x.driver x",
+		"git config difftool.x.cmd x",
+		"git config submodule.x.update !x",
+		"git config credential.helper store",
+		"git config credential.https://h.helper x",
+		"git config Core.Pager x",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x"]) {
+	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x", "git config core.quotepath off", "git config color.ui auto", "git config user.email a@b", "git config diff.algorithm patience", "git config get core.pager"]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}
 });
@@ -315,6 +335,42 @@ test("merging a PR or MR asks, with options anywhere", () => {
 	}
 	assert.equal(action("gh pr create --fill"), "allow");
 	assert.equal(action("gh pr view 12"), "allow");
+	for (const cmd of ["(gh pr merge 1)", "$(gh pr merge 1)", "`glab mr merge 2`"]) assert.equal(action(cmd), "confirm", cmd);
+});
+
+test("gh api and glab api ask for writes, not for reads", () => {
+	for (const cmd of [
+		"gh api -X POST repos/o/r/issues",
+		"gh api -XPUT repos/o/r/pulls/1/merge",
+		"gh api --method=delete repos/o/r/git/refs/heads/x",
+		"gh api repos/o/r/issues -X patch",
+		"gh api --method PUT repos/o/r/x",
+		"gh api repos/o/r/issues -f title=x",
+		"gh api repos/o/r/issues -F body=@f",
+		"gh api repos/o/r/issues --field a=b",
+		"gh api repos/o/r/issues --raw-field a=b",
+		"gh api repos/o/r/issues --input body.json",
+		"gh api graphql -f query=x",
+		"gh api graphql",
+		"gh -R o/r api -X POST x",
+		"glab api projects/1/merge_requests/2/merge -X PUT",
+		"/opt/homebrew/bin/gh api -X POST x",
+		"(gh api -X POST x)",
+		"echo $(gh api -X DELETE x)",
+		"sudo gh api -X POST x",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["gh api repos/o/r/pulls", "gh api -X GET repos/o/r/pulls", "gh api --method=get repos/o/r", "gh api repos/o/r/issues -X get -f state=open", "gh api user --jq .login", "glab api projects/1/issues", "gh pr view 1"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
+test("git svn and git p4 writes ask", () => {
+	for (const cmd of ["git svn dcommit", "git svn branch x", "git svn tag x", "git svn set-tree HEAD", "git p4 submit", "git-svn dcommit", "git-p4 submit", "git -C sub svn dcommit", "(git svn dcommit)", "sudo git p4 submit"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git svn fetch", "git svn rebase", "git svn info", "git p4 sync", "git p4 clone //depot/x"]) assert.equal(action(cmd), "allow", cmd);
 });
 
 test("only convention-named work branches push silently", () => {
@@ -571,6 +627,17 @@ test("bypasses through wrappers keep asking, now only in command position", () =
 		"sudo git remote add evil https://x/r.git",
 		"env X=1 git remote add evil https://x/r.git",
 		"timeout 5 git remote add evil https://x/r.git",
+		"stdbuf -oL git remote add evil https://x/r.git",
+		"flock /tmp/l git remote add evil https://x/r.git",
+		"ionice -c3 git remote add evil https://x/r.git",
+		"taskset -c 0 git remote add evil https://x/r.git",
+		"chrt -i 0 git remote add evil https://x/r.git",
+		"setsid git remote add evil https://x/r.git",
+		"unbuffer git remote add evil https://x/r.git",
+		"doas git remote add evil https://x/r.git",
+		"stdbuf -oL git pu''sh origin x",
+		"setsid git pu''sh origin x",
+		"doas git pu\\sh origin x",
 		"nohup git remote add evil https://x/r.git",
 		"X=1 git remote add evil https://x/r.git",
 		"if git remote add evil https://x/r.git; then echo ok; fi",
@@ -583,7 +650,7 @@ test("bypasses through wrappers keep asking, now only in command position", () =
 });
 
 test("-c asks only for keys that move where git pushes or what it runs", () => {
-	for (const cmd of ["git -c core.quotepath=off status", "git -c color.ui=always diff", "git -c user.email=a@b commit -m x", "git -cuser.name=x status", "git -c core.editor=vim log"]) {
+	for (const cmd of ["git -c core.quotepath=off status", "git -c color.ui=always diff", "git -c user.email=a@b commit -m x", "git -cuser.name=x status", "git -c diff.algorithm=patience diff", "git -c merge.conflictstyle=diff3 merge x"]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}
 	for (const cmd of [
@@ -601,6 +668,23 @@ test("-c asks only for keys that move where git pushes or what it runs", () => {
 		"git -c url.x.insteadOf=y fetch",
 		"git -c includeIf.x.path=y status",
 		"git -c ALIAS.x=y status",
+		"git -c core.pager=evil log",
+		"git -c core.editor=vim log",
+		"git -c core.askpass=x fetch",
+		"git -c sequence.editor=x rebase -i HEAD~2",
+		"git -c diff.external=x diff",
+		"git -c gpg.program=x commit -S -m x",
+		"git -c gpg.ssh.program=x commit -m x",
+		"git -c filter.x.clean=x add .",
+		"git -c pager.log=x log",
+		"git -c diff.x.command=x diff",
+		"git -c diff.x.textconv=x diff",
+		"git -c merge.x.driver=x merge y",
+		"git -c difftool.x.cmd=x difftool",
+		"git -c mergetool.x.cmd=x mergetool",
+		"git -c submodule.x.update=!x submodule update",
+		"git -c credential.https://h.helper=x fetch",
+		"git -c Core.Pager=x log",
 		"git --config-env=core.quotepath=VAR status",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
