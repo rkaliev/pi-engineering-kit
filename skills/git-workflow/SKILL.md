@@ -41,7 +41,7 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
    4. **Discard.** Require the user to type `discard`. Show what will be lost (commits, files) first.
 4. Remove only worktrees you created, and only after merge or discard. Never delete a worktree or branch with unpushed work that you didn't create.
 
-Pushing, opening PRs, and merging are outward-facing: do them only on the user's choice.
+Push the work branch and open the PR yourself once the review covers HEAD; merging, pushing to the base and rewriting pushed history stay the user's choice.
 
 ## After a push
 
