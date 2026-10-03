@@ -57,6 +57,8 @@ test("asks before outward-facing or destructive commands", () => {
 		"pnpm --filter @repo/db migrate:down 00000000000000_init",
 		"npm run migrate:down x",
 		"node scripts/migrate-down.ts x",
+		"node --env-file=.env scripts/migrate-down.ts x",
+		"bun run scripts/migrate-down.ts x",
 		"npx prisma db execute --file x.sql",
 		"prisma migrate resolve --applied 2024_init",
 		"rails db:migrate",
@@ -324,12 +326,20 @@ test("changing where or what git pushes asks, from any position", () => {
 		"git config --global --unset core.editor",
 		"git config include.path /tmp/evil",
 		"git config includeIf.gitdir:/a.path /tmp/evil",
-		"git remote set-head origin feat/x",
-		"git remote -v set-head origin feat/x",
 		"git remote -v add x https://evil/r.git",
 		"git --git-dir /x remote add x https://evil/r.git",
 		"git --namespace n -C sub remote add x https://evil/r.git",
 		"git -C sub -c user.name=x remote add x https://evil/r.git",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x", "git config core.quotepath off", "git config color.ui auto", "git config user.email a@b", "git config diff.algorithm patience", "git config get core.pager", "git config credential.helper", "git config core.editor", "git config --global core.pager", "git config remote.origin.url", "git --no-pager log", "git add packages/db/scripts/migrate-down.ts", "git commit -m \"feat(db): add migrate-down script\""]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
+test("merging a PR or MR asks, with options, paths and substitutions around it", () => {
+	for (const cmd of [
 		"gh pr merge 12 --squash",
 		"glab mr merge 12",
 		"gh -R o/r pr merge 1",
@@ -344,9 +354,7 @@ test("changing where or what git pushes asks, from any position", () => {
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	for (const cmd of ["git remote -v", "git remote get-url origin", "git config --get remote.origin.url", "git config --list", "git config user.name x", "git config core.quotepath off", "git config color.ui auto", "git config user.email a@b", "git config diff.algorithm patience", "git config get core.pager", "git config credential.helper", "git config core.editor", "git config --global core.pager", "git config remote.origin.url", "git --no-pager log", "gh pr create --fill", "gh pr view 12", "git add packages/db/scripts/migrate-down.ts", "git commit -m \"feat(db): add migrate-down script\""]) {
-		assert.equal(action(cmd), "allow", cmd);
-	}
+	for (const cmd of ["gh pr create --fill", "gh pr view 12"]) assert.equal(action(cmd), "allow", cmd);
 });
 
 test("gh api and glab api ask for writes, not for reads", () => {
@@ -379,7 +387,7 @@ test("gh api and glab api ask for writes, not for reads", () => {
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	for (const cmd of ["gh api repos/o/r/pulls", "gh api -X GET repos/o/r/pulls", "gh api --method=get repos/o/r", "gh api repos/o/r/issues -X get -f state=open", "gh api user --jq .login", "glab api projects/1/issues", "gh api graphql -f query='{ viewer { login } }'", "gh api graphql -F query='query { a }' -F owner=x", "gh api graphql -f query=x"]) {
+	for (const cmd of ["gh api repos/o/r/pulls", "gh api -X GET repos/o/r/pulls", "gh api --method=get repos/o/r", "gh api repos/o/r/issues -X get -f state=open", "gh api user --jq .login", "glab api projects/1/issues", "gh api graphql -f query='{ viewer { login } }'", "gh api graphql -F query='query { a }' -F owner=x", "gh api graphql -f query=x", "gh api graphql -F owner=o -F name=r -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }'"]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}
 });
@@ -441,8 +449,8 @@ test("an unknown git option before the subcommand asks; known ones do not", () =
 	}
 });
 
-test("rewriting refs and editing config by hand ask", () => {
-	for (const cmd of ["git update-ref --stdin", "git symbolic-ref HEAD refs/heads/x", "git config -e", "git config --edit", "git config --global --edit", "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feat/x", "git update-ref refs/remotes/origin/HEAD HEAD"]) {
+test("rewriting refs, origin/HEAD and editing config by hand ask", () => {
+	for (const cmd of ["git update-ref --stdin", "git symbolic-ref HEAD refs/heads/x", "git config -e", "git config --edit", "git config --global --edit", "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feat/x", "git update-ref refs/remotes/origin/HEAD HEAD", "git remote set-head origin feat/x", "git remote -v set-head origin feat/x"]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	assert.equal(action("git update-ref refs/heads/feat/x HEAD"), "allow");
@@ -562,6 +570,7 @@ test("git inside a subshell, substitution or backticks is still git; read-only g
 		"echo $(git remote add evil https://x/r.git)",
 		"echo $(git pu''sh origin HEAD:main)",
 		"echo `git push origin HEAD:main`",
+		"echo `git remote add evil https://x/r.git`",
 		"echo $(git push origin feat/x)",
 		"{ git remote add evil https://x/r.git; }",
 		"(git push origin feat/x)",
@@ -571,7 +580,6 @@ test("git inside a subshell, substitution or backticks is still git; read-only g
 	for (const cmd of ["(git push --force origin main)", "echo $(git push -f)", "echo `git push origin +main`", "{ git push --mirror; }"]) {
 		assert.equal(action(cmd), "block", cmd);
 	}
-	for (const cmd of ["echo `git remote add evil https://x/r.git`"]) assert.equal(action(cmd), "confirm", cmd);
 	for (const cmd of ["(git status)", "(git log --oneline)", "cd $(git rev-parse --show-toplevel)", "echo $(git log -1 --format=%H)", "echo `git describe`", "echo $(git status --short)"]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}

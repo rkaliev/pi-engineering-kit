@@ -128,7 +128,9 @@ test("a stable latest tag keeps a stable-numbered release under next out", () =>
 test("a pre-release latest tag caps nothing, and exactMajor wins over the cap", () => {
 	const rc = { time: { "7.10.0": old, "8.0.0-rc.1": old }, "dist-tags": { latest: "8.0.0-rc.1" } };
 	assert.equal(pickRelease(rc, now, 1440), "7.10.0");
-	assert.equal(pickRelease({ time: { "7.10.0": old }, "dist-tags": {} }, now, 1440), "7.10.0", "no latest tag caps nothing");
+	const higher = { time: { "7.10.0": old, "9.0.0": old }, "dist-tags": { latest: "8.0.0-rc.1" } };
+	assert.equal(pickRelease(higher, now, 1440), "9.0.0", "a pre-release latest is no cap on stable releases above it");
+	assert.equal(pickRelease({ time: { "7.10.0": old, "8.1.0": old }, "dist-tags": {} }, now, 1440), "8.1.0", "no latest tag caps nothing");
 	const node = { time: { "24.9.0": old, "26.6.3": old }, "dist-tags": { latest: "26.6.3" } };
 	assert.equal(pickRelease(node, now, 1440, 24), "24.9.0");
 });
