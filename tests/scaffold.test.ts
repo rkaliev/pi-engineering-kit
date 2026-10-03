@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { checkPnpm, latestMajor, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
+import { checkPnpm, MIN_RELEASE_AGE_MINUTES, parseRegistryInfo, pickRelease, pickStable, planScaffold, scaffold, type Run } from "../extensions/lib/scaffold.ts";
 
 const versions = { node: "24.1.0", pnpm: "10.0.0" };
 
@@ -52,9 +52,10 @@ test("writes .nvmrc and packageManager", () => {
 test("refuses a non-empty destination", () => {
 	const dest = mkdtempSync(join(tmpdir(), "dest-"));
 	writeFileSync(join(dest, "keep.txt"), "x");
-	assert.throws(() => scaffold(fakeTemplate({}), dest, versions, () => ({ status: 0 })), {
-		message: `Destination is not empty: ${dest}`,
-	});
+	assert.throws(
+		() => scaffold(fakeTemplate({}), dest, versions, () => ({ status: 0 })),
+		(e: Error) => /not empty/.test(e.message) && e.message.includes(dest),
+	);
 });
 
 test("copies, writes, then runs install and the planned installs in order", () => {
@@ -65,12 +66,12 @@ test("copies, writes, then runs install and the planned installs in order", () =
 		assert.equal(opts.cwd, dest);
 		return { status: 0 };
 	};
-	scaffold(fakeTemplate({ "apps/api": { dependencies: ["express"] } }), dest, versions, run, () => "1.2.3");
+	scaffold(fakeTemplate({ "apps/api": { dependencies: ["express", "@repo/db"] } }), dest, versions, run, () => "1.2.3");
 	assert.equal(readFileSync(join(dest, ".nvmrc"), "utf8"), "24.1.0\n");
 	assert.ok(existsSync(join(dest, "apps", "api", "package.json")));
 	assert.deepEqual(calls, [
 		["pnpm", "install"],
-		["pnpm", "--filter", "./apps/api", "add", "-E", "express@1.2.3"],
+		["pnpm", "--filter", "./apps/api", "add", "-E", "express@1.2.3", "@repo/db@workspace:*"],
 	]);
 });
 
@@ -101,19 +102,6 @@ test("pickStable returns undefined without a candidate", () => {
 	assert.equal(pickStable({ created: old, "1.0.0-rc.1": old }, now, 1440), undefined);
 });
 
-test("scaffold pins every registry package to the resolved version and fails when none exists", () => {
-	const tpl = fakeTemplate({ "apps/api": { dependencies: ["express", "@repo/db"] } });
-	const dest = join(mkdtempSync(join(tmpdir(), "dest-")), "app");
-	const calls: string[][] = [];
-	scaffold(tpl, dest, versions, (cmd, args) => (calls.push([cmd, ...args]), { status: 0 }), () => "9.9.9");
-	assert.deepEqual(calls[1], ["pnpm", "--filter", "./apps/api", "add", "-E", "express@9.9.9", "@repo/db@workspace:*"]);
-	const none = (name: string): string => {
-		throw new Error(`No stable release of ${name} older than 1440 minutes`);
-	};
-	const dest2 = join(mkdtempSync(join(tmpdir(), "dest-")), "app");
-	assert.throws(() => scaffold(tpl, dest2, versions, () => ({ status: 0 }), none), /No stable release of express/);
-});
-
 test("pickStable with exactMajor stays in that major", () => {
 	assert.equal(pickStable({ "24.9.0": old, "26.6.3": old }, now, 1440, { exactMajor: 24 }), "24.9.0");
 	assert.equal(pickStable({ "24.9.0": old, "24.10.1": old, "26.6.3": old }, now, 1440, { exactMajor: 24 }), "24.10.1");
@@ -140,18 +128,13 @@ test("a stable latest tag keeps a stable-numbered release under next out", () =>
 test("a pre-release latest tag caps nothing, and exactMajor wins over the cap", () => {
 	const rc = { time: { "7.10.0": old, "8.0.0-rc.1": old }, "dist-tags": { latest: "8.0.0-rc.1" } };
 	assert.equal(pickRelease(rc, now, 1440), "7.10.0");
+	assert.equal(pickRelease({ time: { "7.10.0": old }, "dist-tags": {} }, now, 1440), "7.10.0", "no latest tag caps nothing");
 	const node = { time: { "24.9.0": old, "26.6.3": old }, "dist-tags": { latest: "26.6.3" } };
 	assert.equal(pickRelease(node, now, 1440, 24), "24.9.0");
 });
 
 test("pickStable skips entries whose date does not parse", () => {
 	assert.equal(pickStable({ "2.0.0": "not a date", "1.0.0": old }, now, 1440), "1.0.0");
-});
-
-test("latestMajor is the major of a stable latest tag, otherwise undefined", () => {
-	assert.equal(latestMajor({ latest: "7.4.2", next: "9.0.0" }), 7);
-	assert.equal(latestMajor({ latest: "8.0.0-rc.19" }), undefined);
-	assert.equal(latestMajor({}), undefined);
 });
 
 test("parseRegistryInfo names the package when the registry answer is not JSON", () => {

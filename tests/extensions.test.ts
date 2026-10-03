@@ -12,6 +12,11 @@ import models from "../extensions/models.ts";
 import verify from "../extensions/verify.ts";
 import { verifyState } from "../extensions/lib/verify-state.ts";
 
+// Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
+process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
+process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
 type Handler = (event: any, ctx: any) => unknown;
 
 function fakePi(execCodes: Record<string, number> = {}) {

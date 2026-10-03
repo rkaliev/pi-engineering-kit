@@ -132,19 +132,32 @@ test("then from turbo.json tasks, as one turbo run", () => {
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": JSON.stringify({ tasks: { build: {} } }), "package.json": scripts({ test: "vitest run" }) })), ["npm test"]);
 });
 
-test("turbo detection edge cases", () => {
-	const tasks = (t: Record<string, unknown>) => JSON.stringify({ tasks: t });
-	const s = scripts({ test: "vitest run" });
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ test: {} }), "bun.lock": "" })), ["bunx --no-install turbo run test"]);
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "type-check": {}, test: {} }), "package-lock.json": "{}" })), ["npx --no turbo run type-check test"]);
-	assert.deepEqual(detectVerifyCommands(project({ "AGENTS.md": "## Commands\n- `make check`\n", "turbo.json": tasks({ test: {} }) })), ["make check"]);
-	assert.deepEqual(detectVerifyCommands(project({ "pnpm-workspace.yaml": "", "package.json": s })), ["pnpm test"], "without turbo.json the scripts apply");
-	// turbo.json and turbo.jsonc may carry comments
+const turboTasks = (t: Record<string, unknown>) => JSON.stringify({ tasks: t });
+
+test("turbo with bun runs through bunx --no-install", () => {
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turboTasks({ test: {} }), "bun.lock": "" })), ["bunx --no-install turbo run test"]);
+});
+
+test("turbo task names with a dash are kept", () => {
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turboTasks({ "type-check": {}, test: {} }), "package-lock.json": "{}" })), ["npx --no turbo run type-check test"]);
+});
+
+test("a documented verify command wins over turbo.json", () => {
+	assert.deepEqual(detectVerifyCommands(project({ "CLAUDE.md": "## Commands\n- `make check`\n", "turbo.json": turboTasks({ test: {} }) })), ["make check"]);
+});
+
+test("pnpm-workspace.yaml alone selects pnpm; without turbo.json the scripts apply", () => {
+	assert.deepEqual(detectVerifyCommands(project({ "pnpm-workspace.yaml": "", "package.json": scripts({ test: "vitest run" }) })), ["pnpm test"]);
+});
+
+test("turbo.json and turbo.jsonc may carry comments", () => {
 	const commented = '{\n// a comment\n"url": "http://x", /* block */ "tasks": {"lint": {}}\n}';
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": commented, "package-lock.json": "{}" })), ["npx --no turbo run lint"]);
 	assert.deepEqual(detectVerifyCommands(project({ "turbo.jsonc": commented, "package-lock.json": "{}" })), ["npx --no turbo run lint"]);
-	// package-scoped task keys
-	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": tasks({ "web#test": {}, "//#lint": {} }), "package-lock.json": "{}" })), ["npx --no turbo run lint test"]);
+});
+
+test("package-scoped turbo task keys count by their task name", () => {
+	assert.deepEqual(detectVerifyCommands(project({ "turbo.json": turboTasks({ "web#test": {}, "//#lint": {} }), "package-lock.json": "{}" })), ["npx --no turbo run lint test"]);
 });
 
 test("CI coverage ignores the no-download flags kit-init adds to npx and bunx", async () => {
