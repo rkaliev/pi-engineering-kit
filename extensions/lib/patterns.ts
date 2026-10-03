@@ -380,10 +380,8 @@ function parseGit(raw: string[]): { at: number; v: number; sub: string | undefin
 	const at = tokens.findIndex(gitLike);
 	if (at === -1) return undefined;
 	let issue: GuardDecision | undefined;
-	// Git inside a substitution or backticks is run by a shell the guard does not follow.
-	if (/^(\$\(|`)/.test(raw[at]!)) issue = { action: "confirm", reason: "This runs git inside a substitution, so the guard can't see the call." };
 	// A second git-like token (`script -q git-out git …`) or input feeding git's arguments hides the real call.
-	if (tokens.slice(at + 1).some(gitLike)) issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+	if (tokens.slice(at + 1).some(gitLike)) issue = { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
 	if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
 	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
 	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
@@ -407,7 +405,7 @@ function parseGit(raw: string[]): { at: number; v: number; sub: string | undefin
 		issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
 	}
 	// A substitution or variable in the subcommand or before it hides what git runs.
-	if (raw.slice(at + 1, v + 1).some((t) => /[$`()]/.test(t.replace(/[)};]+$/, "")))) {
+	if (raw.slice(at + 1, v + 1).some((t) => /[$`()]/.test(t.replace(/[)`};]+$/, "")))) {
 		issue ??= { action: "confirm", reason: "The git subcommand is not a literal word, so the guard can't see it." };
 	}
 	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };

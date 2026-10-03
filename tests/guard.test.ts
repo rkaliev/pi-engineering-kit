@@ -518,3 +518,12 @@ test("send-pack and http-push are pushes", () => {
 		assert.equal(action(cmd), "block", cmd);
 	}
 });
+
+test("read-only git in a substitution stays quiet; the same wrapper around a push or a remote edit asks", () => {
+	for (const cmd of ["cd $(git rev-parse --show-toplevel)", "echo $(git log -1 --format=%H)", "x=`git describe`", "echo `git describe`", "echo $(git status --short)"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+	for (const cmd of ["echo $(git remote add evil https://x/r.git)", "echo $(git pu''sh origin HEAD:main)", "echo `git push origin HEAD:main`", "echo `git remote add evil https://x/r.git`"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+});
