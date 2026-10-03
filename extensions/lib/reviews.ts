@@ -124,21 +124,61 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 export function repoFor(dir: string, rev?: string): string | { error: string } {
 	const top = git(dir, ["rev-parse", "--show-toplevel"]);
 	if (top) return top;
-	if (rev === undefined) return { error: `${dir} is not inside a git repository` };
-	const found: string[] = [];
+	const hint = ". Run it from inside the repository, e.g. `cd <repo> && …`";
+	if (rev === undefined) return { error: `${dir} is not inside a git repository${hint}` };
+	const found = childRepos(dir).filter((c) => git(c.top, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]));
+	if (found.length > 1) return { error: `${rev} is a commit in several repositories here: ${found.map((c) => c.name).join(", ")}${hint}` };
+	if (found.length === 0) return { error: `Reviewed HEAD ${rev} is not a commit in this folder or its repositories${hint}` };
+	return found[0]!.top;
+}
+
+/** The direct child folders (symlinks followed) that are repositories; worktrees and links of one repository count once. */
+function childRepos(dir: string): Array<{ name: string; top: string }> {
+	const byCommon = new Map<string, { name: string; top: string }>();
+	let names: string[] = [];
 	try {
-		for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-			const child = join(dir, entry.name);
-			if (!entry.isDirectory() || !existsSync(join(child, ".git"))) continue;
-			const childTop = git(child, ["rev-parse", "--show-toplevel"]);
-			if (childTop && git(childTop, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`])) found.push(entry.name);
-		}
+		names = readdirSync(dir).sort();
 	} catch {
 		// unreadable folder: no repositories found
 	}
-	if (found.length > 1) return { error: `${rev} is a commit in several repositories here: ${found.join(", ")}` };
-	if (found.length === 0) return { error: `Reviewed HEAD ${rev} is not a commit in this folder or its repositories` };
-	return git(join(dir, found[0]!), ["rev-parse", "--show-toplevel"])!;
+	for (const name of names) {
+		try {
+			const child = join(dir, name);
+			if (!statSync(child).isDirectory() || !existsSync(join(child, ".git"))) continue;
+			const top = git(child, ["rev-parse", "--show-toplevel"]);
+			const common = git(child, ["rev-parse", "--git-common-dir"]);
+			if (!top || !common) continue;
+			const key = safeRealpath(resolve(child, common));
+			if (!byCommon.has(key)) byCommon.set(key, { name, top });
+		} catch {
+			// raced or unreadable: skip
+		}
+	}
+	return [...byCommon.values()];
+}
+
+/**
+ * A reviewer run that produced no usable verdict counts as Inconclusive for the commit it named. When that commit
+ * and `HEAD` can't be resolved (a plain folder with several repositories), every commit already recorded under this
+ * prompt, and every nested repository's HEAD, is charged instead, so no parallel reviewer's Yes can stand alone.
+ */
+export function recordFailure(projectDir: string, named: string | undefined, ids: { promptId: string; run: string }, root?: string): void {
+	if (named !== undefined && typeof recordVerdict(projectDir, named, "Inconclusive", ids, root) !== "string") return;
+	if (typeof recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root) !== "string") return;
+	if (git(projectDir, ["rev-parse", "--show-toplevel"])) return;
+	for (const { top } of childRepos(projectDir)) {
+		const dir = reviewsDir(top, root);
+		let recorded: string[] = [];
+		try {
+			if (ownDir(dir)) recorded = readdirSync(dir).filter((n) => n.endsWith(".json")).flatMap((n) => {
+				const r = readRecord(join(dir, n));
+				return r && r.promptId === ids.promptId ? [r.sha] : [];
+			});
+		} catch {
+			// nothing recorded there
+		}
+		for (const sha of new Set([...recorded, "HEAD"])) recordVerdict(top, sha, "Inconclusive", ids, root);
+	}
 }
 
 /** Recorded rounds per reviewed SHA, newest first: the latest prompt's reviews combined to the worst verdict. */
@@ -215,11 +255,13 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 	}
 	writeJson(projectDir, PENDING_FILE, pending, root);
 	if ((!ok && noted.last !== false) || typeof noted.branch !== "string") return;
-	// Keyed by the checkout the PR was opened from, where the gate reads it (see checkReview).
-	const key = typeof noted.dir === "string" ? noted.dir : projectDir;
-	const prs = readPrs(key, root);
-	prs[noted.branch] = Date.now();
-	writePrs(key, prs, root);
+	// Under the checkout the PR was opened from and under the session's folder: a push of that branch from another
+	// clone of the same remote is a landing too (the gate reads both, see checkReview).
+	for (const key of new Set([typeof noted.dir === "string" ? noted.dir : projectDir, projectDir])) {
+		const prs = readPrs(key, root);
+		prs[noted.branch] = Date.now();
+		writePrs(key, prs, root);
+	}
 }
 
 /**
@@ -339,7 +381,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		}
 		const base = baseBranch(where);
 		if (!base) continue;
-		const refs = targets(l, where, base, l.kind === "push" ? openPrBranches(where, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root) : []);
+		const refs = targets(l, where, base, l.kind === "push" ? [...new Set([...openPrBranches(where, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root), ...openPrBranches(projectDir, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root)])] : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -745,7 +787,7 @@ function safe(id: string): string {
 
 function safeRealpath(path: string): string {
 	try {
-		return realpathSync(path);
+		return realpathSync.native(path);
 	} catch {
 		return path;
 	}

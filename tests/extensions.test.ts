@@ -753,8 +753,8 @@ test("review gate: a SHA that is a commit in two nested repositories records not
 	const notified = ctx(folder);
 	await emit(main, notified);
 	assert.match(JSON.stringify(notified.notes), /several repositories here: a, b/);
-	assert.deepEqual(readReviews(a, reviewsRoot), []);
-	assert.deepEqual(readReviews(join(folder, "b"), reviewsRoot), []);
+	// No verdict is recorded; the failed run is charged as Inconclusive to the repositories' HEADs (never a pass).
+	for (const repo of [a, join(folder, "b")]) assert.ok(readReviews(repo, reviewsRoot).every((r) => r.verdict === "Inconclusive"));
 	await emit(head);
 	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
 	const log = (rev: string) => spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), rev], { cwd: folder, encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
@@ -764,4 +764,51 @@ test("review gate: a SHA that is a commit in two nested repositories records not
 	const ambiguous = log(main);
 	assert.equal(ambiguous.status, 1);
 	assert.match(ambiguous.stderr, /several repositories here: a, b/);
+});
+
+test("review gate: a worktree of a nested repository is the same repository, not an ambiguity", async () => {
+	const { folder, a, main, commit, run } = workspace();
+	const head = commit("a.ts");
+	run(a, "worktree", "add", "-q", "--detach", join(folder, "a-wt"), head);
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const c = ctx(folder);
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, c);
+	assert.deepEqual(c.notes, []);
+	assert.deepEqual(readReviews(a, reviewsRoot).map((r) => r.sha), [head]);
+});
+
+test("review gate: a PR branch opened from one clone also gates the push of that branch from another clone of the remote", async () => {
+	const { folder, main, commit, run } = workspace();
+	const head = commit("a.ts");
+	const b = join(folder, "b");
+	run(b, "config", "user.email", "t@example.com");
+	run(b, "config", "user.name", "t");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(folder));
+	assert.equal((await g.emit("tool_call", { toolName: "bash", toolCallId: "t1", input: { command: "cd a && gh pr create --fill" } }, ctx(folder)))?.block, undefined);
+	await g.emit("tool_result", { toolName: "bash", toolCallId: "t1", input: {}, content: [], isError: false }, ctx(folder));
+	run(b, "switch", "-qc", "feat/a");
+	writeFileSync(join(b, "other.ts"), "export const o = 1;\n");
+	run(b, "add", "-A");
+	run(b, "commit", "-qm", "feat: other");
+	const asking = ctx(folder);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "git -C b push origin feat/a" } }, asking))?.block, true);
+	assert.match(asking.asked.join("\n"), /Review gate/);
+});
+
+test("review gate: two reviewers of one prompt, one Yes on a's head and one failing without a HEAD line, leave a's head Inconclusive", async () => {
+	const { folder, main, commit } = workspace();
+	const head = commit("a.ts");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [
+		{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${head}\nReady to merge: Yes` },
+		{ agent: "reviewer", exitCode: 0, finalOutput: "couldn't read the range" },
+	] }, isError: false }, ctx(folder));
+	const asking = ctx(folder);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "cd a && gh pr create --fill" } }, asking))?.block, true);
+	assert.match(asking.asked.join("\n"), /Inconclusive/);
 });
