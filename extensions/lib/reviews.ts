@@ -98,51 +98,38 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
-	// A plain folder with several repositories holding the commit: the same SHA is the same content, so the verdict
-	// goes to each of them (coverage is checked per repository). BASE must resolve in the repository too.
-	const repos = reposFor(projectDir, rev);
-	if (repos.length === 0) return `Reviewed HEAD ${rev} is a commit in none of this folder's repositories`;
-	let problem: string | undefined;
-	let first: ReviewRecord | undefined;
-	for (const repo of repos) {
-		const sha = git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
-		if (!sha) {
-			problem ??= `Reviewed HEAD ${rev} is not a commit in this repository`;
-			continue;
-		}
-		const base = extra.base === undefined ? undefined : git(repo, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
-		if (extra.base !== undefined && !base) {
-			problem ??= `Reviewed BASE ${extra.base} is not a commit in this repository`;
-			continue;
-		}
-		const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
-		const dir = reviewsDir(repo, root);
-		try {
-			mkdirSync(dir, { recursive: true, mode: 0o700 });
-			if (!ownDir(dir)) {
-				problem ??= `${dir} belongs to another user`;
-				continue;
-			}
-			writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
-			prune(dir);
-			first ??= record;
-		} catch (err) {
-			problem ??= `could not write ${dir}: ${(err as Error).message}`;
-		}
+	const repo = repoFor(projectDir, rev);
+	if (typeof repo !== "string") return repo.error;
+	const sha = git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
+	const base = extra.base === undefined ? undefined : git(repo, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
+	if (extra.base !== undefined && !base) return `Reviewed BASE ${extra.base} is not a commit in this repository`;
+	const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
+	const dir = reviewsDir(repo, root);
+	try {
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		if (!ownDir(dir)) return `${dir} belongs to another user`;
+		writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
+		prune(dir);
+	} catch (err) {
+		return `could not write ${dir}: ${(err as Error).message}`;
 	}
-	return first ?? problem ?? "no verdict recorded";
+	return record;
 }
 
 /**
- * The repositories a commit belongs to: `dir`'s own repository (its top level), or, when `dir` is a plain folder,
- * every direct child repository that holds `rev` as a commit. Empty when none does.
+ * The repository a commit or command belongs to: `dir`'s own repository (its top level), or, when `dir` is a plain
+ * folder, the one direct child repository that holds `rev` as a commit. Several is ambiguous, none is an error.
  */
-export function reposFor(dir: string, rev: string): string[] {
+export function repoFor(dir: string, rev?: string): string | { error: string } {
 	const top = git(dir, ["rev-parse", "--show-toplevel"]);
-	if (top) return [top];
-	return childRepos(dir)
-		.filter((c) => git(c.top, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]))
-		.map((c) => c.top);
+	if (top) return top;
+	const hint = ". Run it from inside the repository, e.g. `cd <repo> && …`";
+	if (rev === undefined) return { error: `${dir} is not inside a git repository${hint}` };
+	const found = childRepos(dir).filter((c) => git(c.top, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]));
+	if (found.length > 1) return { error: `${rev} is a commit in several repositories here: ${found.map((c) => c.name).join(", ")}${hint}` };
+	if (found.length === 0) return { error: `Reviewed HEAD ${rev} is not a commit in this folder or its repositories${hint}` };
+	return found[0]!.top;
 }
 
 /** The direct child folders (symlinks followed) that are repositories; worktrees and links of one repository count once. */
@@ -171,28 +158,22 @@ function childRepos(dir: string): Array<{ name: string; top: string }> {
 }
 
 /**
- * A reviewer run that produced no usable verdict counts as Inconclusive for the commit it named, so a parallel
- * reviewer's Yes on that commit can't stand alone. In a repository, a commit that isn't one falls back to HEAD. In a
- * plain folder with several repositories nothing says which one it reviewed: every nested repository's HEAD and every
- * commit already recorded under this prompt is charged too.
+ * A reviewer run that produced no usable verdict counts as Inconclusive for the commit it named. When that commit
+ * and `HEAD` can't be resolved (a plain folder with several repositories), every commit already recorded under this
+ * prompt, and every nested repository's HEAD, is charged instead, so no parallel reviewer's Yes can stand alone.
  */
 export function recordFailure(projectDir: string, named: string | undefined, ids: { promptId: string; run: string }, root?: string): void {
-	const inRepo = git(projectDir, ["rev-parse", "--show-toplevel"]) !== undefined;
-	const charged = named !== undefined && typeof recordVerdict(projectDir, named, "Inconclusive", ids, root) !== "string";
-	if (inRepo) {
-		if (!charged) recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root);
-		return;
-	}
+	if (named !== undefined && typeof recordVerdict(projectDir, named, "Inconclusive", ids, root) !== "string") return;
+	if (typeof recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root) !== "string") return;
+	if (git(projectDir, ["rev-parse", "--show-toplevel"])) return;
 	for (const { top } of childRepos(projectDir)) {
 		const dir = reviewsDir(top, root);
 		let recorded: string[] = [];
 		try {
-			if (ownDir(dir)) {
-				recorded = readdirSync(dir).filter((n) => n.endsWith(".json")).flatMap((n) => {
-					const r = readRecord(join(dir, n));
-					return r && r.promptId === ids.promptId ? [r.sha] : [];
-				});
-			}
+			if (ownDir(dir)) recorded = readdirSync(dir).filter((n) => n.endsWith(".json")).flatMap((n) => {
+				const r = readRecord(join(dir, n));
+				return r && r.promptId === ids.promptId ? [r.sha] : [];
+			});
 		} catch {
 			// nothing recorded there
 		}
@@ -276,10 +257,9 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 	if ((!ok && noted.last !== false) || typeof noted.branch !== "string") return;
 	// Under the checkout the PR was opened from and under the session's folder: a push of that branch from another
 	// clone of the same remote is a landing too (the gate reads both, see checkReview).
-	const from = typeof noted.dir === "string" ? (git(noted.dir, ["rev-parse", "--show-toplevel"]) ?? noted.dir) : undefined;
-	for (const key of new Set([from ?? projectDir, projectDir])) {
+	for (const key of new Set([typeof noted.dir === "string" ? noted.dir : projectDir, projectDir])) {
 		const prs = readPrs(key, root);
-		prs[noted.branch] = { at: Date.now(), dir: from };
+		prs[noted.branch] = Date.now();
 		writePrs(key, prs, root);
 	}
 }
@@ -291,11 +271,9 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 export function openPrBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string, now = Date.now()): string[] {
 	const prs = readPrs(projectDir, root);
 	let changed = false;
-	for (const [branch, { at, dir }] of Object.entries(prs)) {
-		// An entry is judged by the refs of the checkout it was registered from: another clone's same-named branch says nothing about it.
-		const from = dir !== undefined && existsSync(dir) ? dir : where;
-		const tip = git(from, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]) ?? git(from, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
-		if (now - at > MAX_AGE_MS || (tip !== undefined && isAncestor(from, tip, anchor))) {
+	for (const [branch, at] of Object.entries(prs)) {
+		const tip = git(where, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]) ?? git(where, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+		if (now - at > MAX_AGE_MS || (tip !== undefined && isAncestor(where, tip, anchor))) {
 			delete prs[branch];
 			changed = true;
 		}
@@ -304,20 +282,12 @@ export function openPrBranches(projectDir: string, where: string, remote: string
 	return Object.keys(prs);
 }
 
-/** `{ "<branch>": { at, dir } }`; an entry from before checkouts were recorded is a bare time and has no `dir`. */
-function readPrs(projectDir: string, root?: string): Record<string, { at: number; dir?: string }> {
-	const out: Record<string, { at: number; dir?: string }> = {};
-	for (const [branch, v] of Object.entries(readJson(projectDir, PRS_FILE, root))) {
-		if (typeof v === "number") out[branch] = { at: v };
-		else if (v && typeof v === "object" && typeof (v as { at?: unknown }).at === "number") {
-			const dir = (v as { dir?: unknown }).dir;
-			out[branch] = { at: (v as { at: number }).at, dir: typeof dir === "string" ? dir : undefined };
-		}
-	}
-	return out;
+function readPrs(projectDir: string, root?: string): Record<string, number> {
+	const raw = readJson(projectDir, PRS_FILE, root);
+	return Object.fromEntries(Object.entries(raw).filter((e): e is [string, number] => typeof e[1] === "number"));
 }
 
-function writePrs(projectDir: string, prs: Record<string, { at: number; dir?: string }>, root?: string): void {
+function writePrs(projectDir: string, prs: Record<string, number>, root?: string): void {
 	writeJson(projectDir, PRS_FILE, prs, root);
 }
 
