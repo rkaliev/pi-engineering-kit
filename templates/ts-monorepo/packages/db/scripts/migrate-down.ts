@@ -2,6 +2,8 @@
 // marks the history row rolled back. Prisma has no down migrations, and `migrate resolve --rolled-back`
 // only accepts failed ones, so the row is updated here; `migrate deploy` re-applies a rolled-back migration.
 // down.sql must not contain COMMIT or statements that cannot run inside a transaction.
+// The session has a 10 s statement timeout: a down.sql that rewrites a large table starts with its own
+// `SET LOCAL statement_timeout = …`.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
