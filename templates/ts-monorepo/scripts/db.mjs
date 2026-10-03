@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const commands = { up: ["up", "-d", "--wait", "postgres"], down: ["down"] };
 const action = process.argv[2];
-if (!(action in commands) || process.argv.length > 3) {
+if (!Object.hasOwn(commands, action) || process.argv.length > 3) {
   console.error("Usage: node scripts/db.mjs up|down");
   process.exit(2);
 }
