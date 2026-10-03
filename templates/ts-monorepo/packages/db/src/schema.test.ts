@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "vitest";
 import { missingMigrations, shippedMigrations } from "./schema.ts";
 import { SERVER_ONLY_MARKER } from "./marker.ts";
@@ -14,6 +14,14 @@ test("missing migrations are listed in the required order", () => {
 
 test("the shipped migrations are the folders of prisma/migrations", () => {
   assert.ok(shippedMigrations().includes("00000000000000_init"));
+});
+
+test("every shipped migration has a non-empty down.sql", () => {
+  for (const name of shippedMigrations()) {
+    const down = new URL(`../prisma/migrations/${name}/down.sql`, import.meta.url);
+    assert.ok(existsSync(down), `${name} has no down.sql`);
+    assert.ok(readFileSync(down, "utf8").trim().length > 0, `${name}/down.sql is empty`);
+  }
 });
 
 test("the web bundle check looks for the same marker", () => {

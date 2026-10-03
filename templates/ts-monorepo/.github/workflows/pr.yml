@@ -25,6 +25,7 @@ jobs:
           path: .turbo/cache
           key: turbo-${{ github.sha }}
           restore-keys: turbo-
+      # When one job gets slow, see the Monorepo section of ci-templates (per-package matrix).
       - name: Affected packages only
         if: github.event_name == 'pull_request'
         run: pnpm turbo run typecheck lint test build --affected

@@ -102,3 +102,13 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3100/readyz)" = 200
           kill -TERM "$pid"
           wait "$pid"
+      # Reversible migrations: revert the latest one, the schema must be empty, deploying again must work.
+      - name: Migration down and up again
+        working-directory: ${{ runner.temp }}/app
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app
+        run: |
+          latest=$(ls packages/db/prisma/migrations | grep -E '^[0-9]{14}_' | sort | tail -n 1)
+          pnpm --filter @repo/db migrate:down "$latest"
+          pnpm --filter @repo/db exec prisma migrate diff --from-config-datasource --to-empty --exit-code
+          pnpm --filter @repo/db exec prisma migrate deploy
