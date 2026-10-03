@@ -402,7 +402,7 @@ test("an unknown git option before the subcommand asks; known ones do not", () =
 });
 
 test("rewriting refs and editing config by hand ask", () => {
-	for (const cmd of ["git update-ref --stdin", "git symbolic-ref HEAD refs/heads/x", "git symbolic-ref HEAD", "git config -e", "git config --edit", "git config --global --edit"]) {
+	for (const cmd of ["git update-ref --stdin", "git symbolic-ref HEAD refs/heads/x", "git config -e", "git config --edit", "git config --global --edit"]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	assert.equal(action("git update-ref refs/heads/feat/x HEAD"), "allow");
@@ -534,4 +534,94 @@ test("an assignment before a substitution does not hide git", () => {
 	}
 	for (const cmd of ["x=`git push --force`", "x=$(git push -f origin main)"]) assert.equal(action(cmd), "block", cmd);
 	for (const cmd of ["x=`git describe`", "x=$(git rev-parse HEAD)", "FOO=bar make test"]) assert.equal(action(cmd), "allow", cmd);
+});
+
+test("everyday git and words that merely contain git stay quiet", () => {
+	for (const cmd of [
+		"which git",
+		"command -v git",
+		"brew install git",
+		"echo git",
+		"grep -rn git src/",
+		"rg git .",
+		"git add skills/git-workflow",
+		"git switch -c fix/git-hooks",
+		"git diff $(git merge-base origin/main HEAD)",
+		"git log $(git describe --tags --abbrev=0)..HEAD",
+		"git --version",
+		"git --help",
+		"git -h",
+		"git version",
+		"ls /usr/lib/git-core/",
+		"cat docs/git-workflow.md",
+	]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+	const repo = pushRepo();
+	sh(repo, "switch", "-q", "-C", "fix/git-hooks");
+	assert.equal(ask("git push origin fix/git-hooks", repo), "allow", "a branch with git in its name");
+});
+
+test("bypasses through wrappers keep asking, now only in command position", () => {
+	for (const cmd of [
+		"strace -o git git remote add evil https://x/r.git",
+		"script -q git-out git remote add evil https://x/r.git",
+		"xargs git remote",
+		"sudo git remote add evil https://x/r.git",
+		"env X=1 git remote add evil https://x/r.git",
+		"timeout 5 git remote add evil https://x/r.git",
+		"nohup git remote add evil https://x/r.git",
+		"X=1 git remote add evil https://x/r.git",
+		"if git remote add evil https://x/r.git; then echo ok; fi",
+		"/usr/bin/git remote add evil https://x/r.git",
+		"./git remote add evil https://x/r.git",
+		"git diff $(git remote add evil https://x/r.git)",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+});
+
+test("-c asks only for keys that move where git pushes or what it runs", () => {
+	for (const cmd of ["git -c core.quotepath=off status", "git -c color.ui=always diff", "git -c user.email=a@b commit -m x", "git -cuser.name=x status", "git -c core.editor=vim log"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+	for (const cmd of [
+		"git -c alias.x=push x",
+		"git -c core.sshCommand=evil fetch",
+		"git -c core.hooksPath=/x commit -m x",
+		"git -c core.fsmonitor=x status",
+		"git -c core.gitProxy=x fetch",
+		"git -c credential.helper=x fetch",
+		"git -c protocol.ext.allow=always fetch",
+		"git -c http.proxy=x fetch",
+		"git -c uploadpack.packObjectsHook=x fetch",
+		"git -c receivepack.hook=x status",
+		"git -c remote.origin.url=x fetch",
+		"git -c url.x.insteadOf=y fetch",
+		"git -c includeIf.x.path=y status",
+		"git -c ALIAS.x=y status",
+		"git --config-env=core.quotepath=VAR status",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	const repo = pushRepo();
+	assert.equal(ask("git -c user.name=x push", repo), "confirm", "-c never pushes silently");
+});
+
+test("reading symbolic refs and config is quiet; changing them is not", () => {
+	for (const cmd of ["git symbolic-ref HEAD", "git symbolic-ref --short HEAD", "git symbolic-ref -q HEAD", "git symbolic-ref --quiet --short HEAD", "git config get user.name", "git config list", "git config get remote.origin.url", "git config --get remote.origin.url"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+	for (const cmd of ["git symbolic-ref HEAD refs/heads/x", "git symbolic-ref -d HEAD", "git symbolic-ref --delete HEAD", "git symbolic-ref -m why HEAD refs/heads/x", "git symbolic-ref", "git symbolic-ref --short", "git config set remote.origin.url x", "git config unset remote.origin.url", "git config remote.origin.url x"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+});
+
+test("one trailing 2>&1 does not stop the own-branch push from passing; other redirects do", () => {
+	const repo = pushRepo();
+	assert.equal(ask("git push -u origin feat/x 2>&1", repo), "allow");
+	assert.equal(ask("git push -u origin feat/x 2>&1 2>&1", repo), "confirm");
+	assert.equal(ask("git push -u origin feat/x > out", repo), "confirm");
+	assert.equal(ask("git push -u origin feat/x >/dev/null 2>&1", repo), "confirm");
+	assert.equal(ask("git push -u origin feat/x 2>&1 | tail", repo), "confirm");
 });
