@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
@@ -97,17 +98,34 @@ test("the Postgres version lives in .postgres-version at scaffold, and the templ
 	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
 	assert.match(pkg.scripts["db:up"], /^node scripts\/db\.mjs up$/);
 	assert.match(pkg.scripts["db:down"], /^node scripts\/db\.mjs down$/);
-	const script = readFileSync(join(template, "scripts", "db.mjs"), "utf8");
-	assert.match(script, /\.postgres-version/, "reads .postgres-version");
-	assert.match(script, /POSTGRES_MAJOR/, "sets POSTGRES_MAJOR");
-	assert.match(script, /"docker"/);
-	assert.match(script, /"compose"/);
-	assert.match(script, /up: \[[^\]]*"up"[^\]]*"--wait"/, "up runs docker compose up with --wait");
-	assert.match(script, /down: \[[^\]]*"down"/);
-	assert.doesNotMatch(script, /shell:\s*true/, "no shell");
 	assert.match(readFileSync(join(template, "docker-compose.yml"), "utf8"), /pg_isready -h 127\.0\.0\.1 -U postgres -d app/, "TCP healthcheck");
 	assert.doesNotMatch(readFileSync(join(template, ".env.example"), "utf8"), /POSTGRES_MAJOR/);
 	assert.match(readFileSync(join(template, "docker-compose.yml"), "utf8"), /\$\{POSTGRES_MAJOR:\?[^}]*\.postgres-version[^}]*pnpm db:up[^}]*\}/);
+});
+
+test("scripts/db.mjs runs docker compose with POSTGRES_MAJOR from .postgres-version and rejects bad input", (t) => {
+	if (process.platform === "win32") return t.skip("platform: POSIX stub executable");
+	const dir = mkdtempSync(join(tmpdir(), "db-script-"));
+	mkdirSync(join(dir, "scripts"));
+	cpSync(join(template, "scripts", "db.mjs"), join(dir, "scripts", "db.mjs"));
+	mkdirSync(join(dir, "bin"));
+	const record = join(dir, "record.txt");
+	writeFileSync(join(dir, "bin", "docker"), `#!/bin/sh\nprintf '%s\\n' "$*" "POSTGRES_MAJOR=$POSTGRES_MAJOR" > "${record}"\n`);
+	chmodSync(join(dir, "bin", "docker"), 0o755);
+	const env = { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}` };
+	const run = (...args: string[]) => spawnSync(process.execPath, ["scripts/db.mjs", ...args], { cwd: dir, env, encoding: "utf8" });
+
+	writeFileSync(join(dir, ".postgres-version"), "18\n");
+	assert.equal(run("up").status, 0);
+	assert.equal(readFileSync(record, "utf8"), "compose up -d --wait postgres\nPOSTGRES_MAJOR=18\n");
+	assert.equal(run("down").status, 0);
+	assert.equal(readFileSync(record, "utf8"), "compose down\nPOSTGRES_MAJOR=18\n");
+
+	const toString = run("constructor");
+	assert.equal(toString.status, 2, "an inherited property name is not an action");
+	assert.match(toString.stderr, /Usage: node scripts\/db\.mjs up\|down/);
+	writeFileSync(join(dir, ".postgres-version"), "abc\n");
+	assert.equal(run("up").status, 1);
 });
 
 test("the template CI has a db job in the gate, with no literal Postgres image", () => {

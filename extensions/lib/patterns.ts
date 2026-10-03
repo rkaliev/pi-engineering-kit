@@ -539,7 +539,8 @@ function exportedWords(words: string[]): string[] {
 	while (i < words.length && (words[i] === "" || SHELL_KEYWORDS.has(words[i]!))) i++;
 	const head = words[i];
 	const args = words.slice(i + 1);
-	if (head === "export") return args;
+	// `export -n` un-exports: nothing it names is exported.
+	if (head === "export") return args.some((t) => /^-[a-zA-Z]*n/.test(t)) ? [] : args;
 	if ((head === "declare" || head === "typeset") && args.some((t) => /^-[a-zA-Z]*x/.test(t))) return args;
 	return [];
 }

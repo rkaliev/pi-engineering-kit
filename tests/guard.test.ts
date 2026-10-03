@@ -705,6 +705,7 @@ test("git environment variables that run a program or redirect git ask; harmless
 		"EDITOR=vim make",
 		"export EDITOR=vim",
 		"export EDITOR",
+		"export -n GIT_DIR",
 	]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}
