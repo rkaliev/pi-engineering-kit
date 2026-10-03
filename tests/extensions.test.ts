@@ -681,3 +681,87 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	assert.equal(log.status, 0, log.stderr);
 	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
 });
+
+/** A plain folder with two child repositories: `a` (origin, main, work branch `feat/a`) and `b`, a clone of `a` (shares main). */
+function workspace() {
+	const folder = mkdtempSync(join(tmpdir(), "guard-ws-"));
+	const run = (cwd: string, ...args: string[]) => {
+		const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+		assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
+		return r.stdout.trim();
+	};
+	const remote = mkdtempSync(join(tmpdir(), "guard-ws-remote-"));
+	run(remote, "init", "-q", "--bare", "-b", "main");
+	const a = join(folder, "a");
+	mkdirSync(a);
+	run(a, "init", "-q", "-b", "main");
+	run(a, "config", "user.email", "t@example.com");
+	run(a, "config", "user.name", "t");
+	writeFileSync(join(a, "README.md"), "x\n");
+	run(a, "add", "-A");
+	run(a, "commit", "-qm", "init");
+	run(a, "remote", "add", "origin", remote);
+	run(a, "push", "-q", "origin", "main");
+	run(a, "remote", "set-head", "origin", "main");
+	run(folder, "clone", "-q", "a", "b");
+	const main = run(a, "rev-parse", "main");
+	run(a, "switch", "-qc", "feat/a");
+	const commit = (name: string) => {
+		writeFileSync(join(a, name), "export const v = 1;\n");
+		run(a, "add", "-A");
+		run(a, "commit", "-qm", `feat: ${name}`);
+		return run(a, "rev-parse", "HEAD");
+	};
+	return { folder, a, run, main, commit };
+}
+
+test("review gate: from a plain folder a verdict is recorded under the nested repository and the gate reads it there", async () => {
+	const { folder, a, main, commit, run } = workspace();
+	const head = commit("a.ts");
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const bash = (command: string, toolCallId?: string) => g.emit("tool_call", { toolName: "bash", toolCallId, input: { command } }, ctx(folder));
+	const review = (sha: string) => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${sha}\nReady to merge: Yes` }] }, isError: false }, ctx(folder));
+
+	const asking = ctx(folder);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "cd a && gh pr create --fill" } }, asking))?.block, true, "no verdict yet");
+	assert.match(asking.asked[0]!, /Review gate: no reviewer verdict/);
+	await review(head);
+	assert.deepEqual(readReviews(a, reviewsRoot).map((r) => r.sha), [head], "recorded under a's key");
+	assert.deepEqual(readReviews(folder, reviewsRoot), [], "nothing under the folder's key");
+	assert.equal((await bash("cd a && gh pr create --fill"))?.block, undefined, "cd into the repository: covered");
+
+	assert.equal((await bash("cd a && gh pr create --fill", "t1"))?.block, undefined);
+	await g.emit("tool_result", { toolName: "bash", toolCallId: "t1", input: {}, content: [], isError: false }, ctx(folder));
+	assert.equal((await bash("git -C a push origin feat/a"))?.block, undefined, "reviewed head of the PR branch");
+	commit("more.ts");
+	const stale = ctx(folder);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "git -C a push origin feat/a" } }, stale))?.block, true, "a new commit after the review: asked, declined");
+	assert.match(stale.asked[0]!, /Review gate/);
+	await review(run(a, "rev-parse", "HEAD"));
+	assert.equal((await bash("git -C a push origin feat/a"))?.block, undefined, "re-reviewed");
+});
+
+test("review gate: a SHA that is a commit in two nested repositories records nothing; review-log from the folder prints a record", async () => {
+	const { folder, a, main, commit } = workspace();
+	const head = commit("a.ts");
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const emit = (sha: string, ui = ctx(folder)) => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `finding text\nReviewed BASE: ${main}\nReviewed HEAD: ${sha}\nReady to merge: No` }] }, isError: false }, ui);
+	const notified = ctx(folder);
+	await emit(main, notified);
+	assert.match(JSON.stringify(notified.notes), /several repositories here: a, b/);
+	assert.deepEqual(readReviews(a, reviewsRoot), []);
+	assert.deepEqual(readReviews(join(folder, "b"), reviewsRoot), []);
+	await emit(head);
+	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
+	const log = (rev: string) => spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), rev], { cwd: folder, encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	const printed = log(head);
+	assert.equal(printed.status, 0, printed.stderr);
+	assert.match(printed.stdout, /— No\n\nfinding text/);
+	const ambiguous = log(main);
+	assert.equal(ambiguous.status, 1);
+	assert.match(ambiguous.stderr, /several repositories here: a, b/);
+});

@@ -6,21 +6,27 @@
  *   node <kit>/scripts/review-log.ts <rev>
  */
 import { spawnSync } from "node:child_process";
-import { readReports } from "../extensions/lib/reviews.ts";
+import { readReports, repoFor } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
 if (!rev) {
 	console.error("Usage: node scripts/review-log.ts <rev>");
 	process.exit(2);
 }
-const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { encoding: "utf8" });
+// In a repository: its own. In a plain folder: the one nested repository holding the commit.
+const repo = repoFor(process.cwd(), rev);
+if (typeof repo !== "string") {
+	console.error(repo.error);
+	process.exit(1);
+}
+const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { encoding: "utf8", cwd: repo });
 const sha = r.status === 0 ? r.stdout.trim() : undefined;
 if (!sha) {
 	console.error(`${rev} is not a commit in this repository`);
 	process.exit(1);
 }
 // Records are keyed by the repository, so any folder or worktree of it finds them.
-const reports = readReports(process.cwd(), sha, process.env.ENG_KIT_REVIEWS_ROOT || undefined);
+const reports = readReports(repo, sha, process.env.ENG_KIT_REVIEWS_ROOT || undefined);
 if (reports.length === 0) {
 	console.error(`no recorded review for ${sha.slice(0, 7)}`);
 	process.exit(1);

@@ -98,12 +98,14 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
-	const sha = git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+	const repo = repoFor(projectDir, rev);
+	if (typeof repo !== "string") return repo.error;
+	const sha = git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
 	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
-	const base = extra.base === undefined ? undefined : git(projectDir, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
+	const base = extra.base === undefined ? undefined : git(repo, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
 	if (extra.base !== undefined && !base) return `Reviewed BASE ${extra.base} is not a commit in this repository`;
 	const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
-	const dir = reviewsDir(projectDir, root);
+	const dir = reviewsDir(repo, root);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		if (!ownDir(dir)) return `${dir} belongs to another user`;
@@ -113,6 +115,30 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 		return `could not write ${dir}: ${(err as Error).message}`;
 	}
 	return record;
+}
+
+/**
+ * The repository a commit or command belongs to: `dir`'s own repository (its top level), or, when `dir` is a plain
+ * folder, the one direct child repository that holds `rev` as a commit. Several is ambiguous, none is an error.
+ */
+export function repoFor(dir: string, rev?: string): string | { error: string } {
+	const top = git(dir, ["rev-parse", "--show-toplevel"]);
+	if (top) return top;
+	if (rev === undefined) return { error: `${dir} is not inside a git repository` };
+	const found: string[] = [];
+	try {
+		for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+			const child = join(dir, entry.name);
+			if (!entry.isDirectory() || !existsSync(join(child, ".git"))) continue;
+			const childTop = git(child, ["rev-parse", "--show-toplevel"]);
+			if (childTop && git(childTop, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`])) found.push(entry.name);
+		}
+	} catch {
+		// unreadable folder: no repositories found
+	}
+	if (found.length > 1) return { error: `${rev} is a commit in several repositories here: ${found.join(", ")}` };
+	if (found.length === 0) return { error: `Reviewed HEAD ${rev} is not a commit in this folder or its repositories` };
+	return git(join(dir, found[0]!), ["rev-parse", "--show-toplevel"])!;
 }
 
 /** Recorded rounds per reviewed SHA, newest first: the latest prompt's reviews combined to the worst verdict. */
@@ -167,7 +193,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 			if (branch) {
 				const pending = readJson(projectDir, PENDING_FILE, root);
 				// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
-				pending[callId] = { branch, at: Date.now(), last: index === segments.length - 1 };
+				pending[callId] = { branch, dir, at: Date.now(), last: index === segments.length - 1 };
 				writeJson(projectDir, PENDING_FILE, pending, root);
 			}
 		}
@@ -181,7 +207,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 /** After the call: register its noted PR branch if it succeeded (or failed after the PR step), forget it if not. */
 export function settlePr(projectDir: string, callId: string, ok: boolean, root?: string): void {
 	const pending = readJson(projectDir, PENDING_FILE, root);
-	const noted = pending[callId] as { branch?: unknown; last?: unknown } | undefined;
+	const noted = pending[callId] as { branch?: unknown; dir?: unknown; last?: unknown } | undefined;
 	if (!noted) return;
 	delete pending[callId];
 	for (const [id, entry] of Object.entries(pending)) {
@@ -189,9 +215,11 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 	}
 	writeJson(projectDir, PENDING_FILE, pending, root);
 	if ((!ok && noted.last !== false) || typeof noted.branch !== "string") return;
-	const prs = readPrs(projectDir, root);
+	// Keyed by the checkout the PR was opened from, where the gate reads it (see checkReview).
+	const key = typeof noted.dir === "string" ? noted.dir : projectDir;
+	const prs = readPrs(key, root);
 	prs[noted.branch] = Date.now();
-	writePrs(projectDir, prs, root);
+	writePrs(key, prs, root);
 }
 
 /**
@@ -311,7 +339,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		}
 		const base = baseBranch(where);
 		if (!base) continue;
-		const refs = targets(l, where, base, l.kind === "push" ? openPrBranches(projectDir, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root) : []);
+		const refs = targets(l, where, base, l.kind === "push" ? openPrBranches(where, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root) : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -320,7 +348,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 			if (ref === undefined) {
 				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
 			}
-			const problem = uncovered(where, projectDir, base, ref, l.kind === "push" && l.remote ? l.remote : "origin", root);
+			const problem = uncovered(where, where, base, ref, l.kind === "push" && l.remote ? l.remote : "origin", root);
 			if (problem) return decision(options.missing, problem, options);
 		}
 	}
