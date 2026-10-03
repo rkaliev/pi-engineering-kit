@@ -174,6 +174,7 @@ test("HEAD pushes, whitespace and binary changes, and directories the guard can'
 	git("switch", "-q", "main");
 	commit({ "src/hotfix.ts": "export const fix = 1;\n" });
 	for (const push of ["git push origin HEAD", "git push -u origin HEAD", "git push origin @", "git push origin HEAD:main"]) assert.equal(action(check(push)), "block", push);
+	for (const push of ["(git push origin HEAD:main)", "echo $(git push origin HEAD:main)", "echo `git push origin HEAD:main`", "git send-pack origin HEAD:main", "git http-push origin HEAD:main"]) assert.equal(action(check(push)), "block", push);
 	assert.equal(action(check("git branch -f main feat/a && git push origin main")), "block", "a ref move before a push");
 	assert.equal(action(check("git fetch . feat/a:main && git push origin main")), "block");
 	assert.equal(check("git status && git fetch origin"), undefined);

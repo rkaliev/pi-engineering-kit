@@ -490,3 +490,31 @@ test("the silent push needs the push's repository to be the project's", () => {
 	assert.equal(checkCommand("git -C sub push", repo, none, repo).action, "allow", "a subfolder of the project");
 	assert.equal(checkCommand("git push", repo, none, join(repo, "sub")).action, "allow", "running in a subfolder");
 });
+
+test("git inside a subshell, substitution or backticks is still git", () => {
+	for (const cmd of [
+		"(git remote add evil https://x/r.git)",
+		"echo $(git remote add evil https://x/r.git)",
+		"echo $(git pu''sh origin HEAD:main)",
+		"echo `git push origin HEAD:main`",
+		"echo $(git push origin feat/x)",
+		"{ git remote add evil https://x/r.git; }",
+		"(git push origin feat/x)",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["(git push --force origin main)", "echo $(git push -f)", "echo `git push origin +main`", "{ git push --mirror; }"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	assert.equal(action("(git status)"), "allow");
+	assert.equal(action("(git log --oneline)"), "allow");
+});
+
+test("send-pack and http-push are pushes", () => {
+	for (const cmd of ["git send-pack origin feat/x", "git http-push origin feat/x", "git -C sub send-pack origin HEAD:main", "git-send-pack origin main", "git send-pack --all origin"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git send-pack --force origin main", "git send-pack origin +main", "git http-push --force origin main", "git send-pack --mirror origin", "git send-pack --no-verify origin x"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+});

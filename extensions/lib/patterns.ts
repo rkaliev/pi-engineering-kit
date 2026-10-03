@@ -132,14 +132,14 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 	if (tokens.includes("--no-verify")) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
-	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
+	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
 	const gitAt = words.indexOf("git");
 	if (gitAt !== -1) {
 		const rest = words.slice(gitAt + 1);
 		if (rest.includes("commit") && rest.some((t) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(t))) {
 			return { action: "block", reason: "git commit -n bypasses hooks. Fix what the hook reports instead." };
 		}
-		if (rest.includes("push")) {
+		if (rest.some((t) => PUSH_VERBS.has(t))) {
 			const forced = rest.some((t) => t === "--force" || t === "--mirror" || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(t) || /^\+\S/.test(t));
 			if (forced) {
 				return {
@@ -257,6 +257,11 @@ export function tokenize(command: string): string[] {
 	return tokens;
 }
 
+/** A token without the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
+export function unwrapToken(token: string): string {
+	return token.replace(/^(\$\(|[(`{])+/, "").replace(/[)`};]+$/, "");
+}
+
 /** Group tokens into simple commands separated by control operators. */
 export function splitSegments(tokens: string[]): string[][] {
 	const segments: string[][] = [[]];
@@ -267,7 +272,9 @@ export function splitSegments(tokens: string[]): string[][] {
 	return segments.filter((s) => s.length > 0);
 }
 
-const PUSH_WORDS = /\bgit\b.*\bpush\b/;
+/** Git's ways to send commits to a remote. */
+const PUSH_VERBS = new Set(["push", "send-pack", "http-push"]);
+const PUSH_WORDS = /\bgit\b.*\b(push|send-pack|http-push)\b/;
 const PUSH_CONFIRM: GuardDecision = { action: "confirm", reason: "This command pushes to a remote." };
 const PUSH_SAFE_OPTIONS = new Set(["-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-progress", "-n", "--dry-run", "--porcelain"]);
 /** Any of these in a command means the shell is not plain: a refused character ends the allowlist. */
@@ -284,7 +291,7 @@ function checkPushes(command: string, segments: string[][], project: string, dir
 	const pushToken = segments.some((tokens) => {
 		const call = parseGit(tokens);
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
-		return call !== undefined && (call.sub === "push" || !/^[a-z][a-z0-9-]*$/.test(call.sub ?? ""));
+		return call !== undefined && (PUSH_VERBS.has(call.sub ?? "") || !/^[a-z][a-z0-9-]*$/.test(call.sub ?? ""));
 	});
 	if (!pushToken && !PUSH_WORDS.test(command)) return undefined;
 	return ownBranchPush(command, dir, env, project) ? undefined : PUSH_CONFIRM;
@@ -367,13 +374,16 @@ const WATCHED_CONFIG = /^(remote|url|push|branch|alias|include|includeif)\./;
  * The git call in a segment: the subcommand after git's global options, its arguments, and `issue` when an
  * option before the subcommand overrides config or is not one the guard knows.
  */
-function parseGit(tokens: string[]): { at: number; v: number; sub: string | undefined; rest: string[]; issue?: GuardDecision } | undefined {
+function parseGit(raw: string[]): { at: number; v: number; sub: string | undefined; rest: string[]; issue?: GuardDecision } | undefined {
+	const tokens = raw.map(unwrapToken);
 	const gitLike = (t: string) => /^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(t));
 	const at = tokens.findIndex(gitLike);
 	if (at === -1) return undefined;
 	let issue: GuardDecision | undefined;
+	// Git inside a substitution or backticks is run by a shell the guard does not follow.
+	if (/^(\$\(|`)/.test(raw[at]!)) issue = { action: "confirm", reason: "This runs git inside a substitution, so the guard can't see the call." };
 	// A second git-like token (`script -q git-out git …`) or input feeding git's arguments hides the real call.
-	if (tokens.slice(at + 1).some(gitLike)) issue = { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
+	if (tokens.slice(at + 1).some(gitLike)) issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
 	if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
 	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
 	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
@@ -397,7 +407,7 @@ function parseGit(tokens: string[]): { at: number; v: number; sub: string | unde
 		issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
 	}
 	// A substitution or variable in the subcommand or before it hides what git runs.
-	if (tokens.slice(at, v + 1).some((t) => /[$`()]/.test(t))) {
+	if (raw.slice(at + 1, v + 1).some((t) => /[$`()]/.test(t.replace(/[)};]+$/, "")))) {
 		issue ??= { action: "confirm", reason: "The git subcommand is not a literal word, so the guard can't see it." };
 	}
 	return { at, v, sub: tokens[v], rest: tokens.slice(v + 1), issue };
