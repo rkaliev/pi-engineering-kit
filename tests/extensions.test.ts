@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
-import { readReviews } from "../extensions/lib/reviews.ts";
+import { openPrBranches, readReviews } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
@@ -743,7 +743,7 @@ test("review gate: from a plain folder a verdict is recorded under the nested re
 	assert.equal((await bash("git -C a push origin feat/a"))?.block, undefined, "re-reviewed");
 });
 
-test("review gate: a SHA that is a commit in two nested repositories records nothing; review-log from the folder prints a record", async () => {
+test("review gate: a SHA that is a commit in two nested repositories is recorded in each; review-log from the folder prints it once", async () => {
 	const { folder, a, main, commit } = workspace();
 	const head = commit("a.ts");
 	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
@@ -752,18 +752,20 @@ test("review gate: a SHA that is a commit in two nested repositories records not
 	const emit = (sha: string, ui = ctx(folder)) => g.emit("tool_result", { toolName: "subagent", toolCallId: `c${Math.random()}`, input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `finding text\nReviewed BASE: ${main}\nReviewed HEAD: ${sha}\nReady to merge: No` }] }, isError: false }, ui);
 	const notified = ctx(folder);
 	await emit(main, notified);
-	assert.match(JSON.stringify(notified.notes), /several repositories here: a, b/);
-	// No verdict is recorded; the failed run is charged as Inconclusive to the repositories' HEADs (never a pass).
-	for (const repo of [a, join(folder, "b")]) assert.ok(readReviews(repo, reviewsRoot).every((r) => r.verdict === "Inconclusive"));
+	assert.deepEqual(notified.notes, []);
+	for (const repo of [a, join(folder, "b")]) assert.deepEqual(readReviews(repo, reviewsRoot).map((r) => [r.sha, r.verdict]), [[main, "No"]]);
 	await emit(head);
 	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
 	const log = (rev: string) => spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), rev], { cwd: folder, encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
 	const printed = log(head);
 	assert.equal(printed.status, 0, printed.stderr);
 	assert.match(printed.stdout, /— No\n\nfinding text/);
-	const ambiguous = log(main);
-	assert.equal(ambiguous.status, 1);
-	assert.match(ambiguous.stderr, /several repositories here: a, b/);
+	const shared = log(main);
+	assert.equal(shared.status, 0, shared.stderr);
+	assert.equal(shared.stdout.match(/## Reviewer run/g)?.length, 1, "identical records dedupe");
+	const missing = log("deadbeef0");
+	assert.equal(missing.status, 1);
+	assert.match(missing.stderr, /Run it from inside the repository, e\.g\. `cd <repo> && …`/);
 });
 
 test("review gate: a worktree of a nested repository is the same repository, not an ambiguity", async () => {
@@ -803,7 +805,8 @@ test("review gate: two reviewers of one prompt, one Yes on a's head and one fail
 	const { folder, main, commit } = workspace();
 	const head = commit("a.ts");
 	const g = fakePi();
-	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	guard(g.pi, { reviewsRoot });
 	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [
 		{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${head}\nReady to merge: Yes` },
 		{ agent: "reviewer", exitCode: 0, finalOutput: "couldn't read the range" },
@@ -811,4 +814,34 @@ test("review gate: two reviewers of one prompt, one Yes on a's head and one fail
 	const asking = ctx(folder);
 	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "cd a && gh pr create --fill" } }, asking))?.block, true);
 	assert.match(asking.asked.join("\n"), /Inconclusive/);
+	assert.equal(readReviews(join(folder, "a"), reviewsRoot).find((r) => r.sha === head)?.verdict, "Inconclusive");
+});
+
+test("review gate: a failed run charges every commit already recorded under its prompt, also one that is no repository's HEAD", async () => {
+	const { folder, a, main, commit, run } = workspace();
+	const reviewed = commit("a.ts");
+	run(a, "switch", "-q", "main");
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [
+		{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${reviewed}\nReady to merge: Yes` },
+		{ agent: "reviewer", exitCode: 0, finalOutput: "couldn't read the range" },
+	] }, isError: false }, ctx(folder));
+	assert.equal(readReviews(a, reviewsRoot).find((r) => r.sha === reviewed)?.verdict, "Inconclusive");
+});
+
+test("review gate: a PR entry registered from one clone is not pruned by a read from another clone with a same-named branch at the base", async () => {
+	const { folder, a, main, commit, run } = workspace();
+	const head = commit("a.ts");
+	const b = join(folder, "b");
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${main}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(folder));
+	await g.emit("tool_call", { toolName: "bash", toolCallId: "t1", input: { command: "cd a && gh pr create --fill" } }, ctx(folder));
+	await g.emit("tool_result", { toolName: "bash", toolCallId: "t1", input: {}, content: [], isError: false }, ctx(folder));
+	run(b, "switch", "-qc", "feat/a");
+	await g.emit("tool_call", { toolName: "bash", input: { command: "git -C b push origin feat/a" } }, ctx(folder));
+	assert.deepEqual(openPrBranches(folder, a, "origin", "refs/remotes/origin/main", reviewsRoot), ["feat/a"]);
 });
