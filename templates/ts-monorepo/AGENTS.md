@@ -22,7 +22,7 @@ Run exactly these; they mirror CI.
 Not run by the verify hooks.
 - `pnpm turbo run build`: build (CI runs it)
 - `pnpm format`: Prettier
-- `docker compose up -d postgres`: local database (needs `POSTGRES_MAJOR` in `.env`)
+- `pnpm db:up`: local database, the major from `.postgres-version` (`pnpm db:down` stops it)
 - `pnpm --filter @repo/db exec prisma migrate deploy`: apply migrations. Prisma and `pnpm --filter @repo/api dev` read `.env`; `start` and CI read the process env only
 - `pnpm --filter @repo/db migrate:down <migration-name>`: revert the latest applied migration with its `down.sql` and mark it rolled back, in one transaction (schema only; data needs a backup). Only after the code that needs the migration has been rolled back. Asks first: it is a database change
 - `pnpm --filter @repo/web dev`: dev server. Don't run it; it's already open in another terminal

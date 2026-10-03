@@ -134,18 +134,59 @@ const registryResolve: Resolve = (name, major) => {
 	return version;
 };
 
+/** A Postgres major is a positive integer; anything else is refused before a file is written. */
+export function checkPostgresMajor(major: string | undefined): string {
+	if (major === undefined || !/^[1-9]\d*$/.test(major)) {
+		throw new Error("pass --postgres <major>: the current supported major from postgresql.org/support/versioning");
+	}
+	return major;
+}
+
+export const SCAFFOLD_USAGE = "Usage: node scripts/scaffold-template.ts <dir> --postgres <major>";
+
+/** `<dir>` and `--postgres <n>` or `--postgres=<n>`, in any order. Anything else throws the usage line. */
+export function parseScaffoldArgs(argv: string[]): { dest: string; postgres: string | undefined } {
+	let dest: string | undefined;
+	let postgres: string | undefined;
+	let seenPostgres = false;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i] ?? "";
+		if (arg === "--postgres" || arg.startsWith("--postgres=")) {
+			const value = arg === "--postgres" ? argv[++i] : arg.slice("--postgres=".length);
+			if (seenPostgres || !value || value.startsWith("-")) throw new Error(SCAFFOLD_USAGE);
+			seenPostgres = true;
+			postgres = value;
+		} else if (arg.startsWith("-") || dest !== undefined) {
+			throw new Error(SCAFFOLD_USAGE);
+		} else {
+			dest = arg;
+		}
+	}
+	if (!dest) throw new Error(SCAFFOLD_USAGE);
+	return { dest, postgres };
+}
+
+export interface Versions {
+	node: string;
+	pnpm: string;
+	/** Postgres major, kept in `.postgres-version`; undefined is refused. */
+	postgres: string | undefined;
+}
+
 export function planScaffold(
 	template: string,
 	dest: string,
-	versions: { node: string; pnpm: string },
+	versions: Versions,
 	pin: (name: string) => string = (name) => name,
 ): ScaffoldPlan {
 	void dest;
+	const postgres = checkPostgresMajor(versions.postgres);
 	const spec = (name: string): string => (isWorkspace(name) ? `${name}@workspace:*` : pin(name));
 	const copy = walk(template).map((f) => relative(template, f).replaceAll("\\", "/")).filter((f) => f !== "scaffold.json" && !isLocalState(f));
 	const pkg = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
 	const writes = {
 		".nvmrc": `${versions.node}\n`,
+		".postgres-version": `${postgres}\n`,
 		"package.json": `${JSON.stringify({ ...pkg, packageManager: `pnpm@${versions.pnpm}` }, null, 2)}\n`,
 	};
 	const lists: Record<string, Lists> = JSON.parse(readFileSync(join(template, "scaffold.json"), "utf8"));
@@ -160,14 +201,15 @@ export function planScaffold(
 
 const spawn: Run = (cmd, args, opts) => spawnSync(cmd, args, { ...opts, encoding: "utf8" });
 
-/** Copy the template into `dest`, write `.nvmrc` and `packageManager`, then install. Throws on any failure. */
+/** Copy the template into `dest`, write `.nvmrc`, `.postgres-version` and `packageManager`, then install. Throws on any failure. */
 export function scaffold(
 	template: string,
 	dest: string,
-	versions: { node: string; pnpm: string },
+	versions: Versions,
 	run: Run = spawn,
 	resolve: Resolve = registryResolve,
 ): void {
+	checkPostgresMajor(versions.postgres);
 	if (existsSync(dest) && readdirSync(dest).length > 0) throw new Error(`Destination is not empty: ${dest}`);
 	// @types/node follows the Node the project runs (.nvmrc), not the newest Node.
 	const nodeMajor = Number(versions.node.split(".")[0]);

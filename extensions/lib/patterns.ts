@@ -515,6 +515,49 @@ function apiWrite(words: string[], at: number, command: string): boolean {
 	return method === undefined ? input || fields.length > 0 : written;
 }
 
+/** Variables that make git run a program, inject config or move the repository; the editor family only counts in front of a git call. */
+const ENV_RUNS = /^(GIT_(SSH_COMMAND|SSH|PROXY_COMMAND|ASKPASS|EXTERNAL_DIFF|PAGER|EDITOR|SEQUENCE_EDITOR)|SSH_ASKPASS)$/;
+const ENV_EDITORS = /^(PAGER|EDITOR|VISUAL)$/;
+const ENV_CONFIG = /^GIT_(CONFIG(_COUNT|_PARAMETERS|_GLOBAL|_SYSTEM)?|CONFIG_(KEY|VALUE)_[0-9]+)$/;
+const ENV_REDIRECTS = /^GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|NAMESPACE|TEMPLATE_DIR)$/;
+/** Of the program-running variables, the ones whose harmless value (`cat`, `true`, `:`, empty) runs nothing. */
+const ENV_HARMLESS_OK = /^(GIT_(PAGER|EDITOR|SEQUENCE_EDITOR|ASKPASS)|SSH_ASKPASS|PAGER|EDITOR|VISUAL)$/;
+
+/** Does `NAME=value` set a git variable that runs a program or redirects git? `beforeGit`: it sits in front of a git call. */
+function riskyEnvAssignment(token: string, beforeGit: boolean): boolean {
+	const eq = token.indexOf("=");
+	if (eq < 1) return false;
+	const name = token.slice(0, eq);
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return false;
+	if (ENV_EDITORS.test(name) ? !beforeGit : !(ENV_RUNS.test(name) || ENV_CONFIG.test(name) || ENV_REDIRECTS.test(name))) return false;
+	return !(ENV_HARMLESS_OK.test(name) && HARMLESS_COMMAND.test(token.slice(eq + 1)));
+}
+
+/** `export`, `declare -x` or `typeset -x`, after leading keywords and empty words: the names or assignments it exports. */
+function exportedWords(words: string[]): string[] {
+	let i = 0;
+	while (i < words.length && (words[i] === "" || SHELL_KEYWORDS.has(words[i]!))) i++;
+	const head = words[i];
+	const args = words.slice(i + 1);
+	if (head === "export") return args;
+	if ((head === "declare" || head === "typeset") && args.some((t) => /^-[a-zA-Z]*x/.test(t))) return args;
+	return [];
+}
+
+/** An assignment in front of a git call in this segment, or an export anywhere, that sets such a variable. */
+function gitEnvDecision(tokens: string[], calls: GitCall[]): GuardDecision | undefined {
+	const words = tokens.map(unwrapToken);
+	const first = calls.length > 0 ? Math.min(...calls.map((c) => c.at)) : -1;
+	const before = first === -1 ? [] : words.slice(0, first);
+	// `export NAME` by name exports a value set elsewhere, which the guard cannot see.
+	const byName = (t: string) => ENV_RUNS.test(t) || ENV_CONFIG.test(t) || ENV_REDIRECTS.test(t);
+	const exported = exportedWords(words).filter((t) => !t.startsWith("-"));
+	if (before.some((t) => riskyEnvAssignment(t, true)) || exported.some((t) => (t.includes("=") ? riskyEnvAssignment(t, false) : byName(t)))) {
+		return { action: "confirm", reason: "This command sets a git variable that runs a program or redirects git." };
+	}
+	return undefined;
+}
+
 /** Git commands that change where or what a later push sends, and merging a PR/MR: asked about whatever the position. */
 function checkPushSetup(segments: string[][], command: string): GuardDecision | undefined {
 	const setup: GuardDecision = { action: "confirm", reason: "This command changes where or what git pushes." };
@@ -531,7 +574,10 @@ function checkPushSetup(segments: string[][], command: string): GuardDecision | 
 		const evalAt = tokens.findIndex((t) => t === "eval");
 		const from = shell !== -1 ? shell : evalAt;
 		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(t))) return { action: "confirm", reason: "This command runs git through a shell string." };
-		for (const call of parseGitCalls(tokens)) {
+		const calls = parseGitCalls(tokens);
+		const envAsk = gitEnvDecision(tokens, calls);
+		if (envAsk) return envAsk;
+		for (const call of calls) {
 			if (call.issue) return call.issue;
 			const { sub, rest } = call;
 			if (sub === "remote") {

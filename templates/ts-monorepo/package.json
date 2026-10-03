@@ -7,7 +7,9 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "build": "turbo run build",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "db:up": "node scripts/db.mjs up",
+    "db:down": "node scripts/db.mjs down"
   },
   "prettier": "@repo/prettier-config"
 }
