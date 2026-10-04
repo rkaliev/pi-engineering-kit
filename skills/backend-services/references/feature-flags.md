@@ -17,8 +17,8 @@ A flag decouples deploy from release: code ships dark and is turned on, ramped o
 ## Defaults and failure
 
 - Every flag has a **safe default**: the value the product must have when the flag system is unreachable. A kill switch defaults to the safe state; a paid feature defaults to off; "pause billing" defaults to paused if charging by mistake is worse than not charging.
-- Evaluation never throws and never blocks a request for long: a timeout (hundreds of milliseconds), then the defaults, then a log and a metric. A circuit breaker stops calling a provider that keeps failing.
-- Serve the last good rule set when the source is down, and expose its age as a metric.
+- Evaluation never throws and never blocks a request for long. Prefer evaluating in process from a synced rule set; when the sync fails, keep serving the last good set and expose its age as a metric. The registry defaults apply only when no set was ever loaded.
+- A remote evaluation call gets a short timeout and falls back the same way, with a log and a metric; a circuit breaker stops calling a provider that keeps failing.
 
 ## Targeting and assignment
 
@@ -48,4 +48,4 @@ A flag decouples deploy from release: code ships dark and is turned on, ramped o
 
 - Unit tests take the flag values as input (an in-memory OpenFeature provider or the registry defaults), never a call to the real system.
 - Test both sides of every live flag, and the defaults path: the product works with the flag system down.
-- An end-to-end scenario sets its flags through the test provider or an override that is impossible in production.
+- An end-to-end scenario sets its flags through the test provider, or an override that configuration selects and a startup check refuses in production.

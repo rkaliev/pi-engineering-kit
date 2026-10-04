@@ -18,5 +18,5 @@ An RPC between a web client and its own server (tRPC, server functions, a genera
 ## Access checks
 
 - Role checks (signed in, admin) may run in middleware.
-- A check on a specific resource (this organization, this order) runs after the input is validated, in the handler or a helper it calls, because middleware runs before the input is parsed.
+- A check on a specific resource (this organization, this order) runs after the input is validated, in the handler or a helper it calls, because it needs the parsed input.
 - Every handler that takes a resource id has a test that sends another tenant's id and expects a refusal.

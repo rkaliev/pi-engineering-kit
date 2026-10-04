@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when receiving code review feedback from a person, a reviewer agent or a PR, before implementing any suggestion, especially if it seems unclear or technically questionable
+description: Use when receiving code review feedback from a person, a reviewer agent or a PR, or when the user corrects your work, before implementing any suggestion, especially if it seems unclear or technically questionable
 ---
 
 # Receiving code review
@@ -37,7 +37,7 @@ When a finding or a correction from the user shows a gap that will recur (not a 
 2. a rule in the project's agent manifest (CLAUDE.md, AGENTS.md) or a path-scoped rule;
 3. a gap in the kit itself: a follow-up to change the skill with writing-skills (RED, then GREEN).
 
-Propose it with the evidence; the user decides. Don't add a rule for what a check already enforces. Proposals not settled during the work are listed with the task's Follow-ups at the finish.
+Propose it with the evidence; the user decides. Don't add a rule for what a check already enforces. Add each open proposal to the task file's Follow-ups when you make it; once the task file is gone, list it in the final report to the user.
 
 ## Tone
 

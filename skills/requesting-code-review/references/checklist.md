@@ -21,7 +21,7 @@ These don't move with the author's arguments or with how common the pattern is i
 | A numbered criterion without a test, or with a manual check where automation is possible or the user didn't agree to it | Important |
 | A plan's Review focus line without a test | Important |
 | A test without an assertion or one asserting mock echo; an expected value copied from the code's output or recomputed with its algorithm (outside a marked characterization test) | Important |
-| A test-only helper, flag or hook in production code | Important |
+| A test-only helper, flag or hook in production code (except a provider fake or flag override that configuration selects and a startup check refuses in production) | Important |
 | A fixed sleep in a test; a real network call outside the provider-sandbox suite | Important |
 | A `test-hygiene: allow` that hides a forbidden skip, retry or sleep without the user's agreement | Same as the pattern it hides |
 | Payments without a test against the provider sandbox; POS without a list of what ran on real hardware | Important |
@@ -68,7 +68,7 @@ Check the diff against `../../test-driven-development/references/test-standard.m
 - No speculative abstraction, unused options, or "framework" for one call site (YAGNI).
 - Public interface changes are backward compatible, or the migration is explicit.
 - Schema or data changes: a migration exists, can be reversed or rolled forward safely, and is safe on existing data.
-- A new feature flag has a typed definition, a safe default, an owner and a removal date, and both of its branches are tested (backend-services, feature flags).
+- A new feature flag has a typed definition, a safe default, an owner and, for release and experiment flags, a removal date, and both of its branches are tested (backend-services, feature flags).
 
 ## AI-typical smells
 - Placeholder code in production paths: empty stubs, `throw new Error("not implemented")`, `TODO` standing in for logic.

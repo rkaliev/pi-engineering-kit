@@ -17,7 +17,7 @@ Don't sync one state into another with effects. If two values must agree, derive
 
 ## Server cache
 
-- One place sets the cache defaults: how long data stays fresh and the retry policy. A 4xx is never retried (the same request gets the same answer); other failures retry once or twice.
+- One place sets the cache defaults: how long data stays fresh and the retry policy. A 4xx is not retried (the same request gets the same answer), except 408 and 429, which retry with backoff and honour `Retry-After`; other failures retry once or twice.
 - A query's key and fetcher come from one function (`queryOptions` in TanStack Query, or the typed API client's helpers) that the prefetch or route loader and the component both use, so the keys can't drift.
 - Every mutation updates or invalidates the queries whose data it changed. Where the stack has a lint rule for it, CI runs it.
 - Server rendering creates a new query client for each request: a shared one leaks one user's data into another's page.

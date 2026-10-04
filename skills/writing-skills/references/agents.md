@@ -14,27 +14,27 @@ A subagent is a role with its own context window, its own tools and a fixed repo
 
 ## Format
 
-With the `pi-subagents` package, an agent is a markdown file: `.pi/agents/<name>.md` in a project, `~/.pi/agent/agents/` for the user, or a pi package's `agents` folder declared in its `package.json`. Frontmatter, then the system prompt:
+With the `pi-subagents` package, an agent is a markdown file: `.pi/agents/<name>.md` in a project, `~/.pi/agent/agents/` for the user, or a pi package that declares `"pi-subagents": {"agents": ["./agents"]}` in its `package.json`. Frontmatter, then the system prompt:
 
 ```yaml
 ---
-name: reviewer
-description: Read-only code reviewer with a fresh context. Use after … to …
+name: api-auditor
+description: Read-only API auditor. Use after … to …
 tools: read, grep, find, ls, bash   # strict allowlist; omitted = pi's builtin tools
-model: <provider/id>                # omitted = the parent's model
+model: <provider/id>                # omitted = the parent's default model, unless settings set one
 thinking: high                      # off | minimal | low | medium | high | xhigh | max
 inheritProjectContext: true         # custom agents start without AGENTS.md unless set
 ---
 ```
 
-- A custom agent starts narrow: no project instructions and no skills catalog unless `inheritProjectContext` and `skills` say so.
+- A custom agent starts narrow: no project instructions unless `inheritProjectContext: true`, and no skills catalog unless `inheritSkills: true`; `skills` names specific skills to load.
 - A file named like a builtin (`worker`, `reviewer`, `scout`) replaces it whole. To change one field of a builtin, use `subagents.agentOverrides` in `.pi/settings.json` instead.
 - Check the field list in the pi-subagents docs for the version you install before using a field not shown here.
 
 ## The prompt
 
 - **One responsibility.** "Review a git range against its requirements", not "review and fix".
-- **Least privilege.** Grant only the tools the role needs. A reviewer gets no edit tools; a researcher gets no shell. Nesting (an agent dispatching agents) stays off unless the role is an orchestrator: leave `subagent` out of `tools`.
+- **Least privilege.** Grant only the tools the role needs. A reviewer gets no edit tools; a researcher gets no shell. A shell can write files, so a read-only role that needs one also needs a hook or guard rule that limits its commands. Nesting (an agent dispatching agents) stays off unless the role is an orchestrator: leave `subagent` out of `tools` and `allowNestedSubagents` unset.
 - **Model by stakes:** the most capable model for review, security and design judgment; a fast one for search and mechanical work.
 - **Self-contained input.** The agent never sees the conversation. Its prompt says what it receives (task text, paths, ranges, commands) and what to do when something is missing: report `NEEDS_CONTEXT`, don't guess.
 - **A fixed report.** End with machine-readable lines the caller or a hook can parse (a status word, a verdict, the SHAs reviewed) and a short human summary. Say what counts as evidence (commands run with their output, `file:line`).

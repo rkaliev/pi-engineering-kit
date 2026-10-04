@@ -27,7 +27,7 @@ The same branch with different data is one parametrized test (`test.each`, table
 - Name = subject + circumstance + result: `applyDiscount rounds half up when the discount has a fraction of a cent`.
 - Prefer readable tests over clever reuse (DAMP over DRY): a reader understands one test without opening three helpers.
 - Test data is built in the test or by a small builder with explicit overrides; no shared mutable fixtures.
-- Test-only helpers, flags and hooks live in test code, never in production code.
+- Test-only helpers, flags and hooks live in test code, never in production code. The one exception is a provider fake or a flag override that configuration selects and a startup check refuses in production (Test doubles).
 
 ## Test doubles
 
