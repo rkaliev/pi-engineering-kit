@@ -539,8 +539,10 @@ function exportedWords(words: string[]): string[] {
 	while (i < words.length && (words[i] === "" || SHELL_KEYWORDS.has(words[i]!))) i++;
 	const head = words[i];
 	const args = words.slice(i + 1);
-	// Options end at the first operand or `--`: a later `-n` is a name, and bash still exports the rest.
-	const end = args.findIndex((t) => t === "--" || !t.startsWith("-"));
+	// Options end at the first operand, `--` or a lone `-`: a later `-n` is a name, and bash still exports the rest.
+	// `declare` and `typeset` also take `+` options (`+i` turns an attribute off).
+	const option = head === "export" ? /^-./ : /^[-+]./;
+	const end = args.findIndex((t) => t === "--" || !option.test(t));
 	const flags = end === -1 ? args : args.slice(0, end);
 	// `export -n` un-exports: nothing it names is exported.
 	if (head === "export") return flags.some((t) => /^-[a-zA-Z]*n/.test(t)) ? [] : args;
