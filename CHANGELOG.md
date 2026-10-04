@@ -2,8 +2,8 @@
 
 ## 0.21.0
 
-- **Read a skill before naming it.** Agents were seen announcing "Using test-driven-development" without reading the skill and then working from memory (taking a missing-module error as the failing test, which the test standard rules out). `using-skills` now says to read the skill's `SKILL.md` first, then announce it, and that naming a skill without reading it doesn't count.
-- `using-skills` is tighter to stay within its word budget.
+- **Read a skill before naming it.** Agents were seen announcing "Using test-driven-development" without reading the skill and then working from memory (taking a missing-module error as the failing test, which test-driven-development rules out). `using-skills` now says to read the skill's `SKILL.md` first, then announce it, and that naming a skill without reading it doesn't count.
+- One tool line in `using-skills` is shorter so the new rule fits the skill's word budget.
 - This package has no 0.20.0.
 
 ## 0.19.0
