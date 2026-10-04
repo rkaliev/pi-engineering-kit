@@ -572,6 +572,32 @@ test("a push without a refspec lands where @{push} points", () => {
 	assert.equal(action(check("git push")), "block", "a remote whose name contains a slash");
 });
 
+test("gate files: cd options, a failed cd, $TMPDIR, pushd/popd and an unknown cd are followed", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	const check = (command: string, cwd = tmpdir()) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
+	for (const write of ["cd nope; cd eng-kit/reviews; rm x", "cd -- eng-kit/reviews; rm x", "cd -P eng-kit/reviews; rm x", "cd $TMPDIR/eng-kit/reviews && rm x", "cd ${TMPDIR}/eng-kit/reviews && rm x"]) {
+		assert.equal(check(write), "block", write);
+	}
+	assert.equal(check("pushd eng-kit/reviews && popd && rm x"), "allow", "popd returns to the start folder");
+	assert.equal(check('cd "$X" && rm x', records), "block", "an unknown cd keeps the last known folder");
+});
+
+test("cd options, cd -, pushd and popd are followed to the checkout a landing runs in", () => {
+	const { dir, git, commit, check, review, base } = repo();
+	const wt = join(dir, ".worktrees", "b");
+	git("worktree", "add", "-q", "-b", "feat/b", wt, "main");
+	const b = commit({ "src/b.ts": "export const b = 1;\n" }, wt);
+	review(report(b, "Yes", base));
+	for (const moved of [`cd -P ${wt} && git push origin HEAD:main`, `cd -- ${wt} && git push origin HEAD:main`, `cd ${wt} && cd src && cd - && git push origin HEAD:main`]) {
+		assert.equal(check(moved), undefined, moved);
+	}
+	assert.equal(action(check(`pushd ${wt} && popd && git push origin HEAD:main`)), "block", "popd returns to the unreviewed main checkout");
+	for (const unknown of ["popd && git push origin HEAD:main", "cd - && git push origin HEAD:main"]) {
+		assert.match(check(unknown)!.reason!, /can't tell which checkout/, unknown);
+	}
+});
+
 test("gate files: a > inside quotes is text, not a write", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");

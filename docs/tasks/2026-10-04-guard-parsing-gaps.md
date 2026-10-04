@@ -142,12 +142,12 @@ None. Tag v0.21.1 after merge in both repos.
 **Files:** Modify `lib/reviews.ts` (new `changeDir`, used by `checkReview` and `checkGateFiles`; `isCd`, `follow` folded in) · Test `tests/reviews.test.ts`
 **Interfaces:** Produces `type DirState = { dirs: string[]; prev: string[]; stack: string[][] }` (`dirs` empty = unknown) and `changeDir(state: DirState, tokens: string[], mustExist: boolean): DirState | undefined` (undefined: not a cd/pushd/popd)
 
-- [ ] Rows in "shell writes to the gate's own files": from the temp dir, `cd nope; cd eng-kit/reviews; rm x`, `cd -- eng-kit/reviews; rm x`, `cd -P eng-kit/reviews; rm x`, `cd $TMPDIR/eng-kit/reviews && rm x`, `cd ${TMPDIR}/eng-kit/reviews && rm x` → block; `pushd eng-kit/reviews && popd && rm x` → allow; `cd "$X" && rm x` from inside the records → block
-- [ ] Rows in "cd and git -C are followed": `cd -P <worktree> && git push origin HEAD:main` and `cd -- <worktree> && …` check the worktree; `pushd <worktree> && popd && git push origin main` checks the start folder; `popd` with an empty stack and `cd -` first → ask (unknown)
-- [ ] Run → expect FAIL on `cd nope; cd eng-kit/reviews; rm x` (received allow)
-- [ ] Implement `changeDir`: options `-L -P -e -@` and `--` skipped; `-` swaps with `prev`; `pushd` pushes, `popd` pops; `$TMPDIR`, `${TMPDIR}`, `$HOME`, `${HOME}` and `~` expand; any other `$`, backtick or `(` → unknown. `mustExist` (checkReview) drops a missing folder → unknown; without it (checkGateFiles) a missing folder keeps the old candidates too. Subshell restore in `checkReview` saves and restores the whole state
-- [ ] Run → PASS, full suite; copy to pi, same rows, pi suite
-- [ ] Commit `fix(guard): follow cd options, cd -, pushd/popd and $TMPDIR`
+- [x] Rows in "shell writes to the gate's own files": from the temp dir, `cd nope; cd eng-kit/reviews; rm x`, `cd -- eng-kit/reviews; rm x`, `cd -P eng-kit/reviews; rm x`, `cd $TMPDIR/eng-kit/reviews && rm x`, `cd ${TMPDIR}/eng-kit/reviews && rm x` → block; `pushd eng-kit/reviews && popd && rm x` → allow; `cd "$X" && rm x` from inside the records → block
+- [x] Rows in "cd and git -C are followed": `cd -P <worktree> && git push origin HEAD:main` and `cd -- <worktree> && …` check the worktree; `pushd <worktree> && popd && git push origin main` checks the start folder; `popd` with an empty stack and `cd -` first → ask (unknown)
+- [x] Run → expect FAIL on `cd nope; cd eng-kit/reviews; rm x` (received allow)
+- [x] Implement `changeDir`: options `-L -P -e -@` and `--` skipped; `-` swaps with `prev`; `pushd` pushes, `popd` pops; `$TMPDIR`, `${TMPDIR}`, `$HOME`, `${HOME}` and `~` expand; any other `$`, backtick or `(` → unknown. `mustExist` (checkReview) drops a missing folder → unknown; without it (checkGateFiles) a missing folder keeps the old candidates too. Subshell restore in `checkReview` saves and restores the whole state
+- [x] Run → PASS, full suite; copy to pi, same rows, pi suite
+- [x] Commit `fix(guard): follow cd options, cd -, pushd/popd and $TMPDIR`
 
 ### Task 5: command guard: hook-bypass abbreviations and `&>`
 
@@ -188,3 +188,6 @@ None. Tag v0.21.1 after merge in both repos.
 - Task 2: complete (both repos; RED: remote `x` instead of `origin`; `npm test` → eng-kit 385 pass, pi 383 pass)
 - Task 3: complete (both repos; RED: `git push` allowed with push.default=upstream onto main; a slash-named remote row is proven by mutation (first-slash split → FAIL); `npm test` → eng-kit 386 pass, pi 384 pass)
 - Ruling: `pushDestination` stays module-private, not exported as the plan's Interfaces line said — only `checkReview` uses it — no cost.
+- Task 4: complete (both repos; RED: `cd nope; cd eng-kit/reviews; rm x` allowed, `cd -P <wt>` failed closed; each gate-file row checked against the HEAD version, all but `cd "$X"` differ — that row guards Review focus 3 and is proven by mutation (unknown → no folder: FAIL); `npm test` → eng-kit 388 pass, pi 386 pass)
+- Ruling: `notePr` uses the same tracker as `checkReview` (it followed `cd` the same way before) — one rule for both — cost if wrong: a PR opened after `cd -` registers the previous folder's branch, as the shell would.
+- Ruling: a bare `cd` goes to the home folder instead of failing closed — that is what the shell does; home is rarely a checkout, so a landing there still asks — none.

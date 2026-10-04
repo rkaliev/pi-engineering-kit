@@ -146,21 +146,23 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * push to that branch updates the PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
-	let dir: string | undefined = cwd;
-	let outside: string | undefined;
+	let state = at(cwd);
+	let outside = state;
 	let inSubshell = false;
 	const segments = splitSegments(tokenize(stripRedirects(command)));
 	segments.forEach((raw, index) => {
 		// A `cd` inside `( … )` ends with the subshell, as in checkReview; a nested one is not followed.
 		if (raw[0]?.startsWith("(")) {
-			if (inSubshell || raw[0].startsWith("((")) dir = undefined;
+			if (inSubshell || raw[0].startsWith("((")) state = { ...state, dirs: [] };
 			inSubshell = true;
-			outside = dir;
+			outside = state;
 		}
 		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
-		if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
+		const moved = changeDir(state, tokens, true);
+		const dir = here(state);
+		if (moved) state = moved;
 		else if (l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
 			// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
 			const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
@@ -173,7 +175,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 		}
 		if (closes) {
 			inSubshell = false;
-			dir = outside;
+			state = outside;
 		}
 	});
 }
@@ -269,30 +271,32 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
-	let dir: string | undefined = cwd;
-	let outside: string | undefined;
+	let state = at(cwd);
+	let outside = state;
 	let inSubshell = false;
 	let unsafeBefore = false;
 	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
 		// A `cd` inside a subshell ends with it: restore the directory after the closing parenthesis.
 		// A nested subshell is more than the guard tracks: what follows fails closed.
 		if (raw[0]?.startsWith("(")) {
-			if (inSubshell || raw[0].startsWith("((")) dir = undefined;
+			if (inSubshell || raw[0].startsWith("((")) state = { ...state, dirs: [] };
 			inSubshell = true;
-			outside = dir;
+			outside = state;
 		}
 		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
 		if (!l || l.kind === "commit") {
-			if (isCd(tokens)) dir = dir === undefined ? undefined : follow(dir, tokens[1]);
+			const moved = changeDir(state, tokens, true);
+			if (moved) state = moved;
 			else if (!isSafe(tokens, options.verify)) unsafeBefore = true;
 			if (closes) {
 				inSubshell = false;
-				dir = outside;
+				state = outside;
 			}
 			continue;
 		}
+		const dir = here(state);
 		// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
 		if (l.kind === "merge" && unsafeBefore) {
 			return decision(options.missing, "this command moves HEAD before it merges, so the guard can't see where the merge lands. Run the merge as its own command.", options);
@@ -449,19 +453,19 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
-	let dir = cwd;
+	let state = at(cwd);
 	for (const raw of splitSegments(tokenize(command))) {
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		if (isCd(tokens)) {
-			// A write may create the folder, so it need not exist yet; a variable keeps the last known one.
-			const arg = tokens[1];
-			if (arg !== undefined && !/[$`(]/.test(arg)) dir = resolve(dir, arg.replace(/^~(?=\/|$)/, homedir()));
+		// A write may create the folder, so it need not exist yet; a cd the guard can't follow keeps the last known one.
+		const moved = changeDir(state, tokens, false);
+		if (moved) {
+			state = moved;
 			continue;
 		}
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
-		const paths = tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/"));
+		const paths = state.dirs.flatMap((dir) => tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
 		const named = tokens.some((t) => /^\$\{?TMPDIR\}?\/+eng-kit\/reviews(\/|$)/.test(t));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
@@ -541,8 +545,61 @@ export function stripRedirects(command: string): string {
 	return out;
 }
 
-function isCd(tokens: string[]): boolean {
-	return tokens[0] === "cd" || tokens[0] === "pushd";
+/** The folders a command may be in, as far as the guard follows `cd`, `pushd` and `popd`; none means unknown. */
+type DirState = { dirs: string[]; prev: string[]; stack: string[][] };
+
+function at(dir: string): DirState {
+	return { dirs: [dir], prev: [], stack: [] };
+}
+
+/** The one folder a command is in, or undefined when the guard can't tell. */
+function here(state: DirState): string | undefined {
+	return state.dirs.length === 1 ? state.dirs[0] : undefined;
+}
+
+/**
+ * The state after a `cd`, `pushd` or `popd` segment; undefined for any other command. `cd`'s options `-L`,
+ * `-P`, `-e`, `-@` and `--` are skipped, `cd -` is the previous folder, `pushd` and `popd` keep a stack, and
+ * `~`, `$HOME` and `$TMPDIR` expand. With `mustExist` (the review gate) a folder that doesn't exist, another
+ * variable or a form the guard doesn't follow makes the folder unknown. Without it (the gate files) a write may
+ * create the folder, so a missing one keeps the old candidates too, and an unknown move keeps them all.
+ */
+function changeDir(state: DirState, tokens: string[], mustExist: boolean): DirState | undefined {
+	const [cmd, ...args] = tokens;
+	if (cmd !== "cd" && cmd !== "pushd" && cmd !== "popd") return undefined;
+	const end = args.indexOf("--");
+	const options = end === -1 ? args.filter((a) => /^-./.test(a)) : args.slice(0, end);
+	const operands = end === -1 ? args.filter((a) => !/^-./.test(a)) : args.slice(end + 1);
+	const unknown: DirState = { dirs: mustExist ? [] : state.dirs, prev: state.dirs, stack: [] };
+	const known = cmd === "cd" ? options.every((o) => /^-[LPe@]+$/.test(o)) : options.length === 0;
+	if (!known || operands.length > 1) return unknown;
+	if (cmd === "popd") {
+		const [top, ...rest] = state.stack;
+		return top === undefined || operands.length > 0 ? unknown : { dirs: top, prev: state.dirs, stack: rest };
+	}
+	const arg = operands[0];
+	// `pushd` with no folder swaps the top two entries; `cd` alone goes home.
+	if (arg === undefined && cmd === "pushd") return unknown;
+	let target: string[];
+	if (arg === "-") target = state.prev;
+	else {
+		const path = expandDir(arg ?? "~");
+		if (path === undefined) return unknown;
+		target = isAbsolute(path) ? [resolve(path)] : state.dirs.map((d) => resolve(d, path));
+	}
+	const missing = target.filter((d) => !existsSync(d));
+	if (mustExist && (target.length === 0 || missing.length > 0)) return unknown;
+	const dirs = target.length === 0 || missing.length > 0 ? [...new Set([...target, ...state.dirs])] : target;
+	return { dirs, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
+}
+
+/** A `cd` operand with `~`, `$HOME` and `$TMPDIR` expanded; undefined when anything else would expand. */
+function expandDir(arg: string): string | undefined {
+	const path = arg
+		.replace(/^~(?=\/|$)/, homedir())
+		.replace(/^\$(?:\{HOME\}|HOME\b)/, homedir())
+		.replace(/^\$(?:\{TMPDIR\}|TMPDIR\b)/, tmpdir());
+	return /[$`(]/.test(path) ? undefined : path;
 }
 
 /** The directory `cd <arg>` moves to, or undefined when the guard can't know it. */
