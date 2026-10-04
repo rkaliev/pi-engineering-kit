@@ -161,11 +161,11 @@ None. Tag v0.21.1 after merge in both repos.
 ### Task 6: Vitest `context.skip` keeps its reason
 
 **Files:** Modify `scripts/test-hygiene.ts` (`skipReason`) · Test `tests/test-hygiene.test.ts`
-- [ ] Rows: `context.skip("platform: no symlinks on windows")` inside a test → no violation; `context.skip("needs db")` → `skip-without-reason`; Mocha `context.skip("suite", () => {})` → `skip-without-reason`; `it.skip("name", fn) // #12` → none
-- [ ] Run → expect FAIL: the platform row reports `skip-without-reason`
-- [ ] Implement: the JS name strip applies only when a `,` follows the first string
-- [ ] Run → PASS, full suite; copy the script to `../src/scripts/test-hygiene.ts`, same rows, pi suite
-- [ ] Commit `fix(test-hygiene): a one-argument context.skip keeps its reason`
+- [x] Rows: `context.skip("platform: no symlinks on windows")` inside a test → no violation; `context.skip("needs db")` → `skip-without-reason`; Mocha `context.skip("suite", () => {})` → `skip-without-reason`; `it.skip("name", fn) // #12` → none
+- [x] Run → expect FAIL: the platform row reports `skip-without-reason`
+- [x] Implement: the JS name strip applies only when a `,` follows the first string
+- [x] Run → PASS, full suite; copy the script to `../src/scripts/test-hygiene.ts`, same rows, pi suite
+- [x] Commit `fix(test-hygiene): a one-argument context.skip keeps its reason`
 
 ### Task 7: reviewer checks that BASE is on the remote base
 
@@ -192,3 +192,5 @@ None. Tag v0.21.1 after merge in both repos.
 - Ruling: `notePr` uses the same tracker as `checkReview` (it followed `cd` the same way before) — one rule for both — cost if wrong: a PR opened after `cd -` registers the previous folder's branch, as the shell would.
 - Ruling: a bare `cd` goes to the home folder instead of failing closed — that is what the shell does; home is rarely a checkout, so a landing there still asks — none.
 - Task 5: complete (both repos, same diff in each patterns.ts; every new row checked against the HEAD version: all differ except the two allow rows, which guard Review focus 5 and the background `&`; `declare 2>&1 -x` turned out to be silent too and is covered; `npm test` → eng-kit 390 pass, pi 388 pass)
+- Task 6: complete (both repos, script and tests byte-identical; RED: `context.skip("platform: …")` reported skip-without-reason; `npm test` → eng-kit 394 pass, pi 392 pass)
+- Ruling: test-hygiene VERSION 4 → 5 with its two version-pin tests, as abfd954 did for 3 → 4 — kit-init offers projects the newer copy only when the version rises — cost if wrong: one extra replace offer.

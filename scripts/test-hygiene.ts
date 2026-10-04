@@ -14,7 +14,7 @@
  * is itself a violation. Config (.ci/test-hygiene.json next to the copied script, or --config): { "testFiles": [glob], "ignore": [glob], "patterns": [{ id, files, regex, message }] }.
  * Exit 0: no new violation, 1: violations, 2: usage, config or git error.
  */
-export const VERSION = "4";
+export const VERSION = "5";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -332,8 +332,9 @@ function skipReason(lines: string[], views: View[], i: number, m: RegExpMatchArr
 		const blank = blankStrings(text);
 		const close = closing(blank, open);
 		args = stripBodies(text.slice(open, close < 0 ? undefined : close + 1));
-		// A declared test's first string is its name, not the skip's reason: `it.skip("name", fn)`.
-		if (lang === "js") args = args.replace(/^\(\s*(["'`])(?:\\.|(?!\1).)*\1\s*,?/s, "(");
+		// A declared test's first string is its name, not the skip's reason: `it.skip("name", fn)`. Alone it is the
+		// reason, as in Vitest's `context.skip("why")`.
+		if (lang === "js") args = args.replace(/^\(\s*(["'`])(?:\\.|(?!\1).)*\1\s*,/s, "(");
 	}
 	return `${above}\n${args}\n${trailing}`;
 }
