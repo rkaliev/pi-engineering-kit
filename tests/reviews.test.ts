@@ -545,6 +545,26 @@ test("gate files: >| and >&file are writes too", () => {
 	assert.equal(checkGateFiles("cat .pi/guard.json >&2", project, project, ".pi/guard.json"), undefined, ">&2 is not a file");
 });
 
+test("redirections read as the shell does: >| and >& take a word, &< is a background & then <", () => {
+	const flat = (command: string) => stripRedirects(command).replace(/\s+/g, " ").trim();
+	assert.equal(flat("git push >|log origin main"), "git push origin main");
+	assert.equal(flat("git push >& log origin main"), "git push origin main");
+	assert.equal(flat("true &</dev/null git push x"), "true & git push x");
+	assert.equal(flat("a >| b; git push origin main"), "a ; git push origin main");
+	const { check } = repo();
+	for (const hidden of ["git push >|log origin HEAD:main", "git push >& log origin HEAD:main", "git commit -qm x &</dev/null git push origin HEAD:main"]) {
+		assert.equal(action(check(hidden)), "block", hidden);
+	}
+});
+
+test("gate files: a > inside quotes is text, not a write", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	const check = (command: string) => checkGateFiles(command, project, project, ".pi/guard.json")?.action ?? "allow";
+	assert.equal(check(`grep "a>b" ${records}/x`), "allow");
+	assert.equal(check(`cat x > ${records}/y`), "block");
+});
+
 test("a PR created inside a compound command is registered, even when a later step fails or a subshell moved", () => {
 	const { dir, root } = repo();
 	const open = () => openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root);

@@ -403,7 +403,40 @@ function inTemp(path: string): boolean {
 
 /** Writing redirections and `tee` make any command a writer; `2>/dev/null` and `2>&1` don't. */
 function writes(command: string): boolean {
+	command = blankQuoted(command);
 	return [...command.matchAll(/\d*>>?\s*(&\d+|[^\s;&|]+)/g)].some((m) => m[1] !== "/dev/null" && !m[1]!.startsWith("&")) || /\btee\b/.test(command);
+}
+
+/** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
+function blankQuoted(command: string): string {
+	let out = "";
+	let quote: string | null = null;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i]!;
+		if (quote) {
+			// A backslash escapes the next character in "…" and $'…', never in '…'.
+			if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
+				out += "  ";
+				i++;
+			} else if (ch === (quote === "$'" ? "'" : quote)) {
+				quote = null;
+				out += ch;
+			} else out += " ";
+			continue;
+		}
+		if (ch === "\\" && i + 1 < command.length) {
+			out += command.slice(i, i + 2);
+			i++;
+		} else if (ch === "$" && command[i + 1] === "'") {
+			quote = "$'";
+			out += "$'";
+			i++;
+		} else {
+			if (ch === "'" || ch === '"') quote = ch;
+			out += ch;
+		}
+	}
+	return out;
 }
 
 /**
@@ -479,13 +512,16 @@ export function stripRedirects(command: string): string {
 			continue;
 		}
 		const boundary = i === 0 || /[\s;&|()]/.test(command[i - 1]!);
-		const op = /^(?:\d*|&)(?:>>?|<)(?:&\d+|&-)?/.exec(command.slice(i))?.[0];
-		const isRedirect = op !== undefined && (ch === ">" || ch === "<" || (boundary && op.length > 1 && /[>&<]/.test(op.slice(1))));
+		// `[n]>`, `>>`, `>|`, `<`, `<>`, `>&` and `<&` (an fd, `-` or a word follows), `&>`, `&>>`. A `&` before
+		// anything else is a background separator: `a &< f b` runs `a` in the background, then `b` reads f.
+		let op = /^(?:\d*(?:>>|>\||>&|<&|<>|>|<)|&>>?)/.exec(command.slice(i))?.[0];
+		const isRedirect = op !== undefined && (ch === ">" || ch === "<" || (boundary && op.length > 1));
 		if (!isRedirect || op === undefined) {
 			out += ch;
 			i++;
 			continue;
 		}
+		if (op.endsWith("&")) op += /^(?:\d+|-)(?=[\s;&|()<>]|$)/.exec(command.slice(i + op.length))?.[0] ?? "";
 		i += op.length;
 		if (!/&(\d+|-)$/.test(op)) {
 			while (i < command.length && /[ \t]/.test(command[i]!)) i++;

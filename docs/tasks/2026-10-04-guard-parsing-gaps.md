@@ -1,6 +1,6 @@
 # Close the guard's known parsing gaps and the open doc nits
 
-Status: plan approved (2026-10-04)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: 5e58570840862a3be7808f1f14635f2c8ad21576
 Links: None
@@ -109,12 +109,12 @@ None. Tag v0.21.1 after merge in both repos.
 **Files:** Modify `lib/reviews.ts` (`stripRedirects`, `writes`) · Test `tests/reviews.test.ts`
 **Interfaces:** Produces the same `stripRedirects(command: string): string`
 
-- [ ] Add rows to "redirections are stripped outside quotes only": `git push >|log origin main` → `git push origin main`; `git push >& log origin main` → `git push origin main`; `true &</dev/null git push x` keeps the `&` (normalized `true & git push x`); `a >| b; git push origin main` keeps the `;`. Add a `checkGateFiles` row: `grep "a>b" <records>/x` is a read (allow), while `cat x > <records>/y` blocks
-- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL on the `>|` row (received `git push |log origin main`)
-- [ ] Implement: the operator regex accepts `>|` and `>&` followed by a word target; a leading `&` is an operator only before `>`; `writes()` scans the command with quoted text blanked
-- [ ] Run → PASS, then `npm test`
-- [ ] Copy `lib/reviews.ts` to `../src/extensions/lib/reviews.ts`, add the same rows to `../src/tests/reviews.test.ts`, run `npm test` there
-- [ ] Commit `fix(guard): read >|, >& and &< as the shell does` in both repos
+- [x] Add rows to "redirections are stripped outside quotes only": `git push >|log origin main` → `git push origin main`; `git push >& log origin main` → `git push origin main`; `true &</dev/null git push x` keeps the `&` (normalized `true & git push x`); `a >| b; git push origin main` keeps the `;`. Add a `checkGateFiles` row: `grep "a>b" <records>/x` is a read (allow), while `cat x > <records>/y` blocks
+- [x] Run `node --test tests/reviews.test.ts` → expect FAIL on the `>|` row (received `git push |log origin main`)
+- [x] Implement: the operator regex accepts `>|` and `>&` followed by a word target; a leading `&` is an operator only before `>`; `writes()` scans the command with quoted text blanked
+- [x] Run → PASS, then `npm test`
+- [x] Copy `lib/reviews.ts` to `../src/extensions/lib/reviews.ts`, add the same rows to `../src/tests/reviews.test.ts`, run `npm test` there
+- [x] Commit `fix(guard): read >|, >& and &< as the shell does` in both repos
 
 ### Task 2: push options that take a value
 
@@ -183,4 +183,5 @@ None. Tag v0.21.1 after merge in both repos.
 
 ## Progress
 
-None yet
+- Baseline 2026-10-04: eng-kit `npm test` 382 pass, pi 380 pass, typecheck clean in both. Drift: none (only the task file changed since Base).
+- Task 1: complete (both repos; `npm test` → eng-kit 384 pass, pi 382 pass; each new row checked against the HEAD version: all differ, fd duplications unchanged)
