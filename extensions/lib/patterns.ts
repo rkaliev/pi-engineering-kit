@@ -540,12 +540,12 @@ function exportedWords(words: string[]): string[] {
 	const head = words[i];
 	const args = words.slice(i + 1);
 	// Options end at the first operand, `--` or a lone `-`: a later `-n` is a name, and bash still exports the rest.
-	// `declare` and `typeset` also take `+` options (`+i` turns an attribute off). Their options end only at a
-	// name, so the words of a dropped redirection (`declare 2>/dev/null -x X=…`) don't hide a later `-x`.
+	// `declare` and `typeset` also take `+` options (`+i` turns an attribute off). Their options end only at an
+	// assignment, so the words of a dropped redirection (`declare 2>err -x X=…`) don't hide a later `-x`.
 	const ends =
 		head === "export"
 			? (t: string) => t === "--" || !/^-./.test(t)
-			: (t: string) => t === "--" || t === "-" || t === "+" || /^[A-Za-z_]\w*(=|$)/.test(t);
+			: (t: string) => t === "--" || t === "-" || t === "+" || /^[A-Za-z_]\w*=/.test(t);
 	const end = args.findIndex(ends);
 	const flags = end === -1 ? args : args.slice(0, end);
 	// `export -n` un-exports: nothing it names is exported.

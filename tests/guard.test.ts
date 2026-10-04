@@ -699,6 +699,8 @@ test("git environment variables that run a program or redirect git ask; harmless
 		"typeset +r -x GIT_SSH_COMMAND=x; git fetch",
 		"export - -n GIT_DIR=/x",
 		"declare 2>/dev/null -x GIT_DIR=../o/.git; git log",
+		"declare 2>err -x GIT_DIR=../o/.git; git log",
+		"typeset >log -x GIT_SSH_COMMAND=x; git fetch",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
