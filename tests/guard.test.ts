@@ -35,6 +35,10 @@ test("&> and &>> are redirections, not a background &: they don't hide what decl
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	assert.equal(action("npm test &>/dev/null && git status"), "allow");
+	for (const cmd of ["true \\>& export GIT_SSH_COMMAND=x ; git fetch", "true \\<& export GIT_DIR=/x; git status"]) {
+		assert.equal(action(cmd), "confirm", `an escaped > or < is a word, so the & after it still separates: ${cmd}`);
+	}
+	assert.equal(action("declare >|log -x GIT_DIR=/x; git status"), "confirm", ">| is a redirection, not a pipe");
 });
 
 test("blocks force push but allows --force-with-lease with confirmation", () => {

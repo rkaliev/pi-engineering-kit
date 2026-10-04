@@ -440,7 +440,7 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	const kit = "/kit";
 	const check = (command: string) => checkReviewerCommand(command, project, ["npm test", "npm run lint"], kit)?.action ?? "allow";
 	const tmp = join(tmpdir(), "r");
-	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git log --oneline -5", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", `git worktree add ${tmp} abc`, `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "git diff a..b | head -50", "cat f | grep x", "grep -rn foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd tests && git status", `node ${kit}/scripts/review-log.ts abc`]) {
+	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git log --oneline -5", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", "git merge-base --is-ancestor abc origin/main", `git worktree add ${tmp} abc`, `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "git diff a..b | head -50", "cat f | grep x", "grep -rn foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd tests && git status", `node ${kit}/scripts/review-log.ts abc`]) {
 		assert.equal(check(ok), "allow", ok);
 	}
 	const bad = [
@@ -543,6 +543,9 @@ test("gate files: >| and >&file are writes too", () => {
 		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", write);
 	}
 	assert.equal(checkGateFiles("cat .pi/guard.json >&2", project, project, ".pi/guard.json"), undefined, ">&2 is not a file");
+	for (const write of [`cat x >&${records}/h/a.json`, `jq . x >& ${records}/h/a.json`, `cat x &>${records}/h/a.json`, `head x >|${records}/h/a.json`]) {
+		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", `a read-only command that redirects into the records: ${write}`);
+	}
 });
 
 test("redirections read as the shell does: >| and >& take a word, &< is a background & then <", () => {
@@ -572,6 +575,37 @@ test("a push without a refspec lands where @{push} points", () => {
 	assert.equal(action(check("git push")), "block", "a remote whose name contains a slash");
 });
 
+test("the remote @{push} names decides what is already landed", () => {
+	const { dir, git, run, check } = repo();
+	const other = mkdtempSync(join(tmpdir(), "reviews-other-"));
+	run(other, "init", "-q", "--bare", "-b", "main");
+	git("remote", "add", "up", other);
+	git("push", "-q", "up", "HEAD:main");
+	git("fetch", "-q", "up");
+	git("branch", "-q", "--set-upstream-to=up/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "allow", "HEAD is already on up/main, where the push goes");
+	run(dir, "status");
+});
+
+test("a push without a refspec is checked against the remote branch, whatever the fetch refspec calls it", () => {
+	const { git, commit, check } = repo();
+	git("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/x/*");
+	git("fetch", "-q", "origin");
+	git("branch", "-q", "--set-upstream-to=origin/x/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "block", "feat/a's upstream is main on the remote, tracked as origin/x/main");
+	git("switch", "-q", "main");
+	commit({ "src/m.ts": "export const m = 1;\n" });
+	for (const command of ["git push", "git push origin", "git push --branches origin"]) assert.equal(action(check(command)), "block", `on the base: ${command}`);
+});
+
+test("&> needs no space before it: the words after it stay with the command", () => {
+	assert.equal(stripRedirects("git push origin feat&>log main").replace(/\s+/g, " ").trim(), "git push origin feat main");
+	const { check } = repo();
+	assert.equal(action(check("git push origin feat/a&>/dev/null HEAD:main")), "block");
+});
+
 test("gate files: cd options, a failed cd, $TMPDIR, pushd/popd and an unknown cd are followed", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");
@@ -581,6 +615,9 @@ test("gate files: cd options, a failed cd, $TMPDIR, pushd/popd and an unknown cd
 	}
 	assert.equal(check("pushd eng-kit/reviews && popd && rm x"), "allow", "popd returns to the start folder");
 	assert.equal(check('cd "$X" && rm x', records), "block", "an unknown cd keeps the last known folder");
+	for (const write of [`pushd ${records} && pushd / && pushd && rm x`, `pushd ${records} && pushd / && pushd +1 && rm x`, `cd ${records} && cd / && cd ~- && rm x`, `pushd ${records} && pushd / && cd "$X" && popd && rm x`, `cd ${records}/h; cd ""; echo x > y.json`, `cd ${records} && (cd /) && rm x`]) {
+		assert.equal(check(write, "/"), "block", `the shell may be in the records: ${write}`);
+	}
 });
 
 test("cd options, cd -, pushd and popd are followed to the checkout a landing runs in", () => {
@@ -593,8 +630,12 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 		assert.equal(check(moved), undefined, moved);
 	}
 	assert.equal(action(check(`pushd ${wt} && popd && git push origin HEAD:main`)), "block", "popd returns to the unreviewed main checkout");
-	for (const unknown of ["popd && git push origin HEAD:main", "cd - && git push origin HEAD:main"]) {
+	for (const unknown of ["popd && git push origin HEAD:main", "cd - && git push origin HEAD:main", "cd $TMPDIR && git push origin HEAD:main"]) {
 		assert.match(check(unknown)!.reason!, /can't tell which checkout/, unknown);
+	}
+	// A failed cd or popd leaves the shell's previous folder as it was, so `cd -` goes back to the unreviewed checkout.
+	for (const failed of [`cd ${dir}; cd ${wt}; cd nope; cd - && gh pr create --fill`, `cd ${dir}; cd ${wt}; popd; cd - && gh pr create --fill`]) {
+		assert.equal(action(check(failed)), "block", failed);
 	}
 });
 

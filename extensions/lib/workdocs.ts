@@ -145,7 +145,7 @@ export function landing(raw: string[]): Landing | undefined {
 		case "send-pack":
 		case "http-push": {
 			const operands = args.filter((t, i) => !t.startsWith("-") && !PUSH_VALUE_FLAGS.has(args[i - 1] ?? ""));
-			return { kind: "push", remote: operands[0], refspecs: operands.slice(1), all: args.includes("--all"), dir };
+			return { kind: "push", remote: operands[0], refspecs: operands.slice(1), all: args.includes("--all") || args.includes("--branches"), dir };
 		}
 		default:
 			return undefined;
