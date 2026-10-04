@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.18.2
+
+- **`export` options end at the first name.** `export GIT_DIR=/x -n` and `export -- -n GIT_DIR=/x` export `GIT_DIR` in bash, so they ask now; only an `-n` before the first name or `--` un-exports. A lone `-` ends the options too (`export - -n GIT_DIR=/x` asks). The same rule applies to `declare -x` and `typeset -x`, which also take `+` options (`declare +i -x GIT_DIR=/x` asks) and end their options only at `--`, a lone `-` or `+`, or an assignment (`declare 2>err -x GIT_DIR=/x` asks), so `declare GIT_DIR=x -x` (which does not export) stays quiet.
+- **The `db.mjs` test ignores an inherited `POSTGRES_MAJOR`.** It runs with a decoy value in the environment, so it passes only when the script passes the version from `.postgres-version`.
+
 ## 0.18.1
 
 - **Template `db.mjs` rejects inherited names.** `node scripts/db.mjs constructor` (or `toString`) now prints the usage line and exits non-zero instead of throwing; the action is checked with `Object.hasOwn`.

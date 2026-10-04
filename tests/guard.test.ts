@@ -693,6 +693,14 @@ test("git environment variables that run a program or redirect git ask; harmless
 		"export GIT_SSH_COMMAND=x; git fetch",
 		"GIT_DIR=../o/.git git log",
 		"EDITOR=vim git commit",
+		"export GIT_DIR=/x -n",
+		"export -- -n GIT_DIR=/x",
+		"declare +i -x GIT_DIR=/x",
+		"typeset +r -x GIT_SSH_COMMAND=x; git fetch",
+		"export - -n GIT_DIR=/x",
+		"declare 2>/dev/null -x GIT_DIR=../o/.git; git log",
+		"declare 2>err -x GIT_DIR=../o/.git; git log",
+		"typeset >log -x GIT_SSH_COMMAND=x; git fetch",
 	]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
@@ -706,6 +714,7 @@ test("git environment variables that run a program or redirect git ask; harmless
 		"export EDITOR=vim",
 		"export EDITOR",
 		"export -n GIT_DIR",
+		"declare GIT_DIR=x -x",
 	]) {
 		assert.equal(action(cmd), "allow", cmd);
 	}

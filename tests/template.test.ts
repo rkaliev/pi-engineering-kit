@@ -112,7 +112,8 @@ test("scripts/db.mjs runs docker compose with POSTGRES_MAJOR from .postgres-vers
 	const record = join(dir, "record.txt");
 	writeFileSync(join(dir, "bin", "docker"), `#!/bin/sh\nprintf '%s\\n' "$*" "POSTGRES_MAJOR=$POSTGRES_MAJOR" > "${record}"\n`);
 	chmodSync(join(dir, "bin", "docker"), 0o755);
-	const env = { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}` };
+	// An inherited POSTGRES_MAJOR must not reach docker: the value comes from .postgres-version.
+	const env = { ...process.env, POSTGRES_MAJOR: "99", PATH: `${join(dir, "bin")}:${process.env.PATH}` };
 	const run = (...args: string[]) => spawnSync(process.execPath, ["scripts/db.mjs", ...args], { cwd: dir, env, encoding: "utf8" });
 
 	writeFileSync(join(dir, ".postgres-version"), "18\n");
