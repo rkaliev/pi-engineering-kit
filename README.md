@@ -71,7 +71,7 @@ A typical loop:
 /plan docs/tasks/2026-09-25-refunds.md          # bite-sized TDD tasks in its ## Plan
 /implement docs/tasks/2026-09-25-refunds.md     # executes, verifies; moves what lasts to docs/, deletes the task file
 /review                                         # fresh-context review: Confirmed vs Assumptions
-/finish                                         # verify → merge / PR / keep / discard
+/finish                                         # verify → PR by default after a Yes; merge, keep or discard on your choice
 ```
 
 Small, bounded changes need no task file: they stay in chat, e.g. `/implement make search ignore case`.
@@ -82,7 +82,7 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 
 | Blocks | Asks first (blocked in non-interactive modes) |
 |---|---|
-| `--no-verify` (also inside groups and substitutions), `git commit -n` | `git push` other than your own work branch (below), publish and release commands |
+| `--no-verify` and its abbreviations down to `--no-veri` (also inside groups and substitutions), `git commit -n` | `git push` other than your own work branch (below), publish and release commands |
 | `push --force` / `-f` / `+ref` / `--mirror` | deploys, `terraform apply`, `kubectl apply`, `helm upgrade` |
 | recursive `rm` outside the project (`/`, `~`, `$HOME`, `..`, other absolute paths) | DB migrations and rollbacks, `prisma db execute`, `DROP` / `TRUNCATE` |
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`/`doas`, `curl … \| sh` |

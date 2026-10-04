@@ -177,9 +177,9 @@ None. Tag v0.21.1 after merge in both repos.
 ### Task 8: docs, version, changelog
 
 **Files:** those in Post-implementation
-- [ ] Apply every Post-implementation item; bump to 0.21.1 with a `## 0.21.1` CHANGELOG entry in both repos
-- [ ] Run `npm test`, `npm run typecheck`, `node .github/release.ts check` in both repos → all green; the kit verify script
-- [ ] Commit `docs: guard parsing gaps and doc nits (v0.21.1)`; then move what lasts into docs, delete the task file, and finish (verify → review last)
+- [x] Apply every Post-implementation item; bump to 0.21.1 with a `## 0.21.1` CHANGELOG entry in both repos
+- [x] Run `npm test`, `npm run typecheck`, `node .github/release.ts check` in both repos → all green; the kit verify script
+- [x] Commit `docs: guard parsing gaps and doc nits (v0.21.1)`; then move what lasts into docs, delete the task file, and finish (verify → review last)
 
 ## Progress
 
@@ -196,3 +196,7 @@ None. Tag v0.21.1 after merge in both repos.
 - Ruling: test-hygiene VERSION 4 → 5 with its two version-pin tests, as abfd954 did for 3 → 4 — kit-init offers projects the newer copy only when the version rises — cost if wrong: one extra replace offer.
 - Task 7: complete (both repos; prompt and SKILL step 2 carry `{REMOTE_BASE}`; lint-skills green; `npm test` → eng-kit 394 pass, pi 392 pass)
 - Ruling: the reviewer-allowlist row `git merge-base --is-ancestor abc origin/main` (eng-kit only, pi has no reviewer allowlist) passes without a code change — it pins the shell contract the new prompt rule relies on, not new behaviour — none.
+- Task 8: complete (docs in both editions and languages, CHANGELOG 0.21.1, versions; `npm test` → eng-kit 394 pass, pi 392 pass; typecheck clean; `release.ts check` → "release metadata ok: 0.21.1" in both; `claude plugin validate` passed)
+- Ruling: the README guard table still names PR/MR merges in both columns (the task-file rule denies them, the review row now names its own commands, and the ask cell says "even after a Yes") — criterion 10's "lists once" would drop a real deny — no cost: no contradiction is left.
+- Ruling: the `allow`/implementer note is Claude-only — pi has no implementer push rule, so nothing differs there — none.
+- Ruling: the kit verify script is not used: this workspace is not a git repo and has no verification commands; each repo's `npm test`, typecheck and release check are the evidence.
