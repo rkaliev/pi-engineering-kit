@@ -1,8 +1,8 @@
 # Close the guard's known parsing gaps and the open doc nits
 
-Status: design approved (2026-10-04)
+Status: plan approved (2026-10-04)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
-Base: e2631a2d9ea5af2b8896d5b35b4131fbb9969308
+Base: 5e58570840862a3be7808f1f14635f2c8ad21576
 Links: None
 
 <!-- One file per piece of work, standing in for a tracker issue: the sections before Plan are its description. Each section answers one question and never repeats another. Keep every heading; write "None" instead of deleting a section. -->
@@ -82,7 +82,104 @@ None. Tag v0.21.1 after merge in both repos.
 
 ## Plan
 
-None yet
+> Execute with the executing-plans skill. Only this section uses `- [ ]` checkboxes.
+
+**Goal:** close the 0.21.0 guard parsing gaps and doc nits from criteria 1–10 in both editions, released as 0.21.1.
+**Architecture:** all parsing fixes go into the existing functions in `lib/reviews.ts`, `lib/workdocs.ts`, `lib/patterns.ts` and `scripts/test-hygiene.ts` (eng-kit paths). The pi edition gets byte-identical copies of the shared files (`src/extensions/lib/{reviews,workdocs}.ts`, `src/scripts/test-hygiene.ts`) and the same edit in its own `src/extensions/lib/patterns.ts`; each test row is added to both editions' `tests/` files.
+**Stack / constraints:** Node ≥22.18 running `.ts` directly, `node:test`, no new dependencies. A guard parser ends options only at the narrowest safe token (0.18.2). Commits use the repo-local identity, with no trailers.
+**Verification:** in each repo `npm test`, `npm run typecheck`, `node .github/release.ts check`; the kit verify script.
+
+### Review focus
+1. A new redirect operator swallowing a real separator: `a >| b; git push origin main` must still split at `;`.
+2. `@{push}` when the branch has no upstream, or the remote's name contains `/`: falls back to today's rule, never throws.
+3. A `cd` the tracker can't follow (`cd "$X"`) followed by a write: `checkGateFiles` keeps the last known folder plus the named-path check; `checkReview` fails closed.
+4. `popd` with an empty stack, and `cd -` before any `cd`: the folder becomes unknown in `checkReview`.
+5. `--no-ver` (ambiguous in git) and `--no-verify-foo` stay unaffected; `--no-veri` and `--no-verif` block.
+
+### Post-implementation
+- `docs/ARCHITECTURE.md` + `.ru.md` §7 (both editions): `>|`, `>&`, push options, `@{push}`, the `cd` forms, the `--no-verify` abbreviations; residual: `remote.<name>.push` refspecs.
+- README (both): the guard table lists PR/MR merges once; an `allow` branch pattern also quiets an implementer's push (Claude) or a subagent's push (pi).
+- GETTING-STARTED (both), WALKTHROUGH (Claude): `/finish` reads "PR by default after a Yes; merge, keep or discard on your choice".
+- `skills/git-workflow/SKILL.md` step 3.1 (both): the `--ff-only` sentence.
+- CHANGELOG `## 0.21.1` and the version in `package.json` (+ `.claude-plugin/plugin.json` in eng-kit), both repos.
+- Private `docs/FRAMEWORK-SOURCES.ru.md`: new §11.26; the memory file's open-minor lists.
+
+### Task 1: redirections in the review gate
+
+**Files:** Modify `lib/reviews.ts` (`stripRedirects`, `writes`) · Test `tests/reviews.test.ts`
+**Interfaces:** Produces the same `stripRedirects(command: string): string`
+
+- [ ] Add rows to "redirections are stripped outside quotes only": `git push >|log origin main` → `git push origin main`; `git push >& log origin main` → `git push origin main`; `true &</dev/null git push x` keeps the `&` (normalized `true & git push x`); `a >| b; git push origin main` keeps the `;`. Add a `checkGateFiles` row: `grep "a>b" <records>/x` is a read (allow), while `cat x > <records>/y` blocks
+- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL on the `>|` row (received `git push |log origin main`)
+- [ ] Implement: the operator regex accepts `>|` and `>&` followed by a word target; a leading `&` is an operator only before `>`; `writes()` scans the command with quoted text blanked
+- [ ] Run → PASS, then `npm test`
+- [ ] Copy `lib/reviews.ts` to `../src/extensions/lib/reviews.ts`, add the same rows to `../src/tests/reviews.test.ts`, run `npm test` there
+- [ ] Commit `fix(guard): read >|, >& and &< as the shell does` in both repos
+
+### Task 2: push options that take a value
+
+**Files:** Modify `lib/workdocs.ts` (`landing`) · Test `tests/workdocs.test.ts`
+
+- [ ] Rows: `git push -o ci.skip origin` → `{remote: "origin", refspecs: []}`; same for `--push-option x`, `--repo x`, `--receive-pack x`, `--exec x`; `--push-option=x origin main` → remote `origin`, refspecs `["main"]`
+- [ ] Run `node --test tests/workdocs.test.ts` → expect FAIL: remote `ci.skip`
+- [ ] Implement: a `PUSH_VALUE_FLAGS` set beside `MERGE_VALUE_FLAGS`; positional args skip the token after one of them
+- [ ] Run → PASS, full suite; copy `lib/workdocs.ts` to pi, same rows, pi suite
+- [ ] Commit `fix(guard): push options with a separate value don't name the remote`
+
+### Task 3: push without a refspec goes where git says
+
+**Files:** Modify `lib/reviews.ts` (`checkReview`, `targets`, new `pushDestination`) · Test `tests/reviews.test.ts`
+**Interfaces:** Produces `pushDestination(where: string): { remote: string; branch: string } | undefined` (reads `git rev-parse --abbrev-ref --symbolic-full-name @{push}`, splits the longest prefix that is a name in `git remote`)
+
+- [ ] Test "a push without a refspec lands where @{push} points": temp repo with remote `origin`, branch `feat/x` with upstream `origin/main` and `push.default=upstream`, an unreviewed commit; `git push` → block; `git push origin` → block; with `push.default=simple` → allow (no base landing); a branch with no upstream → today's rule
+- [ ] Run → expect FAIL: `git push` allowed (received "allow", expected "block")
+- [ ] Implement: when a push has no refspecs and no `--all`, and its remote is absent or equals `pushDestination(where).remote`, treat it as refspec `HEAD:<branch>` on that remote; the remote also replaces the `origin` default in `uncovered`
+- [ ] Run → PASS, full suite; copy to pi, same test, pi suite
+- [ ] Commit `fix(guard): a push without a refspec is checked where git pushes it`
+
+### Task 4: one `cd` tracker for both checks
+
+**Files:** Modify `lib/reviews.ts` (new `changeDir`, used by `checkReview` and `checkGateFiles`; `isCd`, `follow` folded in) · Test `tests/reviews.test.ts`
+**Interfaces:** Produces `type DirState = { dirs: string[]; prev: string[]; stack: string[][] }` (`dirs` empty = unknown) and `changeDir(state: DirState, tokens: string[], mustExist: boolean): DirState | undefined` (undefined: not a cd/pushd/popd)
+
+- [ ] Rows in "shell writes to the gate's own files": from the temp dir, `cd nope; cd eng-kit/reviews; rm x`, `cd -- eng-kit/reviews; rm x`, `cd -P eng-kit/reviews; rm x`, `cd $TMPDIR/eng-kit/reviews && rm x`, `cd ${TMPDIR}/eng-kit/reviews && rm x` → block; `pushd eng-kit/reviews && popd && rm x` → allow; `cd "$X" && rm x` from inside the records → block
+- [ ] Rows in "cd and git -C are followed": `cd -P <worktree> && git push origin HEAD:main` and `cd -- <worktree> && …` check the worktree; `pushd <worktree> && popd && git push origin main` checks the start folder; `popd` with an empty stack and `cd -` first → ask (unknown)
+- [ ] Run → expect FAIL on `cd nope; cd eng-kit/reviews; rm x` (received allow)
+- [ ] Implement `changeDir`: options `-L -P -e -@` and `--` skipped; `-` swaps with `prev`; `pushd` pushes, `popd` pops; `$TMPDIR`, `${TMPDIR}`, `$HOME`, `${HOME}` and `~` expand; any other `$`, backtick or `(` → unknown. `mustExist` (checkReview) drops a missing folder → unknown; without it (checkGateFiles) a missing folder keeps the old candidates too. Subshell restore in `checkReview` saves and restores the whole state
+- [ ] Run → PASS, full suite; copy to pi, same rows, pi suite
+- [ ] Commit `fix(guard): follow cd options, cd -, pushd/popd and $TMPDIR`
+
+### Task 5: command guard: hook-bypass abbreviations and `&>`
+
+**Files:** Modify `lib/patterns.ts` and `../src/extensions/lib/patterns.ts` (`checkSegment`, `tokenize`) · Test `tests/guard.test.ts` in both
+- [ ] Rows: `git commit --no-veri -m x`, `git commit --no-verif -m x`, `git push --no-veri origin feat/x`, `(git merge --no-veri x)` → block; `git commit --no-ver -m x` and `git log --no-verify-foo` → not blocked by this rule; `declare &>/dev/null -x GIT_DIR=/x; git status`, `declare &>>log -x GIT_DIR=/x; git status`, `declare 2>&1 -x GIT_DIR=/x; git status` → confirm; `npm test &>/dev/null && git status` → allow
+- [ ] Run `node --test tests/guard.test.ts` → expect FAIL: `--no-veri` allowed
+- [ ] Implement: the check matches tokens and words against `/^--no-veri(fy?)?$/`; in `tokenize`, an `&` right after `<`/`>` or right before `>` is part of the redirection, not a separator
+- [ ] Run → PASS, full suite, both repos
+- [ ] Commit `fix(guard): block hook-bypass abbreviations; &> is a redirection` in both repos
+
+### Task 6: Vitest `context.skip` keeps its reason
+
+**Files:** Modify `scripts/test-hygiene.ts` (`skipReason`) · Test `tests/test-hygiene.test.ts`
+- [ ] Rows: `context.skip("platform: no symlinks on windows")` inside a test → no violation; `context.skip("needs db")` → `skip-without-reason`; Mocha `context.skip("suite", () => {})` → `skip-without-reason`; `it.skip("name", fn) // #12` → none
+- [ ] Run → expect FAIL: the platform row reports `skip-without-reason`
+- [ ] Implement: the JS name strip applies only when a `,` follows the first string
+- [ ] Run → PASS, full suite; copy the script to `../src/scripts/test-hygiene.ts`, same rows, pi suite
+- [ ] Commit `fix(test-hygiene): a one-argument context.skip keeps its reason`
+
+### Task 7: reviewer checks that BASE is on the remote base
+
+**Files:** Modify `skills/requesting-code-review/reviewer-prompt.md`, `skills/requesting-code-review/SKILL.md` (both editions)
+- [ ] Range section: `Remote base: {REMOTE_BASE}`; the repeat-round rule: before setting reports aside when {BASE} is {RULES_BASE}, run `git merge-base --is-ancestor {BASE} {REMOTE_BASE}`; if it fails, say Inconclusive. SKILL step 2 lists `{REMOTE_BASE}` = `origin/<base-branch>`
+- [ ] Run `node --test tests/lint-skills.test.ts` and the reviewer-allowlist test (`git merge-base --is-ancestor a b` allowed) → PASS in both repos
+- [ ] Commit `fix(review): the reviewer checks that BASE is on the remote base`
+
+### Task 8: docs, version, changelog
+
+**Files:** those in Post-implementation
+- [ ] Apply every Post-implementation item; bump to 0.21.1 with a `## 0.21.1` CHANGELOG entry in both repos
+- [ ] Run `npm test`, `npm run typecheck`, `node .github/release.ts check` in both repos → all green; the kit verify script
+- [ ] Commit `docs: guard parsing gaps and doc nits (v0.21.1)`; then move what lasts into docs, delete the task file, and finish (verify → review last)
 
 ## Progress
 
