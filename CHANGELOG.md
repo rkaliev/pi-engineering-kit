@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+- **Read a skill before naming it.** Agents were seen announcing "Using test-driven-development" without reading the skill and then working from memory (taking a missing-module error as the failing test, which test-driven-development rules out). `using-skills` now says to read the skill's `SKILL.md` first, then announce it, and that naming a skill without reading it doesn't count.
+- One tool line in `using-skills` is shorter so the new rule fits the skill's word budget.
+- This package has no 0.20.0.
+
 ## 0.19.0
 
 - **Feature flags and experiments.** New `backend-services/references/feature-flags.md`: the code talks to flags through OpenFeature and the provider is a stack choice; a typed registry in the repo with a safe default and owner per flag, and a removal date for release and experiment flags; evaluation never throws (in process from a synced rule set, the last good set when the sync fails, the defaults when none was loaded or a flag can't be evaluated); a closed context without personal data; deterministic bucketing pinned by a test; server-side evaluation handed to the client; audited changes; exposure-based experiments with a sample-ratio check; tests for both branches and the defaults. The TS profile gets a Flags row, and the reviewer checklist a line for new flags.

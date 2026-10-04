@@ -9,7 +9,7 @@ If you were dispatched as a subagent for one specific task, skip this skill and 
 
 ## The rule
 
-Before you respond or act, including before clarifying questions or exploring code, check the available skills. If one plausibly applies, `read` its `SKILL.md` and follow it. Say which one: "Using <skill> to <purpose>". If it turns out not to fit, drop it and say so.
+Before you respond or act, including before clarifying questions or exploring code, check the available skills. If one plausibly applies, `read` its `SKILL.md` first, then say which one: "Using <skill> to <purpose>", and follow it. Naming a skill without reading it doesn't count: you would be working from memory of an older version. If it turns out not to fit, drop it and say so.
 
 Precedence: the user's direct instructions, then project files (AGENTS.md, CLAUDE.md), then skills, then your defaults. Process skills come before platform and domain skills. The process skill sets the approach; platform and domain skills supply the specifics.
 
@@ -52,7 +52,7 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 
 - Load a skill with `read` on its `SKILL.md`. The user can also type `/skill:<name>`.
 - Built-in tools: `read`, `write`, `edit`, `bash` (and optionally `grep`, `find`, `ls`).
-- `run_verification` runs the project's checks. Prefer it for completion evidence.
+- `run_verification` runs the project's checks; prefer it as evidence.
 - **Delegation:** if a `subagent` tool is available, use it where a skill asks for a subagent. If only `subagents_enable` is visible, call it first; a skill that calls for delegation authorizes it. If neither exists, do the work inline, and never invent a tool call.
 - **Task tracking:** use a todo tool if one exists. Otherwise use the checkboxes in the task file's Plan.
 
