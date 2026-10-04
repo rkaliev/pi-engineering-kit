@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Use when creating a new skill, editing an existing skill or prompt template, or checking that a skill actually changes agent behavior
+description: Use when creating a new skill or subagent, editing an existing skill, agent or prompt template, or checking that a skill actually changes agent behavior
 ---
 
 # Writing skills
@@ -40,6 +40,10 @@ Add `disable-model-invocation: true` for skills that should run only through `/s
   - When they produce the wrong shape, use a positive template or example, not prohibitions (prohibitions can backfire).
 - Give one excellent example rather than many mediocre ones. Refer to other skills by name ("REQUIRED: test-driven-development"), not by force-loading their files.
 - Relative paths resolve against the skill directory.
+
+## Subagents
+
+An agent is a role with its own context, tools and report; write one when isolation is the point (review, search, narrower permissions). When to choose one, its format, the prompt rules and how to test it: `references/agents.md`.
 
 ## Test it like code
 

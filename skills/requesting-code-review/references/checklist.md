@@ -68,6 +68,7 @@ Check the diff against `../../test-driven-development/references/test-standard.m
 - No speculative abstraction, unused options, or "framework" for one call site (YAGNI).
 - Public interface changes are backward compatible, or the migration is explicit.
 - Schema or data changes: a migration exists, can be reversed or rolled forward safely, and is safe on existing data.
+- A new feature flag has a typed definition, a safe default, an owner and a removal date, and both of its branches are tested (backend-services, feature flags).
 
 ## AI-typical smells
 - Placeholder code in production paths: empty stubs, `throw new Error("not implemented")`, `TODO` standing in for logic.

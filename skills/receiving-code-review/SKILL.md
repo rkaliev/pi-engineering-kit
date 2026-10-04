@@ -30,6 +30,15 @@ Declining a comment needs a concrete reason why the current approach is correct:
 
 If a conflict is architectural, involve the user. If you can't verify a claim, say what you'd need.
 
+## Make it stick
+
+When a finding or a correction from the user shows a gap that will recur (not a one-off slip), propose closing it once, at the strongest level that fits:
+1. a mechanical check: a lint rule, a type, a test, a guard rule or a CI job;
+2. a rule in the project's agent manifest (CLAUDE.md, AGENTS.md) or a path-scoped rule;
+3. a gap in the kit itself: a follow-up to change the skill with writing-skills (RED, then GREEN).
+
+Propose it with the evidence; the user decides. Don't add a rule for what a check already enforces. Proposals not settled during the work are listed with the task's Follow-ups at the finish.
+
 ## Tone
 
 - No performative agreement: no "You're absolutely right!", "Great catch!" or thanks.

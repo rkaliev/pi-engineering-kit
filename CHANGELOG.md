@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.0
+
+- **Feature flags and experiments.** New `backend-services/references/feature-flags.md`: the code talks to flags through OpenFeature and the provider is a stack choice; a typed registry in the repo with a safe default, owner and removal date per flag; evaluation never throws (timeout, defaults, last good set); a closed context without personal data; deterministic bucketing pinned by a test; server-side evaluation handed to the client; audited changes; exposure-based experiments with a sample-ratio check; tests for both branches and the defaults. The TS profile gets a Flags row, and the reviewer checklist a line for new flags.
+- **API contracts.** New `backend-services/references/api-contracts.md`: an internal typed RPC is a contract for the open tabs still running the old client (deprecate, then remove a release later), machine-readable error codes, resource checks after input validation with a cross-tenant test.
+- **Server cache.** `state-and-data.md` gets a section: one place for freshness and retry, no retry on 4xx, keys from one shared query-options function, invalidate after every mutation, a query client per server-rendered request, one error path, dev tools in development only.
+- **Test helpers.** `test-standard.md`: cleanup reports every failure together, setup checks that the database is migrated and seeded, provider fakes are chosen by configuration and refused at startup in production, several implementations of one contract share a parametrized suite, personas live in one module with a seed check.
+- **Writing subagents.** `writing-skills` now covers agents: when an agent beats a skill, the file format, prompt rules (one responsibility, least privilege, model by stakes, self-contained input, a fixed report) and how to test one, in `references/agents.md`.
+- **Make it stick.** `receiving-code-review`: a finding or correction that will recur becomes a proposed check or rule, the strongest level first (a mechanical check, a project rule, a kit change through writing-skills); the user decides, and open proposals join the task's Follow-ups.
+
 ## 0.18.2
 
 - **`export` options end at the first name.** `export GIT_DIR=/x -n` and `export -- -n GIT_DIR=/x` export `GIT_DIR` in bash, so they ask now; only an `-n` before the first name or `--` un-exports. A lone `-` ends the options too (`export - -n GIT_DIR=/x` asks). The same rule applies to `declare -x` and `typeset -x`, which also take `+` options (`declare +i -x GIT_DIR=/x` asks) and end their options only at `--`, a lone `-` or `+`, or an assignment (`declare 2>err -x GIT_DIR=/x` asks), so `declare GIT_DIR=x -x` (which does not export) stays quiet.
