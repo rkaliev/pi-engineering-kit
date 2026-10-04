@@ -638,6 +638,20 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	assert.equal(check(`cd ${project} && cd .pi 2>/dev/null && sed -i s/a/b/ guard.json`, "/"), "confirm", "a redirection on cd keeps its folder");
 	assert.equal(check(`cd $HOME && cd ${relative(homedir(), project)}/.pi && sed -i s/a/b/ guard.json`, "/"), "confirm", "$HOME expands");
 	assert.equal(check("cd src && rm x"), "allow", "a folder outside the records");
+	assert.equal(check("cd src 2>/dev/null && npm test"), "allow", "a harmless redirection keeps the move plain");
+	const unfollowed = [
+		"{ cd eng-kit/reviews; rm x; }",
+		"if true; then cd eng-kit/reviews; fi; rm x",
+		'cd "$TMPDIR"eng-kit/reviews && cp /tmp/r.json r.json',
+		"cd a b c d e f g h 2>/dev/null; rm x",
+		"cd $X && npm test",
+	];
+	for (const command of unfollowed) assert.equal(check(command, "/"), "confirm", `a move the guard doesn't follow asks before a write: ${command}`);
+	const nine = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((d) => `cd ${d}`).join("; ");
+	assert.notEqual(check(`${nine}; cd ${records}/h && cp /tmp/r.json r.json`, "/"), "allow", "past the folder cap nothing is hidden");
+	assert.equal(check(`popd > ${records}/h/x.json`, "/"), "block", "a redirection on a move is checked");
+	assert.equal(check(`cd ${project} && cd . > .pi/guard.json`, "/"), "confirm", "a redirection on a move is checked");
+	assert.equal(check(`cd ${tmpdir()} && cd -- -/../eng-kit/reviews/h && cp /tmp/r.json r.json`, "/"), "block", "after -- a dash word is a folder");
 });
 
 test("cd options, cd -, pushd and popd are followed to the checkout a landing runs in", () => {
@@ -661,6 +675,23 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 		assert.equal(action(check(inside, OPTIONS, wt)), "block", `still inside the subshell: ${inside}`);
 	}
 	assert.match(check("cd -P src/.. && git push origin HEAD:main")!.reason!, /can't tell which checkout/, "cd -P with .. resolves physically");
+	const unfollowed = [
+		`true || cd ${wt}; git push origin HEAD:main`,
+		`cd ${wt} | cat; git push origin HEAD:main`,
+		`cd ${wt} & git push origin HEAD:main`,
+		`cd ${wt} -P && git push origin HEAD:main`,
+		`cd -e ${wt} && git push origin HEAD:main`,
+		`{ cd ${wt}; } && git push origin HEAD:main`,
+		`builtin cd ${wt} && git push origin HEAD:main`,
+		`if true; then cd ${wt}; fi; git push origin HEAD:main`,
+		`cd ${wt} # the worktree\ngit push origin HEAD:main`,
+	];
+	for (const command of unfollowed) assert.match(check(command)!.reason!, /can't tell which checkout/, command);
+	for (const inside of [`(cd ${dir} && echo "done)" && gh pr create --fill)`, `(cd ${dir} && echo x\\) && gh pr create --fill)`, `(cd ${dir} && echo ')' && gh pr create --fill)`]) {
+		assert.equal(action(check(inside, OPTIONS, wt)), "block", `a parenthesis in text doesn't close the subshell: ${inside}`);
+	}
+	assert.equal(action(check(`(cd ${wt} && git push -u origin feat/b) && gh pr create --fill`)), "block", "a landing inside ( … ) ends the subshell too");
+	assert.equal(check(`cd ${wt} 2>/dev/null && git push origin HEAD:main`), undefined, "a harmless redirection keeps the move plain");
 });
 
 test("gate files: a > inside quotes is text, not a write", () => {

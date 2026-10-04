@@ -146,14 +146,14 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * push to that branch updates the PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
-	const shell = new Subshells(cwd);
-	const segments = splitSegments(tokenize(stripRedirects(command)));
-	segments.forEach((raw, index) => {
-		shell.open(raw);
+	const shell = new Subshells(cwd, command);
+	const segments = segmentsOf(tokenize(stripRedirects(command)));
+	segments.forEach(({ raw, alone }, index) => {
+		shell.enter(raw);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
 		const dir = shell.dir;
-		if (!shell.move(raw) && l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
+		if (shell.move(raw, alone) === undefined && l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
 			// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
 			const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
 			if (branch) {
@@ -163,7 +163,6 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 				writeJson(projectDir, PENDING_FILE, pending, root);
 			}
 		}
-		shell.close(raw);
 	});
 }
 
@@ -258,15 +257,14 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
-	const shell = new Subshells(cwd);
+	const shell = new Subshells(cwd, command);
 	let unsafeBefore = false;
-	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
-		shell.open(raw);
+	for (const { raw, alone } of segmentsOf(tokenize(stripRedirects(command)))) {
+		shell.enter(raw);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
 		if (!l || l.kind === "commit") {
-			if (!shell.move(raw) && !isSafe(tokens, options.verify)) unsafeBefore = true;
-			shell.close(raw);
+			if (shell.move(raw, alone) !== "plain" && !isSafe(tokens, options.verify)) unsafeBefore = true;
 			continue;
 		}
 		const dir = shell.dir;
@@ -432,10 +430,12 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
-	const dirs = reachable(command, cwd);
+	const { dirs, unknown } = reachable(command, cwd);
 	for (const raw of splitSegments(tokenize(command))) {
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		if (CD.has(tokens[0] ?? "")) continue;
+		// A plain move writes nothing; any other move segment (a redirection on it, say) is checked like a command.
+		const move = parseMove(tokens);
+		if (move !== undefined && move !== "other") continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
@@ -447,33 +447,100 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
 			return { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
+		if (unknown) {
+			return { action: "confirm", reason: "This command changes folders in a form the guard doesn't follow (a variable, several operands, a comment, a move inside a group, pipeline or condition), so it can't tell whether a later step writes into the review records. Use a plain `cd <folder>`, or confirm." };
+		}
 	}
 	return undefined;
 }
 
-const CD = new Set(["cd", "pushd", "popd"]);
-
 /**
  * Every folder the shell may be in during the command: the start folder and any folder a `cd`, `pushd` or
- * `popd` operand may reach from any of them. The set only grows, so a failed move, a redirection on the move,
- * a subshell or a stack the guard can't follow never hides a folder; `cd -`, `~-` and `popd` return to one
- * already in it. A write may create a folder first, so a folder need not exist.
+ * `popd` may reach from any of them. The set only grows, so a failed move or a subshell never hides a folder;
+ * `cd -`, `~-` and `popd` return to one already in it, and a write may create a folder first, so a folder need
+ * not exist. `unknown` when a move isn't plain (see parseMove) or the set would pass 256 folders: then any write
+ * asks.
  */
-function reachable(command: string, cwd: string): string[] {
+function reachable(command: string, cwd: string): { dirs: string[]; unknown: boolean } {
 	const dirs = new Set([cwd]);
-	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
-		const [cmd, ...args] = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		if (!CD.has(cmd ?? "")) continue;
-		if (cmd === "cd" && args.length === 0) dirs.add(homedir());
+	let unknown = false;
+	for (const { raw, alone } of segmentsOf(tokenize(quiet(command)))) {
+		const words = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		const move = parseMove(words);
+		if (move === undefined) continue;
+		const plain = move !== "other" && alone && !(move.physical && move.arg?.split("/").includes(".."));
+		if (!plain) unknown = true;
+		// A move the guard doesn't follow still adds its literal words: more candidates only block more.
+		const args = move === "other" ? words.slice(words.findIndex((w) => MOVES.has(w)) + 1) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
 		for (const arg of args) {
-			if (arg.startsWith("-") || /^\+\d+$/.test(arg)) continue;
+			if (arg === "-" || arg === "") continue;
 			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true);
-			if (path === undefined) continue;
-			for (const dir of [...dirs]) if (dirs.size < 256) dirs.add(resolve(dir, path));
+			if (path === undefined) {
+				unknown = true;
+				continue;
+			}
+			for (const dir of isAbsolute(path) ? [cwd] : [...dirs]) {
+				if (dirs.size >= 256) unknown = true;
+				else dirs.add(resolve(dir, path));
+			}
 		}
 	}
-	return [...dirs];
+	return { dirs: [...dirs], unknown };
 }
+
+/** The command without redirections that write nothing (`2>/dev/null`, `>/dev/null`, `&>/dev/null`, `2>&1`, `>&-`), so they don't make a move look unusual. */
+function quiet(command: string): string {
+	return command.replace(/(^|[\s;&|()])(?:\d*>&(?:\d+|-)|&>>?\/dev\/null|\d*>>?\/dev\/null)(?=[\s;&|()]|$)/g, "$1");
+}
+
+const MOVES = new Set(["cd", "pushd", "popd"]);
+
+/** A move the guard follows exactly. */
+type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
+
+/**
+ * The move a segment's words make: undefined when they name no `cd`, `pushd` or `popd`; "other" for any form
+ * the guard doesn't follow exactly. A plain move is the segment's first word with at most `-L`/`-P` (cd only) and
+ * `--`, then one folder for `pushd`, none for `popd`, at most one for `cd`, written without a glob or brace.
+ */
+function parseMove(words: string[]): Move | "other" | undefined {
+	const at = words.findIndex((w) => MOVES.has(w));
+	if (at === -1) return undefined;
+	if (at > 0) return "other";
+	const cmd = words[0] as Move["cmd"];
+	let i = 1;
+	let physical = false;
+	while (cmd === "cd" && /^-[LP]+$/.test(words[i] ?? "")) physical ||= words[i++]!.includes("P");
+	const dashes = words[i] === "--";
+	if (dashes) i++;
+	const operands = words.slice(i);
+	const arg = operands[0];
+	if (operands.length > 1 || (arg !== undefined && /[*?[{]/.test(arg))) return "other";
+	// Without `--`, a word that starts with a dash is an option the guard doesn't follow (`-e`, `-@`, `+1`).
+	if (arg !== undefined && !dashes && arg !== "-" && /^[-+]/.test(arg)) return "other";
+	if (cmd === "popd" ? arg !== undefined : cmd === "pushd" && arg === undefined) return "other";
+	return { cmd, arg, physical };
+}
+
+/** Segments with whether a move in them runs in the current shell: not in a pipeline, after `||` or in the background. */
+function segmentsOf(tokens: string[]): Array<{ raw: string[]; alone: boolean }> {
+	const out: Array<{ raw: string[]; before: string; after: string }> = [];
+	let raw: string[] = [];
+	let before = "";
+	for (const token of tokens) {
+		if (!SEPARATORS.has(token)) {
+			raw.push(token);
+			continue;
+		}
+		if (raw.length > 0) out.push({ raw, before, after: token });
+		raw = [];
+		before = token;
+	}
+	if (raw.length > 0) out.push({ raw, before, after: "" });
+	return out.map(({ raw, before, after }) => ({ raw, alone: before !== "||" && before !== "|" && after !== "|" && after !== "&" }));
+}
+
+const SEPARATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
  * The command without its redirections (`2>&1`, `> out.log`, `&>/dev/null`, `< in`), which don't change what
@@ -544,44 +611,60 @@ export function stripRedirects(command: string): string {
 }
 
 /**
- * The folder a command runs in, segment by segment, for the review gate. A `cd` inside one `( … )` ends with it.
- * A nested subshell, or a closing `)` the guard can't tell from text (`$(…)`, a quoted parenthesis), makes the
- * folder unknown for the rest of the command, so what follows fails closed.
+ * The folder a command runs in, segment by segment, for the review gate. A `cd` inside one `( … )` ends with it,
+ * once the segment that closes it has run. A nested subshell, a closing `)` inside `$(…)`, or any parenthesis in
+ * quotes or after a backslash (the tokens can't tell it from a real one) makes the folder unknown for the rest of
+ * the command, so what follows fails closed.
  */
 class Subshells {
 	private state: DirState;
 	private outside: DirState;
 	private inside = false;
+	private closing = false;
 	private lost = false;
+	private readonly textParens: boolean;
 
-	constructor(cwd: string) {
+	constructor(cwd: string, command: string) {
 		this.state = this.outside = at(cwd);
+		const count = (s: string) => s.match(/[()]/g)?.length ?? 0;
+		this.textParens = count(command) !== count(blankQuoted(command).replace(/\\./g, ""));
 	}
 
 	get dir(): string | undefined {
 		return this.lost ? undefined : here(this.state);
 	}
 
-	open(raw: string[]): void {
-		if (!raw[0]?.startsWith("(")) return;
-		if (this.inside || raw[0].startsWith("((")) this.lost = true;
-		this.inside = true;
-		this.outside = this.state;
-	}
-
-	/** Follows a `cd`, `pushd` or `popd`; false for any other command. */
-	move(raw: string[]): boolean {
-		const moved = changeDir(this.state, raw);
-		if (moved) this.state = moved;
-		return moved !== undefined;
-	}
-
-	close(raw: string[]): void {
+	/** Starts a segment: ends the subshell the previous segment closed, opens one this segment starts. */
+	enter(raw: string[]): void {
+		if (this.closing) {
+			this.closing = false;
+			this.inside = false;
+			this.state = this.outside;
+		}
+		if (raw[0]?.startsWith("(")) {
+			if (this.inside || raw[0].startsWith("((") || this.textParens) this.lost = true;
+			this.inside = true;
+			this.outside = this.state;
+		}
 		const last = (raw[raw.length - 1] ?? "").replace(/^\(+/, "");
-		if (!this.inside || !last.endsWith(")")) return;
-		if (last.replace(/\)+$/, "").includes("(")) this.lost = true;
-		this.inside = false;
-		this.state = this.outside;
+		if (this.inside && last.endsWith(")")) {
+			if (last.replace(/\)+$/, "").includes("(")) this.lost = true;
+			this.closing = true;
+		}
+	}
+
+	/** Follows a plain move ("plain"); a move the guard doesn't follow makes the folder unknown ("other"); undefined for any other command. */
+	move(raw: string[], alone: boolean): "plain" | "other" | undefined {
+		// A subshell's parentheses are not words; an empty quoted operand (`cd ""`) is.
+		const words = raw.flatMap((t) => {
+			const word = t.replace(/^\(+|\)+$/g, "");
+			return word === "" && t !== "" ? [] : [word];
+		});
+		const move = parseMove(words);
+		if (move === undefined) return undefined;
+		const next = move !== "other" && alone ? changeDir(this.state, move) : undefined;
+		this.state = next ?? { dirs: [], prev: [], stack: [] };
+		return next ? "plain" : "other";
 	}
 }
 
@@ -598,45 +681,28 @@ function here(state: DirState): string | undefined {
 }
 
 /**
- * The state after a `cd`, `pushd` or `popd` segment (its raw tokens); undefined for any other command. `cd`'s
- * options `-L`, `-P`, `-e`, `-@` and `--` are skipped, `cd -` and `~-` are the previous folder, `cd ""` stays,
- * and `pushd` and `popd` keep a stack. A move the guard can't confirm (a missing folder, a variable, `..` after
- * `-P`, a form it doesn't follow) makes the folder and the previous folder unknown, so what follows fails closed.
+ * The state after a plain move, or undefined when the guard can't confirm it (a missing folder, a variable, `..`
+ * after `-P`, `popd` or `cd -` with nothing to return to). `cd -` and `~-` are the previous folder, `cd ""`
+ * stays, `cd` alone goes home, and `pushd` and `popd` keep a stack.
  */
-function changeDir(state: DirState, raw: string[]): DirState | undefined {
-	// A subshell's parentheses are not words; an empty quoted operand is.
-	const tokens = raw.flatMap((t) => {
-		const word = t.replace(/^\(+|\)+$/g, "");
-		return word === "" && t !== "" ? [] : [word];
-	});
-	const [cmd, ...args] = tokens;
-	if (cmd !== "cd" && cmd !== "pushd" && cmd !== "popd") return undefined;
-	const end = args.indexOf("--");
-	const options = end === -1 ? args.filter((a) => /^-./.test(a)) : args.slice(0, end);
-	const operands = end === -1 ? args.filter((a) => !/^-./.test(a)) : args.slice(end + 1);
-	// `cd` never changes the directory stack; a `pushd` or `popd` the guard can't follow leaves it unknown.
-	const unknown: DirState = { dirs: [], prev: [], stack: cmd === "cd" ? state.stack : [] };
-	const known = cmd === "cd" ? options.every((o) => /^-[LPe@]+$/.test(o)) : options.length === 0;
-	if (!known || operands.length > 1) return unknown;
+function changeDir(state: DirState, move: Move): DirState | undefined {
+	const { cmd, arg } = move;
 	if (cmd === "popd") {
 		const [top, ...rest] = state.stack;
-		return top === undefined || operands.length > 0 ? unknown : { dirs: top, prev: state.dirs, stack: rest };
+		return top === undefined ? undefined : { dirs: top, prev: state.dirs, stack: rest };
 	}
-	const arg = operands[0];
 	if (arg === "" && cmd === "cd") return state;
-	// `pushd` with no folder swaps the top two entries; `cd` alone goes home.
-	if (arg === undefined && cmd === "pushd") return unknown;
 	// `-P` resolves symlinks before `..`; the guard resolves paths as written.
-	if (options.some((o) => o.includes("P")) && arg?.split("/").includes("..")) return unknown;
+	if (move.physical && arg?.split("/").includes("..")) return undefined;
 	let target: string[];
 	if (arg === "-") target = state.prev;
 	else if (arg !== undefined && /^~[+-](?=\/|$)/.test(arg)) target = (arg[1] === "-" ? state.prev : state.dirs).map((d) => resolve(d, arg.slice(3)));
 	else {
 		const path = expandDir(arg ?? "~", false);
-		if (path === undefined) return unknown;
+		if (path === undefined) return undefined;
 		target = isAbsolute(path) ? [resolve(path)] : state.dirs.map((d) => resolve(d, path));
 	}
-	if (target.length === 0 || !target.every(isDir)) return unknown;
+	if (target.length === 0 || !target.every(isDir)) return undefined;
 	return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
 }
 
