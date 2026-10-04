@@ -170,9 +170,9 @@ None. Tag v0.21.1 after merge in both repos.
 ### Task 7: reviewer checks that BASE is on the remote base
 
 **Files:** Modify `skills/requesting-code-review/reviewer-prompt.md`, `skills/requesting-code-review/SKILL.md` (both editions)
-- [ ] Range section: `Remote base: {REMOTE_BASE}`; the repeat-round rule: before setting reports aside when {BASE} is {RULES_BASE}, run `git merge-base --is-ancestor {BASE} {REMOTE_BASE}`; if it fails, say Inconclusive. SKILL step 2 lists `{REMOTE_BASE}` = `origin/<base-branch>`
-- [ ] Run `node --test tests/lint-skills.test.ts` and the reviewer-allowlist test (`git merge-base --is-ancestor a b` allowed) → PASS in both repos
-- [ ] Commit `fix(review): the reviewer checks that BASE is on the remote base`
+- [x] Range section: `Remote base: {REMOTE_BASE}`; the repeat-round rule: before setting reports aside when {BASE} is {RULES_BASE}, run `git merge-base --is-ancestor {BASE} {REMOTE_BASE}`; if it fails, say Inconclusive. SKILL step 2 lists `{REMOTE_BASE}` = `origin/<base-branch>`
+- [x] Run `node --test tests/lint-skills.test.ts` and the reviewer-allowlist test (`git merge-base --is-ancestor a b` allowed) → PASS in both repos
+- [x] Commit `fix(review): the reviewer checks that BASE is on the remote base`
 
 ### Task 8: docs, version, changelog
 
@@ -194,3 +194,5 @@ None. Tag v0.21.1 after merge in both repos.
 - Task 5: complete (both repos, same diff in each patterns.ts; every new row checked against the HEAD version: all differ except the two allow rows, which guard Review focus 5 and the background `&`; `declare 2>&1 -x` turned out to be silent too and is covered; `npm test` → eng-kit 390 pass, pi 388 pass)
 - Task 6: complete (both repos, script and tests byte-identical; RED: `context.skip("platform: …")` reported skip-without-reason; `npm test` → eng-kit 394 pass, pi 392 pass)
 - Ruling: test-hygiene VERSION 4 → 5 with its two version-pin tests, as abfd954 did for 3 → 4 — kit-init offers projects the newer copy only when the version rises — cost if wrong: one extra replace offer.
+- Task 7: complete (both repos; prompt and SKILL step 2 carry `{REMOTE_BASE}`; lint-skills green; `npm test` → eng-kit 394 pass, pi 392 pass)
+- Ruling: the reviewer-allowlist row `git merge-base --is-ancestor abc origin/main` (eng-kit only, pi has no reviewer allowlist) passes without a code change — it pins the shell contract the new prompt rule relies on, not new behaviour — none.
