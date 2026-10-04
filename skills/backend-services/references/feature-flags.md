@@ -17,7 +17,7 @@ A flag decouples deploy from release: code ships dark and is turned on, ramped o
 ## Defaults and failure
 
 - Every flag has a **safe default**: the value the product must have when the flag system is unreachable. A kill switch defaults to the safe state; a paid feature defaults to off; "pause billing" defaults to paused if charging by mistake is worse than not charging.
-- Evaluation never throws and never blocks a request for long. Prefer evaluating in process from a synced rule set; when the sync fails, keep serving the last good set and expose its age as a metric. The registry defaults apply only when no set was ever loaded.
+- Evaluation never throws and never blocks a request for long. Prefer evaluating in process from a synced rule set; when the sync fails, keep serving the last good set and expose its age as a metric. The registry defaults apply when no set was ever loaded, or when a flag can't be evaluated from it (missing, wrong type).
 - A remote evaluation call gets a short timeout and falls back the same way, with a log and a metric; a circuit breaker stops calling a provider that keeps failing.
 
 ## Targeting and assignment
