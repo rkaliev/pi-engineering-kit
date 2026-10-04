@@ -557,6 +557,21 @@ test("redirections read as the shell does: >| and >& take a word, &< is a backgr
 	}
 });
 
+test("a push without a refspec lands where @{push} points", () => {
+	const { git, check } = repo();
+	assert.equal(action(check("git push")), "allow", "no upstream: the branch pushes to its own name");
+	git("branch", "-q", "--set-upstream-to=origin/main");
+	git("config", "push.default", "upstream");
+	for (const command of ["git push", "git push origin", "git push -o ci.skip"]) assert.equal(action(check(command)), "block", command);
+	git("config", "push.default", "simple");
+	assert.equal(action(check("git push")), "allow", "simple refuses an upstream of another name, so nothing lands");
+	git("remote", "add", "up/stream", git("remote", "get-url", "origin"));
+	git("fetch", "-q", "up/stream");
+	git("branch", "-q", "--set-upstream-to=up/stream/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "block", "a remote whose name contains a slash");
+});
+
 test("gate files: a > inside quotes is text, not a write", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");

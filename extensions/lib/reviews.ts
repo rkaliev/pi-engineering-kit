@@ -311,7 +311,9 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 		}
 		const base = baseBranch(where);
 		if (!base) continue;
-		const refs = targets(l, where, base, l.kind === "push" ? openPrBranches(projectDir, where, l.remote ?? "origin", anchorRef(where, l.remote ?? "origin", base), root) : []);
+		const land = l.kind === "push" ? withDestination(l, where) : l;
+		const remote = land.kind === "push" && land.remote ? land.remote : "origin";
+		const refs = targets(land, where, base, land.kind === "push" ? openPrBranches(projectDir, where, remote, anchorRef(where, remote, base), root) : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -320,7 +322,7 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 			if (ref === undefined) {
 				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
 			}
-			const problem = uncovered(where, projectDir, base, ref, l.kind === "push" && l.remote ? l.remote : "origin", root);
+			const problem = uncovered(where, projectDir, base, ref, remote, root);
 			if (problem) return decision(options.missing, problem, options);
 		}
 	}
@@ -562,6 +564,28 @@ function isSafe(tokens: string[], verify: string[]): boolean {
 		return SAFE_GIT.has(sub);
 	}
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
+}
+
+/**
+ * A push without a refspec goes where git's push config sends it (`push.default`, upstream, `pushRemote`):
+ * `@{push}` names that branch. Used when the command names no remote or the same one; otherwise, or when git
+ * can't tell, the push keeps the current branch's name.
+ */
+function withDestination(l: Extract<Landing, { kind: "push" }>, where: string): Extract<Landing, { kind: "push" }> {
+	if (l.refspecs.length > 0 || l.all) return l;
+	const dest = pushDestination(where);
+	if (!dest || (l.remote !== undefined && l.remote !== dest.remote)) return l;
+	return { ...l, remote: dest.remote, refspecs: [`HEAD:${dest.branch}`] };
+}
+
+/** Where a plain `git push` sends the current branch: the remote and the branch on it. */
+function pushDestination(where: string): { remote: string; branch: string } | undefined {
+	const full = git(where, ["rev-parse", "--symbolic-full-name", "@{push}"]);
+	if (!full?.startsWith("refs/remotes/")) return undefined;
+	const name = full.slice("refs/remotes/".length);
+	// A remote's name may contain `/`: take the longest configured remote that prefixes the ref.
+	const remote = lines(git(where, ["remote"])).filter((r) => name.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+	return remote === undefined ? undefined : { remote, branch: name.slice(remote.length + 1) };
 }
 
 function landsOnBase(l: Extract<Landing, { kind: "merge" }>, dir: string): boolean {

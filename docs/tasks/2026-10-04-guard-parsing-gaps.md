@@ -131,11 +131,11 @@ None. Tag v0.21.1 after merge in both repos.
 **Files:** Modify `lib/reviews.ts` (`checkReview`, `targets`, new `pushDestination`) · Test `tests/reviews.test.ts`
 **Interfaces:** Produces `pushDestination(where: string): { remote: string; branch: string } | undefined` (reads `git rev-parse --abbrev-ref --symbolic-full-name @{push}`, splits the longest prefix that is a name in `git remote`)
 
-- [ ] Test "a push without a refspec lands where @{push} points": temp repo with remote `origin`, branch `feat/x` with upstream `origin/main` and `push.default=upstream`, an unreviewed commit; `git push` → block; `git push origin` → block; with `push.default=simple` → allow (no base landing); a branch with no upstream → today's rule
-- [ ] Run → expect FAIL: `git push` allowed (received "allow", expected "block")
-- [ ] Implement: when a push has no refspecs and no `--all`, and its remote is absent or equals `pushDestination(where).remote`, treat it as refspec `HEAD:<branch>` on that remote; the remote also replaces the `origin` default in `uncovered`
-- [ ] Run → PASS, full suite; copy to pi, same test, pi suite
-- [ ] Commit `fix(guard): a push without a refspec is checked where git pushes it`
+- [x] Test "a push without a refspec lands where @{push} points": temp repo with remote `origin`, branch `feat/x` with upstream `origin/main` and `push.default=upstream`, an unreviewed commit; `git push` → block; `git push origin` → block; with `push.default=simple` → allow (no base landing); a branch with no upstream → today's rule
+- [x] Run → expect FAIL: `git push` allowed (received "allow", expected "block")
+- [x] Implement: when a push has no refspecs and no `--all`, and its remote is absent or equals `pushDestination(where).remote`, treat it as refspec `HEAD:<branch>` on that remote; the remote also replaces the `origin` default in `uncovered`
+- [x] Run → PASS, full suite; copy to pi, same test, pi suite
+- [x] Commit `fix(guard): a push without a refspec is checked where git pushes it`
 
 ### Task 4: one `cd` tracker for both checks
 
@@ -186,3 +186,5 @@ None. Tag v0.21.1 after merge in both repos.
 - Baseline 2026-10-04: eng-kit `npm test` 382 pass, pi 380 pass, typecheck clean in both. Drift: none (only the task file changed since Base).
 - Task 1: complete (both repos; `npm test` → eng-kit 384 pass, pi 382 pass; each new row checked against the HEAD version: all differ, fd duplications unchanged)
 - Task 2: complete (both repos; RED: remote `x` instead of `origin`; `npm test` → eng-kit 385 pass, pi 383 pass)
+- Task 3: complete (both repos; RED: `git push` allowed with push.default=upstream onto main; a slash-named remote row is proven by mutation (first-slash split → FAIL); `npm test` → eng-kit 386 pass, pi 384 pass)
+- Ruling: `pushDestination` stays module-private, not exported as the plan's Interfaces line said — only `checkReview` uses it — no cost.
