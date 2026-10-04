@@ -152,11 +152,11 @@ None. Tag v0.21.1 after merge in both repos.
 ### Task 5: command guard: hook-bypass abbreviations and `&>`
 
 **Files:** Modify `lib/patterns.ts` and `../src/extensions/lib/patterns.ts` (`checkSegment`, `tokenize`) · Test `tests/guard.test.ts` in both
-- [ ] Rows: `git commit --no-veri -m x`, `git commit --no-verif -m x`, `git push --no-veri origin feat/x`, `(git merge --no-veri x)` → block; `git commit --no-ver -m x` and `git log --no-verify-foo` → not blocked by this rule; `declare &>/dev/null -x GIT_DIR=/x; git status`, `declare &>>log -x GIT_DIR=/x; git status`, `declare 2>&1 -x GIT_DIR=/x; git status` → confirm; `npm test &>/dev/null && git status` → allow
-- [ ] Run `node --test tests/guard.test.ts` → expect FAIL: `--no-veri` allowed
-- [ ] Implement: the check matches tokens and words against `/^--no-veri(fy?)?$/`; in `tokenize`, an `&` right after `<`/`>` or right before `>` is part of the redirection, not a separator
-- [ ] Run → PASS, full suite, both repos
-- [ ] Commit `fix(guard): block hook-bypass abbreviations; &> is a redirection` in both repos
+- [x] Rows: `git commit --no-veri -m x`, `git commit --no-verif -m x`, `git push --no-veri origin feat/x`, `(git merge --no-veri x)` → block; `git commit --no-ver -m x` and `git log --no-verify-foo` → not blocked by this rule; `declare &>/dev/null -x GIT_DIR=/x; git status`, `declare &>>log -x GIT_DIR=/x; git status`, `declare 2>&1 -x GIT_DIR=/x; git status` → confirm; `npm test &>/dev/null && git status` → allow
+- [x] Run `node --test tests/guard.test.ts` → expect FAIL: `--no-veri` allowed
+- [x] Implement: the check matches tokens and words against `/^--no-veri(fy?)?$/`; in `tokenize`, an `&` right after `<`/`>` or right before `>` is part of the redirection, not a separator
+- [x] Run → PASS, full suite, both repos
+- [x] Commit `fix(guard): block hook-bypass abbreviations; &> is a redirection` in both repos
 
 ### Task 6: Vitest `context.skip` keeps its reason
 
@@ -191,3 +191,4 @@ None. Tag v0.21.1 after merge in both repos.
 - Task 4: complete (both repos; RED: `cd nope; cd eng-kit/reviews; rm x` allowed, `cd -P <wt>` failed closed; each gate-file row checked against the HEAD version, all but `cd "$X"` differ — that row guards Review focus 3 and is proven by mutation (unknown → no folder: FAIL); `npm test` → eng-kit 388 pass, pi 386 pass)
 - Ruling: `notePr` uses the same tracker as `checkReview` (it followed `cd` the same way before) — one rule for both — cost if wrong: a PR opened after `cd -` registers the previous folder's branch, as the shell would.
 - Ruling: a bare `cd` goes to the home folder instead of failing closed — that is what the shell does; home is rarely a checkout, so a landing there still asks — none.
+- Task 5: complete (both repos, same diff in each patterns.ts; every new row checked against the HEAD version: all differ except the two allow rows, which guard Review focus 5 and the background `&`; `declare 2>&1 -x` turned out to be silent too and is covered; `npm test` → eng-kit 390 pass, pi 388 pass)

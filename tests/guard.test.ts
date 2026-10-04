@@ -23,6 +23,20 @@ test("blocks hook bypass", () => {
 	}
 });
 
+test("blocks the hook bypass abbreviated, as git accepts it; an ambiguous or longer option is not it", () => {
+	for (const cmd of ["git commit --no-veri -m x", "git commit --no-verif -m x", "git push --no-veri origin feat/x", "(git merge --no-veri x)"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["git commit --no-ver -m x", "git log --no-verify-foo"]) assert.equal(action(cmd), "allow", cmd);
+});
+
+test("&> and &>> are redirections, not a background &: they don't hide what declare exports", () => {
+	for (const cmd of ["declare &>/dev/null -x GIT_DIR=/x; git status", "declare &>>log -x GIT_DIR=/x; git status", "declare 2>&1 -x GIT_DIR=/x; git status"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("npm test &>/dev/null && git status"), "allow");
+});
+
 test("blocks force push but allows --force-with-lease with confirmation", () => {
 	assert.equal(action("git push --force"), "block");
 	assert.equal(action("git push \\\n  --force origin main"), "block", "a line continuation joins the command");
