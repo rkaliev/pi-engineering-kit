@@ -2,7 +2,7 @@
 
 ## 0.18.2
 
-- **`export` options end at the first name.** `export GIT_DIR=/x -n` and `export -- -n GIT_DIR=/x` export `GIT_DIR` in bash, so they ask now; only an `-n` before the first name or `--` un-exports. A lone `-` ends the options too (`export - -n GIT_DIR=/x` asks). The same rule applies to `declare -x` and `typeset -x`, which also take `+` options (`declare +i -x GIT_DIR=/x` asks), so `declare GIT_DIR=x -x` (which does not export) stays quiet.
+- **`export` options end at the first name.** `export GIT_DIR=/x -n` and `export -- -n GIT_DIR=/x` export `GIT_DIR` in bash, so they ask now; only an `-n` before the first name or `--` un-exports. A lone `-` ends the options too (`export - -n GIT_DIR=/x` asks). The same rule applies to `declare -x` and `typeset -x`, which also take `+` options (`declare +i -x GIT_DIR=/x` asks) and end their options only at a name (`declare 2>/dev/null -x GIT_DIR=/x` asks), so `declare GIT_DIR=x -x` (which does not export) stays quiet.
 - **The `db.mjs` test ignores an inherited `POSTGRES_MAJOR`.** It runs with a decoy value in the environment, so it passes only when the script passes the version from `.postgres-version`.
 
 ## 0.18.1
