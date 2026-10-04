@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { baseBranch, checkWorkDocs, finishedWorkDocs } from "../extensions/lib/workdocs.ts";
+import { baseBranch, checkWorkDocs, finishedWorkDocs, landing } from "../extensions/lib/workdocs.ts";
 
 const TASK = "docs/tasks/2026-01-01-a.md";
 
@@ -133,4 +133,16 @@ test("finished task files: every box in the Plan section ticked, in the working 
 	});
 	assert.deepEqual(finishedWorkDocs(dir).sort(), [TASK, "docs/tasks/nested/2026-01-04-d.md"]);
 	assert.deepEqual(finishedWorkDocs(dir, []), []);
+});
+
+test("push options that take a separate value don't name the remote or a refspec", () => {
+	const push = (command: string) => {
+		const l = landing(command.split(" "));
+		return l?.kind === "push" ? { remote: l.remote, refspecs: l.refspecs } : l;
+	};
+	for (const flag of ["-o", "--push-option", "--repo", "--receive-pack", "--exec"]) {
+		assert.deepEqual(push(`git push ${flag} x origin`), { remote: "origin", refspecs: [] }, flag);
+	}
+	assert.deepEqual(push("git push --push-option=x origin main"), { remote: "origin", refspecs: ["main"] });
+	assert.deepEqual(push("git push -u origin feat/a"), { remote: "origin", refspecs: ["feat/a"] }, "a flag without a value takes nothing");
 });

@@ -120,11 +120,11 @@ None. Tag v0.21.1 after merge in both repos.
 
 **Files:** Modify `lib/workdocs.ts` (`landing`) · Test `tests/workdocs.test.ts`
 
-- [ ] Rows: `git push -o ci.skip origin` → `{remote: "origin", refspecs: []}`; same for `--push-option x`, `--repo x`, `--receive-pack x`, `--exec x`; `--push-option=x origin main` → remote `origin`, refspecs `["main"]`
-- [ ] Run `node --test tests/workdocs.test.ts` → expect FAIL: remote `ci.skip`
-- [ ] Implement: a `PUSH_VALUE_FLAGS` set beside `MERGE_VALUE_FLAGS`; positional args skip the token after one of them
-- [ ] Run → PASS, full suite; copy `lib/workdocs.ts` to pi, same rows, pi suite
-- [ ] Commit `fix(guard): push options with a separate value don't name the remote`
+- [x] Rows: `git push -o ci.skip origin` → `{remote: "origin", refspecs: []}`; same for `--push-option x`, `--repo x`, `--receive-pack x`, `--exec x`; `--push-option=x origin main` → remote `origin`, refspecs `["main"]`
+- [x] Run `node --test tests/workdocs.test.ts` → expect FAIL: remote `ci.skip`
+- [x] Implement: a `PUSH_VALUE_FLAGS` set beside `MERGE_VALUE_FLAGS`; positional args skip the token after one of them
+- [x] Run → PASS, full suite; copy `lib/workdocs.ts` to pi, same rows, pi suite
+- [x] Commit `fix(guard): push options with a separate value don't name the remote`
 
 ### Task 3: push without a refspec goes where git says
 
@@ -185,3 +185,4 @@ None. Tag v0.21.1 after merge in both repos.
 
 - Baseline 2026-10-04: eng-kit `npm test` 382 pass, pi 380 pass, typecheck clean in both. Drift: none (only the task file changed since Base).
 - Task 1: complete (both repos; `npm test` → eng-kit 384 pass, pi 382 pass; each new row checked against the HEAD version: all differ, fd duplications unchanged)
+- Task 2: complete (both repos; RED: remote `x` instead of `origin`; `npm test` → eng-kit 385 pass, pi 383 pass)

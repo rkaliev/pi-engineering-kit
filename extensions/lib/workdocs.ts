@@ -27,6 +27,8 @@ export type Landing =
 
 /** `git merge` options that take a value, so the value is not a ref. */
 const MERGE_VALUE_FLAGS = new Set(["-m", "-F", "-s", "-X", "--message", "--file", "--strategy", "--strategy-option", "--into-name"]);
+/** git push options whose value is the next word: it is neither the remote nor a refspec. */
+const PUSH_VALUE_FLAGS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
 
 /**
  * Block a command that would put working documents on the base branch: opening or merging a PR/MR,
@@ -133,7 +135,6 @@ export function landing(raw: string[]): Landing | undefined {
 		verb += rest[verb] === "-C" || rest[verb] === "-c" ? 2 : 1;
 	}
 	const args = rest.slice(verb + 1);
-	const positional = args.filter((t) => !t.startsWith("-"));
 	const subcommand = rest[verb] ?? "";
 	switch (subcommand) {
 		case "commit":
@@ -142,8 +143,10 @@ export function landing(raw: string[]): Landing | undefined {
 			return { kind: "merge", refs: args.filter((t, i) => !t.startsWith("-") && !MERGE_VALUE_FLAGS.has(args[i - 1] ?? "")), dir };
 		case "push":
 		case "send-pack":
-		case "http-push":
-			return { kind: "push", remote: positional[0], refspecs: positional.slice(1), all: args.includes("--all"), dir };
+		case "http-push": {
+			const operands = args.filter((t, i) => !t.startsWith("-") && !PUSH_VALUE_FLAGS.has(args[i - 1] ?? ""));
+			return { kind: "push", remote: operands[0], refspecs: operands.slice(1), all: args.includes("--all"), dir };
+		}
 		default:
 			return undefined;
 	}
