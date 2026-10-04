@@ -145,4 +145,6 @@ test("push options that take a separate value don't name the remote or a refspec
 	}
 	assert.deepEqual(push("git push --push-option=x origin main"), { remote: "origin", refspecs: ["main"] });
 	assert.deepEqual(push("git push -u origin feat/a"), { remote: "origin", refspecs: ["feat/a"] }, "a flag without a value takes nothing");
+	assert.deepEqual(push("git push -o -o origin main"), { remote: "origin", refspecs: ["main"] }, "a value may start with a dash");
+	for (const repo of ["git push --repo origin", "git push --repo=origin"]) assert.deepEqual(push(repo), { remote: "origin", refspecs: [] }, repo);
 });

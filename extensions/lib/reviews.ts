@@ -146,24 +146,14 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * push to that branch updates the PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
-	let state = at(cwd);
-	let outside = state;
-	let inSubshell = false;
+	const shell = new Subshells(cwd);
 	const segments = splitSegments(tokenize(stripRedirects(command)));
 	segments.forEach((raw, index) => {
-		// A `cd` inside `( … )` ends with the subshell, as in checkReview; a nested one is not followed.
-		if (raw[0]?.startsWith("(")) {
-			if (inSubshell || raw[0].startsWith("((")) state = { ...state, dirs: [] };
-			inSubshell = true;
-			outside = state;
-		}
-		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
+		shell.open(raw);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
-		const moved = changeDir(state, raw, true);
-		const dir = here(state);
-		if (moved) state = moved;
-		else if (l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
+		const dir = shell.dir;
+		if (!shell.move(raw) && l?.kind === "pr" && !l.merge && !l.repo && dir !== undefined) {
 			// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
 			const branch = l.target?.replace(/^[^:]+:/, "") ?? currentBranch(dir);
 			if (branch) {
@@ -173,10 +163,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 				writeJson(projectDir, PENDING_FILE, pending, root);
 			}
 		}
-		if (closes) {
-			inSubshell = false;
-			state = outside;
-		}
+		shell.close(raw);
 	});
 }
 
@@ -271,32 +258,18 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
-	let state = at(cwd);
-	let outside = state;
-	let inSubshell = false;
+	const shell = new Subshells(cwd);
 	let unsafeBefore = false;
 	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
-		// A `cd` inside a subshell ends with it: restore the directory after the closing parenthesis.
-		// A nested subshell is more than the guard tracks: what follows fails closed.
-		if (raw[0]?.startsWith("(")) {
-			if (inSubshell || raw[0].startsWith("((")) state = { ...state, dirs: [] };
-			inSubshell = true;
-			outside = state;
-		}
-		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
+		shell.open(raw);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
 		if (!l || l.kind === "commit") {
-			const moved = changeDir(state, raw, true);
-			if (moved) state = moved;
-			else if (!isSafe(tokens, options.verify)) unsafeBefore = true;
-			if (closes) {
-				inSubshell = false;
-				state = outside;
-			}
+			if (!shell.move(raw) && !isSafe(tokens, options.verify)) unsafeBefore = true;
+			shell.close(raw);
 			continue;
 		}
-		const dir = here(state);
+		const dir = shell.dir;
 		// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
 		if (l.kind === "merge" && unsafeBefore) {
 			return decision(options.missing, "this command moves HEAD before it merges, so the guard can't see where the merge lands. Run the merge as its own command.", options);
@@ -459,49 +432,47 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
-	let state = at(cwd);
-	let outside = state;
-	let inSubshell = false;
-	let nested = false;
+	const dirs = reachable(command, cwd);
 	for (const raw of splitSegments(tokenize(command))) {
-		// A `cd` inside `( … )` ends with it; after a nested subshell the folders on both sides stay candidates.
-		if (raw[0]?.startsWith("(")) {
-			if (inSubshell || raw[0].startsWith("((")) nested = true;
-			else outside = state;
-			inSubshell = true;
-		}
-		const closes = inSubshell && (raw[raw.length - 1] ?? "").endsWith(")");
-		const restore = () => {
-			if (!closes) return;
-			state = nested ? { dirs: [...new Set([...outside.dirs, ...state.dirs])], prev: [...new Set([...outside.prev, ...state.prev])], stack: [] } : outside;
-			inSubshell = false;
-			nested = false;
-		};
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		// A write may create the folder, so it need not exist yet; a cd the guard can't follow keeps every folder the shell may be in.
-		const moved = changeDir(state, raw, false);
-		if (moved) {
-			state = moved;
-			restore();
-			continue;
-		}
+		if (CD.has(tokens[0] ?? "")) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
-		if (readOnly) {
-			restore();
-			continue;
-		}
-		const paths = state.dirs.flatMap((dir) => tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
-		const named = tokens.some((t) => /^\$\{?TMPDIR\}?\/+eng-kit\/reviews(\/|$)/.test(t));
+		if (readOnly) continue;
+		const paths = dirs.flatMap((dir) => tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
+		const named = tokens.some((t) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(t));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
 			return { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
-		restore();
 	}
 	return undefined;
+}
+
+const CD = new Set(["cd", "pushd", "popd"]);
+
+/**
+ * Every folder the shell may be in during the command: the start folder and any folder a `cd`, `pushd` or
+ * `popd` operand may reach from any of them. The set only grows, so a failed move, a redirection on the move,
+ * a subshell or a stack the guard can't follow never hides a folder; `cd -`, `~-` and `popd` return to one
+ * already in it. A write may create a folder first, so a folder need not exist.
+ */
+function reachable(command: string, cwd: string): string[] {
+	const dirs = new Set([cwd]);
+	for (const raw of splitSegments(tokenize(stripRedirects(command)))) {
+		const [cmd, ...args] = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		if (!CD.has(cmd ?? "")) continue;
+		if (cmd === "cd" && args.length === 0) dirs.add(homedir());
+		for (const arg of args) {
+			if (arg.startsWith("-") || /^\+\d+$/.test(arg)) continue;
+			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true);
+			if (path === undefined) continue;
+			for (const dir of [...dirs]) if (dirs.size < 256) dirs.add(resolve(dir, path));
+		}
+	}
+	return [...dirs];
 }
 
 /**
@@ -572,6 +543,48 @@ export function stripRedirects(command: string): string {
 	return out;
 }
 
+/**
+ * The folder a command runs in, segment by segment, for the review gate. A `cd` inside one `( … )` ends with it.
+ * A nested subshell, or a closing `)` the guard can't tell from text (`$(…)`, a quoted parenthesis), makes the
+ * folder unknown for the rest of the command, so what follows fails closed.
+ */
+class Subshells {
+	private state: DirState;
+	private outside: DirState;
+	private inside = false;
+	private lost = false;
+
+	constructor(cwd: string) {
+		this.state = this.outside = at(cwd);
+	}
+
+	get dir(): string | undefined {
+		return this.lost ? undefined : here(this.state);
+	}
+
+	open(raw: string[]): void {
+		if (!raw[0]?.startsWith("(")) return;
+		if (this.inside || raw[0].startsWith("((")) this.lost = true;
+		this.inside = true;
+		this.outside = this.state;
+	}
+
+	/** Follows a `cd`, `pushd` or `popd`; false for any other command. */
+	move(raw: string[]): boolean {
+		const moved = changeDir(this.state, raw);
+		if (moved) this.state = moved;
+		return moved !== undefined;
+	}
+
+	close(raw: string[]): void {
+		const last = (raw[raw.length - 1] ?? "").replace(/^\(+/, "");
+		if (!this.inside || !last.endsWith(")")) return;
+		if (last.replace(/\)+$/, "").includes("(")) this.lost = true;
+		this.inside = false;
+		this.state = this.outside;
+	}
+}
+
 /** The folders a command may be in, as far as the guard follows `cd`, `pushd` and `popd`; none means unknown. */
 type DirState = { dirs: string[]; prev: string[]; stack: string[][] };
 
@@ -587,13 +600,10 @@ function here(state: DirState): string | undefined {
 /**
  * The state after a `cd`, `pushd` or `popd` segment (its raw tokens); undefined for any other command. `cd`'s
  * options `-L`, `-P`, `-e`, `-@` and `--` are skipped, `cd -` and `~-` are the previous folder, `cd ""` stays,
- * and `pushd` and `popd` keep a stack. With `mustExist` (the review gate) a move the guard can't confirm (a
- * missing folder, a variable, a form it doesn't follow) makes the folder and the previous folder unknown, so what
- * follows fails closed. Without it (the gate files) `$HOME` and `$TMPDIR` expand too, a write may create the
- * folder, and a move the guard can't confirm keeps every folder the shell may be in: the current, the previous
- * and the stacked ones.
+ * and `pushd` and `popd` keep a stack. A move the guard can't confirm (a missing folder, a variable, `..` after
+ * `-P`, a form it doesn't follow) makes the folder and the previous folder unknown, so what follows fails closed.
  */
-function changeDir(state: DirState, raw: string[], mustExist: boolean): DirState | undefined {
+function changeDir(state: DirState, raw: string[]): DirState | undefined {
 	// A subshell's parentheses are not words; an empty quoted operand is.
 	const tokens = raw.flatMap((t) => {
 		const word = t.replace(/^\(+|\)+$/g, "");
@@ -604,10 +614,8 @@ function changeDir(state: DirState, raw: string[], mustExist: boolean): DirState
 	const end = args.indexOf("--");
 	const options = end === -1 ? args.filter((a) => /^-./.test(a)) : args.slice(0, end);
 	const operands = end === -1 ? args.filter((a) => !/^-./.test(a)) : args.slice(end + 1);
-	const all = [...new Set([...state.dirs, ...state.prev, ...state.stack.flat()])];
 	// `cd` never changes the directory stack; a `pushd` or `popd` the guard can't follow leaves it unknown.
-	const stack = cmd === "cd" ? state.stack : [];
-	const unknown: DirState = mustExist ? { dirs: [], prev: [], stack } : { dirs: all, prev: all, stack };
+	const unknown: DirState = { dirs: [], prev: [], stack: cmd === "cd" ? state.stack : [] };
 	const known = cmd === "cd" ? options.every((o) => /^-[LPe@]+$/.test(o)) : options.length === 0;
 	if (!known || operands.length > 1) return unknown;
 	if (cmd === "popd") {
@@ -618,24 +626,25 @@ function changeDir(state: DirState, raw: string[], mustExist: boolean): DirState
 	if (arg === "" && cmd === "cd") return state;
 	// `pushd` with no folder swaps the top two entries; `cd` alone goes home.
 	if (arg === undefined && cmd === "pushd") return unknown;
+	// `-P` resolves symlinks before `..`; the guard resolves paths as written.
+	if (options.some((o) => o.includes("P")) && arg?.split("/").includes("..")) return unknown;
 	let target: string[];
 	if (arg === "-") target = state.prev;
 	else if (arg !== undefined && /^~[+-](?=\/|$)/.test(arg)) target = (arg[1] === "-" ? state.prev : state.dirs).map((d) => resolve(d, arg.slice(3)));
 	else {
-		const path = expandDir(arg ?? "~", !mustExist);
+		const path = expandDir(arg ?? "~", false);
 		if (path === undefined) return unknown;
 		target = isAbsolute(path) ? [resolve(path)] : state.dirs.map((d) => resolve(d, path));
 	}
-	if (target.length > 0 && target.every(isDir)) return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
-	if (mustExist) return unknown;
-	// The move may fail (the shell and its previous folder stay) or land in a folder an earlier write created.
-	return { dirs: [...new Set([...target, ...all])], prev: all, stack };
+	if (target.length === 0 || !target.every(isDir)) return unknown;
+	return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
 }
 
 /** A `cd` operand with `~` expanded, and `$HOME` and `$TMPDIR` when `vars`; undefined when anything else would expand. */
 function expandDir(arg: string, vars: boolean): string | undefined {
 	let path = arg.replace(/^~(?=\/|$)/, homedir());
-	if (vars) path = path.replace(/^\$(?:\{HOME\}|HOME\b)/, homedir()).replace(/^\$(?:\{TMPDIR\}|TMPDIR\b)/, tmpdir());
+	// The shell's TMPDIR keeps its trailing slash (macOS), so `${TMPDIR}eng-kit` resolves as the shell sees it.
+	if (vars) path = path.replace(/^\$(?:\{HOME\}|HOME\b)/, homedir()).replace(/^\$(?:\{TMPDIR\}|TMPDIR\b)/, process.env.TMPDIR || `${tmpdir()}/`);
 	return /[$`(]/.test(path) ? undefined : path;
 }
 
@@ -682,20 +691,22 @@ function withDestination(l: Extract<Landing, { kind: "push" }>, where: string): 
 
 /**
  * Where a plain `git push` sends the current branch: the remote and the branch on it. `@{push}` is a
- * remote-tracking ref, named by the fetch refspec, so the branch comes from `branch.<name>.merge` when it is the
- * upstream (`push.default=upstream`), and is the current branch's own name otherwise.
+ * remote-tracking ref, named by the fetch refspec, so when it is the upstream (`push.default=upstream`) the remote
+ * and branch come from `branch.<name>.remote` and `.merge`; otherwise the branch is the current branch's own name.
  */
 function pushDestination(where: string): { remote: string; branch: string } | undefined {
 	const full = git(where, ["rev-parse", "--symbolic-full-name", "@{push}"]);
 	const current = currentBranch(where);
 	if (!full?.startsWith("refs/remotes/") || !current) return undefined;
+	if (full === git(where, ["rev-parse", "--symbolic-full-name", "@{upstream}"])) {
+		const remote = git(where, ["config", `branch.${current}.remote`]);
+		const merge = git(where, ["config", `branch.${current}.merge`]);
+		return remote && remote !== "." && merge?.startsWith("refs/heads/") ? { remote, branch: merge.slice("refs/heads/".length) } : undefined;
+	}
+	// Pushing to the same name: the remote is the one whose tracking refs hold `@{push}`; a remote's name may contain `/`.
 	const name = full.slice("refs/remotes/".length);
-	// A remote's name may contain `/`: take the longest configured remote that prefixes the ref.
 	const remote = lines(git(where, ["remote"])).filter((r) => name.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
-	if (remote === undefined) return undefined;
-	if (full !== git(where, ["rev-parse", "--symbolic-full-name", "@{upstream}"])) return { remote, branch: current };
-	const merge = git(where, ["config", `branch.${current}.merge`]);
-	return merge?.startsWith("refs/heads/") ? { remote, branch: merge.slice("refs/heads/".length) } : undefined;
+	return remote === undefined ? undefined : { remote, branch: current };
 }
 
 function landsOnBase(l: Extract<Landing, { kind: "merge" }>, dir: string): boolean {

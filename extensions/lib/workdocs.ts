@@ -144,8 +144,18 @@ export function landing(raw: string[]): Landing | undefined {
 		case "push":
 		case "send-pack":
 		case "http-push": {
-			const operands = args.filter((t, i) => !t.startsWith("-") && !PUSH_VALUE_FLAGS.has(args[i - 1] ?? ""));
-			return { kind: "push", remote: operands[0], refspecs: operands.slice(1), all: args.includes("--all") || args.includes("--branches"), dir };
+			// A value flag takes the next word whatever it looks like; `--repo` names the remote when no operand does.
+			const operands: string[] = [];
+			let repo: string | undefined;
+			for (let i = 0; i < args.length; i++) {
+				const arg = args[i]!;
+				if (PUSH_VALUE_FLAGS.has(arg)) {
+					if (arg === "--repo") repo = args[i + 1];
+					i++;
+				} else if (arg.startsWith("--repo=")) repo = arg.slice("--repo=".length);
+				else if (!arg.startsWith("-")) operands.push(arg);
+			}
+			return { kind: "push", remote: operands[0] ?? repo, refspecs: operands.slice(1), all: args.includes("--all") || args.includes("--branches"), dir };
 		}
 		default:
 			return undefined;

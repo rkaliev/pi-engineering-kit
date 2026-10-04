@@ -88,7 +88,7 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`/`doas`, `curl … \| sh` |
 | writing into `.git/` and `protectedPaths` | shell access to secret files; writes outside the project |
 | `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines |
-| writing into the review records | the same without a reviewer `Yes` for the commit being landed, chained after anything but read-only steps and the project's verification commands (review gate); every PR/MR merge, `gh pr merge` or `glab mr merge`; editing `.pi/guard.json` (edit/write, or a shell command naming it) |
+| writing into the review records | `gh pr create`, `glab mr create`, merging into or pushing to the base branch and pushing to a PR branch the agent opened, without a reviewer `Yes` for the commit being landed or chained after anything but read-only steps and the project's verification commands (review gate); every PR/MR merge (`gh pr merge`, `glab mr merge`), even after a `Yes`; editing `.pi/guard.json` (edit/write, or a shell command naming it) |
 
 `.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
 
