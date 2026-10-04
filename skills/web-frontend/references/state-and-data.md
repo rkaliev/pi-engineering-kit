@@ -15,6 +15,15 @@ Take the first place that works:
 
 Don't sync one state into another with effects. If two values must agree, derive one from the other.
 
+## Server cache
+
+- One place sets the cache defaults: how long data stays fresh and the retry policy. A 4xx is not retried (the same request gets the same answer), except 408 and 429, which retry with backoff and honour `Retry-After`; other failures retry once or twice.
+- A query's key and fetcher come from one function (`queryOptions` in TanStack Query, or the typed API client's helpers) that the prefetch or route loader and the component both use, so the keys can't drift.
+- Every mutation updates or invalidates the queries whose data it changed. Where the stack has a lint rule for it, CI runs it.
+- Server rendering creates a new query client for each request: a shared one leaks one user's data into another's page.
+- Query and mutation errors reach one reporting path (the cache-level error handler), not a catch in each component.
+- The cache dev tools load only in development builds.
+
 ## Optimistic updates
 
 - **Paint first, reconcile when the server answers.** The optimistic change mirrors the server's logic exactly (including rounding and ordering), so reconciling doesn't make the UI jump.

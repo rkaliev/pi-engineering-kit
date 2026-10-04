@@ -66,3 +66,5 @@ Run the same kinds of backing services locally and in CI as in production: a Pos
 - The contract (OpenAPI, protobuf, GraphQL schema) is the source of truth, checked in CI against the code or generated from it.
 - Changes are backward compatible: add fields, never repurpose them. A breaking change gets a new version, and the old one gets a deprecation period and a note in the changelog.
 - Every mutating endpoint that a client may retry accepts an idempotency key (see payments-and-money).
+
+Internal RPC, error codes and resource checks: `references/api-contracts.md`. Feature flags and experiments: `references/feature-flags.md`.

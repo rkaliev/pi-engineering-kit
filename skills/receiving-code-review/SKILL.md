@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when receiving code review feedback from a person, a reviewer agent or a PR, before implementing any suggestion, especially if it seems unclear or technically questionable
+description: Use when receiving code review feedback from a person, a reviewer agent or a PR, or when the user corrects your work, before implementing any suggestion, especially if it seems unclear or technically questionable
 ---
 
 # Receiving code review
@@ -29,6 +29,15 @@ Push back, with evidence, when a suggestion:
 Declining a comment needs a concrete reason why the current approach is correct: a test, a spec line, a constraint. "It works" or "I checked" alone is not a reason.
 
 If a conflict is architectural, involve the user. If you can't verify a claim, say what you'd need.
+
+## Make it stick
+
+When a finding or a correction from the user shows a gap that will recur (not a one-off slip), propose closing it once, at the strongest level that fits:
+1. a mechanical check: a lint rule, a type, a test, a guard rule or a CI job;
+2. a rule in the project's agent manifest (CLAUDE.md, AGENTS.md) or a path-scoped rule;
+3. a gap in the kit itself: a follow-up to change the skill with writing-skills (RED, then GREEN).
+
+Propose it with the evidence; the user decides. Don't add a rule for what a check already enforces. Add each open proposal to the task file's Follow-ups when you make it; once the task file is gone, list it in the final report to the user.
 
 ## Tone
 

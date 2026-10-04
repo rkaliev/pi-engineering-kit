@@ -27,12 +27,14 @@ The same branch with different data is one parametrized test (`test.each`, table
 - Name = subject + circumstance + result: `applyDiscount rounds half up when the discount has a fraction of a cent`.
 - Prefer readable tests over clever reuse (DAMP over DRY): a reader understands one test without opening three helpers.
 - Test data is built in the test or by a small builder with explicit overrides; no shared mutable fixtures.
-- Test-only helpers, flags and hooks live in test code, never in production code.
+- Test-only helpers, flags and hooks live in test code, never in production code. The one exception is a provider fake or a flag override that configuration selects and a startup check refuses in production (Test doubles).
 
 ## Test doubles
 
 - Fake only what you don't control: third-party HTTP APIs, e-mail and SMS, payment providers, devices and peripherals, the clock and randomness.
 - Your own database, queues and file layout are real in integration tests (a container, an embedded or local instance), because that is where mistakes hide. A fake is allowed only at a deliberate fault-injection seam (simulating a timeout or a crash).
+- A fake of an external provider (payments, maps, e-mail) is chosen by configuration, answers only what the provider would, and is refused at startup in production: a boot check, not a comment.
+- Several implementations of one contract (one adapter per provider, one webhook handler per source) share one parametrized suite; each implementation's test supplies only its setup.
 - Each boundary has one shared stub (the project's HTTP mock library or helper, one fake clock, one fake mailbox), not an ad-hoc override of globals in each test. Stub at the network boundary, not by replacing your own client classes.
 - **Provider sandboxes** (a payment provider's or another vendor's test environment) are a separate suite with its own tag and its own CI job, with credentials from the CI secret store. They are the one place a test talks to the network, and they never run in the default suite.
 
@@ -42,10 +44,10 @@ The same branch with different data is one parametrized test (`test.each`, table
 - No real network in the default suite: unknown hosts point at a closed port so a missed stub fails loudly.
 - Run with a non-UTC timezone and a non-English locale somewhere in CI, so date and format bugs surface.
 - **Waiting:** wait for a condition or an event, with one short project-wide ceiling as the upper bound. Never sleep for a fixed time.
-- Tests don't depend on order and can run in parallel: each creates its own identities and data, shared seed data is read-only, cleanup is registered where the data is created and runs in reverse order, and global setup is idempotent.
-- Missing test infrastructure (the database, a container, an emulator) fails the run with the command that fixes it. It is never a reason to skip.
+- Tests don't depend on order and can run in parallel: each creates its own identities and data, shared seed data is read-only, cleanup is registered where the data is created, runs in reverse order and reports every failure together (one failed undo doesn't skip the rest), and global setup is idempotent.
+- Missing test infrastructure (the database, a container, an emulator) fails the run with the command that fixes it. It is never a reason to skip. Setup checks that the database is reachable, migrated and seeded, not only that it answers.
 - A test cache must not hide a test whose result depends on a database or other outside state: such tests run uncached.
-- Test accounts, demo personas and fixtures never reach a production build; where the project has one, CI checks it.
+- Test accounts, demo personas and fixtures never reach a production build; where the project has one, CI checks it. Personas live in one module that the seed, the tests and the scenario steps import, and a test checks that the seed contains every persona they name.
 
 ## Retries
 
