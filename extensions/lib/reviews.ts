@@ -437,14 +437,15 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const tokens = full.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		// A plain move writes nothing; a move with a redirection on it is checked like any command.
 		const move = parseMove(words.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean));
-		if (move !== undefined && move !== "other" && !redirected) continue;
+		// A substitution runs its own command, and `--output` (or an abbreviation git accepts) makes git write a file.
+		const runs = tokens.some((t) => /\$\(|`|[<>]\(/.test(t) || t.startsWith("--ou"));
+		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
-		// A substitution runs its own command, and `--output` makes git write a file.
-		const runs = tokens.some((t) => /\$\(|`|[<>]\(/.test(t) || t.startsWith("--output"));
 		const readOnly = !redirects && !runs && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
-		// A path may follow `=` (`of=…`, `--output=…`) or `$(`.
-		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^.*?(\$\(|`)/, "")]);
+		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.
+		const inner = (t: string) => (/\$\(|`/.test(t) ? tokenize(t.replace(/^.*?(\$\(|`)/, "").replace(/[)`]+$/, "")) : []);
+		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), ...inner(t)]);
 		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
 		const named = candidates.some((t) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(t));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
@@ -583,11 +584,14 @@ function segmentsOf(tokens: string[]): Array<{ raw: string[]; alone: boolean; be
 		raw = [];
 	}
 	if (raw.length > 0) out.push({ raw, before, after: "" });
-	// A list (up to `;`, a newline or `&`) that ends in `&` runs in the background as a whole: `cd x && make &`.
+	// A list (up to `;`, a newline or `&` outside parentheses) that ends in `&` runs in the background as a whole:
+	// `cd x && make &`, `cd x && (a; b) &`.
 	let start = 0;
+	let depth = 0;
 	const background = out.map(() => false);
-	out.forEach(({ after }, i) => {
-		if (after === "&&" || after === "||" || after === "|") return;
+	out.forEach(({ raw, after }, i) => {
+		depth += (raw[0]?.match(/^\(+/)?.[0].length ?? 0) - (raw[raw.length - 1]?.match(/\)+$/)?.[0].length ?? 0);
+		if (after === "&&" || after === "||" || after === "|" || depth > 0) return;
 		if (after === "&") for (let j = start; j <= i; j++) background[j] = true;
 		start = i + 1;
 	});
@@ -677,6 +681,7 @@ class Subshells {
 	private closing = false;
 	private lost = false;
 	private conditional = false;
+	private outsideConditional = false;
 	private readonly textParens: boolean;
 	private readonly simple: boolean;
 
@@ -700,6 +705,7 @@ class Subshells {
 			this.closing = false;
 			this.inside = false;
 			this.state = this.outside;
+			this.conditional = this.outsideConditional;
 		}
 		if (this.conditional && before !== "&&") {
 			this.conditional = false;
@@ -709,6 +715,9 @@ class Subshells {
 			if (this.inside || raw[0].startsWith("((") || this.textParens) this.lost = true;
 			this.inside = true;
 			this.outside = this.state;
+			// A separator inside the parentheses doesn't end the outer `&&` chain.
+			this.outsideConditional = this.conditional;
+			this.conditional = false;
 		}
 		const last = (raw[raw.length - 1] ?? "").replace(/^\(+/, "");
 		if (this.inside && last.endsWith(")")) {
@@ -756,7 +765,8 @@ function changeDir(state: DirState, move: Move): DirState | undefined {
 		const [top, ...rest] = state.stack;
 		return top === undefined ? undefined : { dirs: top, prev: state.dirs, stack: rest };
 	}
-	if (arg === "" && cmd === "cd") return state;
+	// `cd ""` stays, but whether it sets OLDPWD depends on the shell.
+	if (arg === "" && cmd === "cd") return { ...state, prev: [] };
 	// `-P` resolves symlinks before `..`; the guard resolves paths as written.
 	if (move.physical && arg?.split("/").includes("..")) return undefined;
 	let target: string[];

@@ -661,7 +661,7 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	assert.equal(check("pushd src > /dev/null && npm test"), "allow", "a harmless redirection with a space");
 	assert.notEqual(check("case x in x) cd eng-kit/reviews;; esac; rm x"), "allow", "a move in a case arm is not followed");
 	for (const write of ["command -p cd eng-kit && cd reviews && rm x", "chdir eng-kit && cd reviews && rm x"]) assert.notEqual(check(write), "allow", write);
-	for (const write of [`cat $(cp /tmp/r.json ${records}/h/a.json)`, `git show HEAD:x --output=${records}/h/a.json`, `dd if=/tmp/r.json of=${records}/h/a.json`]) {
+	for (const write of [`cat $(cp /tmp/r.json ${records}/h/a.json)`, `git show HEAD:x --output=${records}/h/a.json`, `git show HEAD:x --outp=${records}/h/a.json`, `echo "$(cp /tmp/r.json ${records}/h/a.json)"`, `cd "$(cp /tmp/r.json ${records}/h/a.json)"`, `dd if=/tmp/r.json of=${records}/h/a.json`]) {
 		assert.equal(check(write, "/"), "block", `a read-only command that writes the records: ${write}`);
 	}
 });
@@ -716,10 +716,18 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	];
 	for (const command of notRun) assert.match(check(command)!.reason!, /can't tell which checkout/, `a move that may not run in this shell: ${command}`);
 	assert.doesNotMatch(check("git log --grep cd && git push origin HEAD:main")!.reason!, /can't tell/, "cd as an argument is not a move");
-	for (const command of [`grep -q x README.md && cd ${wt} && (ls); git push origin HEAD:main`, `cd ${wt} && npm test & git push origin HEAD:main`]) {
+	for (const command of [
+		`grep -q x README.md && cd ${wt} && (ls); git push origin HEAD:main`,
+		`cd ${wt} && npm test & git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls; ls); git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls || ls); git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls\nls); git push origin HEAD:main`,
+		`cd ${wt} && (ls; ls) & git push origin HEAD:main`,
+	]) {
 		assert.match(check(command)!.reason!, /can't tell which checkout/, `a move that may not run in this shell: ${command}`);
 	}
 	assert.match(check(`chdir ${wt} && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "zsh chdir is not followed");
+	assert.match(check(`cd ${wt}; cd ""; cd - && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "after cd \"\" the previous folder depends on the shell");
 	symlinkSync(join(wt, "src"), join(dir, "lnk"));
 	assert.equal(check(`cd -P lnk && cd .. && git push origin HEAD:main`), undefined, "cd -P follows the symlink's real folder");
 });
@@ -746,6 +754,9 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(dir, "t4", `grep -q x README.md && cd ${wt} && (ls); gh pr create --fill`, dir, root);
 	settlePr(dir, "t4", true, root);
 	assert.deepEqual(open(), ["feat/a"], "a move in a broken && chain is not followed: feat/n is not noted");
+	notePr(dir, "t5", `grep -q x README.md && cd ${wt} && (ls; ls); gh pr create --fill`, dir, root);
+	settlePr(dir, "t5", true, root);
+	assert.deepEqual(open(), ["feat/a"], "a separator inside the subshell doesn't end the outer && chain");
 	const other = repo();
 	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
 	settlePr(other.dir, "t2", false, other.root);
