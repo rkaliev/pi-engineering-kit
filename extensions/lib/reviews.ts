@@ -432,13 +432,15 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
 	const { dirs, unknown } = reachable(command, cwd);
+	// The tokens lose the `<` of `<(…)`, so a process substitution is found in the text.
+	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
 	let ask: GuardDecision | undefined;
 	for (const { full, words, redirected } of moveSegments(command)) {
 		const tokens = full.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		// A plain move writes nothing; a move with a redirection on it is checked like any command.
 		const move = parseMove(words.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean));
 		// A substitution runs its own command, and `--output` (or an abbreviation git accepts) makes git write a file.
-		const runs = tokens.some((t) => /\$\(|`|[<>]\(/.test(t) || t.startsWith("--ou"));
+		const runs = processSubst || tokens.some((t) => /\$\(|`/.test(t) || t.startsWith("--ou"));
 		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		const readOnly = !redirects && !runs && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
@@ -472,6 +474,7 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 	const dirs = new Set([cwd]);
 	let unknown = false;
 	const simple = plainShell(command);
+	if (hiddenMove(command)) unknown = true;
 	for (const { words: raw, alone, redirected } of moveSegments(command)) {
 		const words = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const move = parseMove(words);
@@ -530,6 +533,11 @@ function plainShell(command: string): boolean {
 
 /** zsh's `chdir` is a move too; the guard never follows it. */
 const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
+
+/** Whether a command the guard can't follow (see plainShell) names a move anywhere, as in `echo $( cd x )`. */
+function hiddenMove(command: string): boolean {
+	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(t.replace(/^[$(`]+/, "")));
+}
 /** Prefixes whose own options come before the command: `command -p cd`, `time -p cd`. */
 const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 /** Words that may stand before a command in the same segment. */
@@ -700,6 +708,7 @@ class Subshells {
 		const count = (s: string) => s.match(/[()]/g)?.length ?? 0;
 		this.textParens = count(command) !== count(blankQuoted(command).replace(/\\./g, ""));
 		this.simple = plainShell(command);
+		this.lost = hiddenMove(command);
 	}
 
 	get dir(): string | undefined {
