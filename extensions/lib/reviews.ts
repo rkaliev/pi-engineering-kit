@@ -519,13 +519,13 @@ function moveSegments(command: string): Array<{ full: string[]; words: string[];
 }
 
 /**
- * Whether the command's shape lets the guard follow its moves at all: no comment, command or process substitution,
- * backtick, brace group, `|&` or `case`. In any of these a `cd` may sit where the segments can't place it.
+ * Whether the command's shape lets the guard follow its moves at all: no comment, unquoted command or process
+ * substitution or backtick, brace group, `|&` or `case`. In any of these a `cd` may sit where the segments can't
+ * place it. A substitution inside quotes stays one word and runs in a subshell, so it can't move the shell.
  */
 function plainShell(command: string): boolean {
-	if (/\$\(|`/.test(command)) return false;
 	const text = blankQuoted(command).replace(/\\./g, "").replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}/g, "");
-	return !/#|[{}]|[<>]\(|\|&|(^|[\s;&|(])case\s/.test(text);
+	return !/\$\(|`|#|[{}]|[<>]\(|\|&|(^|[\s;&|(])case\s/.test(text);
 }
 
 /** zsh's `chdir` is a move too; the guard never follows it. */
@@ -544,6 +544,7 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  * `--`, then one folder for `pushd`, none for `popd`, at most one for `cd`, written without a glob or brace.
  */
 function parseMove(words: string[]): Move | "other" | undefined {
+	if (words.some((w) => /^(?:\$\(|`)+(?:cd|pushd|popd|chdir)$/.test(w))) return "other";
 	// The command word comes after reserved words, `builtin`-style prefixes and assignments.
 	const at = words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
 	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
@@ -551,7 +552,11 @@ function parseMove(words: string[]): Move | "other" | undefined {
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;
 	let physical = false;
-	while (cmd === "cd" && /^-[LP]+$/.test(words[i] ?? "")) physical ||= words[i++]!.includes("P");
+	// The last of `-L` and `-P` wins, as in bash.
+	while (cmd === "cd" && /^-[LP]+$/.test(words[i] ?? "")) {
+		const w = words[i++]!;
+		physical = w.lastIndexOf("P") > w.lastIndexOf("L");
+	}
 	const dashes = words[i] === "--";
 	if (dashes) i++;
 	const operands = words.slice(i);
@@ -640,6 +645,11 @@ export function stripRedirects(command: string): string {
 			i++;
 			continue;
 		}
+		if (command.startsWith("&&", i) || command.startsWith("||", i)) {
+			out += command.slice(i, i + 2);
+			i += 2;
+			continue;
+		}
 		const boundary = i === 0 || /[\s;&|()]/.test(command[i - 1]!);
 		// `[n]>`, `>>`, `>|`, `<`, `<>`, `>&` and `<&` (an fd, `-` or a word follows), `&>`, `&>>`. A `&` before
 		// anything else is a background separator: `a &< f b` runs `a` in the background, then `b` reads f.
@@ -712,7 +722,7 @@ class Subshells {
 			this.state = { dirs: [], prev: [], stack: [] };
 		}
 		if (raw[0]?.startsWith("(")) {
-			if (this.inside || raw[0].startsWith("((") || this.textParens) this.lost = true;
+			if (this.inside || raw[0].startsWith("((") || this.textParens || !this.simple) this.lost = true;
 			this.inside = true;
 			this.outside = this.state;
 			// A separator inside the parentheses doesn't end the outer `&&` chain.
@@ -780,7 +790,8 @@ function changeDir(state: DirState, move: Move): DirState | undefined {
 	if (target.length === 0 || !target.every(isDir)) return undefined;
 	// `-P` resolves symlinks: the shell is in the real folder, and a later `..` leaves that.
 	if (move.physical) target = target.map(safeRealpath);
-	return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
+	// zsh's AUTO_PUSHD makes `cd` push the stack too, so after a `cd` a `popd` can't be followed.
+	return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : cmd === "cd" ? [] : state.stack };
 }
 
 /** A `cd` operand with `~` expanded, and `$HOME` and `$TMPDIR` when `vars`; undefined when anything else would expand. */

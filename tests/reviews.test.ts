@@ -554,6 +554,7 @@ test("redirections read as the shell does: >| and >& take a word, &< is a backgr
 	assert.equal(flat("git push >& log origin main"), "git push origin main");
 	assert.equal(flat("true &</dev/null git push x"), "true & git push x");
 	assert.equal(flat("a >| b; git push origin main"), "a ; git push origin main");
+	assert.equal(flat("a &&>/dev/null b"), "a && b", "&& comes before &>");
 	const { check } = repo();
 	for (const hidden of ["git push >|log origin HEAD:main", "git push >& log origin HEAD:main", "git commit -qm x &</dev/null git push origin HEAD:main"]) {
 		assert.equal(action(check(hidden)), "block", hidden);
@@ -659,6 +660,8 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	assert.equal(check(`cd "$X"; npm test; cp /tmp/r.json ${records}/h/a.json`, "/"), "block", "a write into the records blocks even after a move the guard doesn't follow");
 	assert.equal(check(`cd ${records} 2>/dev/null && ls`, "/"), "allow", "reading the records with a harmless redirection");
 	assert.equal(check("pushd src > /dev/null && npm test"), "allow", "a harmless redirection with a space");
+	assert.equal(check(`cd ${project} && git commit -m "$(cat <<'EOF'\nmsg\nEOF\n)"`, "/"), "allow", "a substitution in quotes keeps the move plain");
+	assert.notEqual(check(`echo $(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`, "/"), "allow", "a move that opens a substitution is not followed");
 	assert.notEqual(check("case x in x) cd eng-kit/reviews;; esac; rm x"), "allow", "a move in a case arm is not followed");
 	for (const write of ["command -p cd eng-kit && cd reviews && rm x", "chdir eng-kit && cd reviews && rm x"]) assert.notEqual(check(write), "allow", write);
 	for (const write of [`cat $(cp /tmp/r.json ${records}/h/a.json)`, `git show HEAD:x --output=${records}/h/a.json`, `git show HEAD:x --outp=${records}/h/a.json`, `echo "$(cp /tmp/r.json ${records}/h/a.json)"`, `cd "$(cp /tmp/r.json ${records}/h/a.json)"`, `dd if=/tmp/r.json of=${records}/h/a.json`]) {
@@ -728,8 +731,16 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 	assert.match(check(`chdir ${wt} && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "zsh chdir is not followed");
 	assert.match(check(`cd ${wt}; cd ""; cd - && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "after cd \"\" the previous folder depends on the shell");
+	assert.equal(action(check(`echo $(cd ${dir} && gh pr create --fill)`, OPTIONS, wt)), "block", "a move that opens a substitution is not followed");
+	assert.match(check(`grep -q x README.md &&>/dev/null cd ${wt}; gh pr create --fill`)!.reason!, /can't tell which checkout/, "&&> is && then a redirection");
+	assert.equal(check(`cd ${wt} && gh pr create --title t --body "$(cat <<'EOF'\nbody\nEOF\n)"`), undefined, "a substitution in quotes can't move the shell");
 	symlinkSync(join(wt, "src"), join(dir, "lnk"));
 	assert.equal(check(`cd -P lnk && cd .. && git push origin HEAD:main`), undefined, "cd -P follows the symlink's real folder");
+	assert.equal(action(check(`cd -PL lnk && cd .. && git push origin HEAD:main`)), "block", "the last of -P and -L wins");
+	assert.match(check(`pushd ${wt} && cd src && popd && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "cd may push the stack (zsh AUTO_PUSHD)");
+	for (const inside of [`(cd ${dir} && echo $(git rev-parse HEAD) && gh pr create --fill)`, `(cd ${dir}; cat <(ls); gh pr create --fill)`]) {
+		assert.equal(action(check(inside, OPTIONS, wt)), "block", `a subshell in a command the guard can't follow: ${inside}`);
+	}
 });
 
 test("gate files: a > inside quotes is text, not a write", () => {
