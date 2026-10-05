@@ -380,11 +380,12 @@ function inTemp(path: string): boolean {
 
 /**
  * Writing redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `>& file`) and `tee` make any command a writer;
- * `2>/dev/null`, `2>&1` and `>&-` don't. A `>` in quotes is text, unless the command has a substitution, which
- * runs inside double quotes too.
+ * `2>/dev/null`, `2>&1` and `>&-` don't. A `>` in quotes is text only in a command the guard can read (see
+ * plainShell) with no substitution: a substitution runs inside double quotes too, and an apostrophe in a comment
+ * would open a quote the shell never sees.
  */
 function writes(command: string): boolean {
-	if (!/\$\(|`/.test(command)) command = blankQuoted(command);
+	if (!/\$\(|`/.test(command) && plainShell(command)) command = blankQuoted(command);
 	return (
 		[...command.matchAll(/(&>>?|\d*>[>|&]?)\s*([^\s;&|()<>]*)/g)].some(([, op, target]) => target !== "/dev/null" && !(op!.endsWith("&") && /^(\d+|-)$/.test(target!))) ||
 		/\btee\b/.test(command)
@@ -536,7 +537,7 @@ const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
 
 /** Whether a command the guard can't follow (see plainShell) names a move anywhere, as in `echo $( cd x )`. */
 function hiddenMove(command: string): boolean {
-	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(t.replace(/^[$(`]+/, "")));
+	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(t.replace(/\)+$/, "").split(/\$\(|`|\(/).pop()!));
 }
 /** Prefixes whose own options come before the command: `command -p cd`, `time -p cd`. */
 const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
@@ -552,7 +553,6 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  * `--`, then one folder for `pushd`, none for `popd`, at most one for `cd`, written without a glob or brace.
  */
 function parseMove(words: string[]): Move | "other" | undefined {
-	if (words.some((w) => /^(?:\$\(|`)+(?:cd|pushd|popd|chdir)$/.test(w))) return "other";
 	// The command word comes after reserved words, `builtin`-style prefixes and assignments.
 	const at = words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
 	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
@@ -846,7 +846,7 @@ function isSafe(tokens: string[], verify: string[]): boolean {
  * can't tell, the push keeps the current branch's name.
  */
 function withDestination(l: Extract<Landing, { kind: "push" }>, where: string): Extract<Landing, { kind: "push" }> {
-	if (l.refspecs.length > 0 || l.all) return l;
+	if (l.refspecs.length > 0 || l.all || l.tags) return l;
 	const dest = pushDestination(where);
 	if (!dest || (l.remote !== undefined && l.remote !== dest.remote)) return l;
 	return { ...l, remote: dest.remote, refspecs: [`HEAD:${dest.branch}`] };

@@ -569,6 +569,9 @@ test("a push without a refspec lands where @{push} points", () => {
 	for (const command of ["git push", "git push origin", "git push -o ci.skip"]) assert.equal(action(check(command)), "block", command);
 	git("config", "push.default", "simple");
 	assert.equal(action(check("git push")), "allow", "simple refuses an upstream of another name, so nothing lands");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push --tags")), "allow", "--tags pushes tags, not the branch");
+	git("config", "push.default", "simple");
 	git("remote", "add", "up/stream", git("remote", "get-url", "origin"));
 	git("fetch", "-q", "up/stream");
 	git("branch", "-q", "--set-upstream-to=up/stream/main");
@@ -661,10 +664,12 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	assert.equal(check(`cd ${records} 2>/dev/null && ls`, "/"), "allow", "reading the records with a harmless redirection");
 	assert.equal(check("pushd src > /dev/null && npm test"), "allow", "a harmless redirection with a space");
 	assert.equal(check(`cd ${project} && git commit -m "$(cat <<'EOF'\nmsg\nEOF\n)"`, "/"), "allow", "a substitution in quotes keeps the move plain");
-	for (const hidden of [`echo $(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`, `echo $( cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json )`]) {
+	for (const hidden of [`echo $(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`, `echo $( cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json )`, `X=$(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`]) {
 		assert.notEqual(check(hidden, "/"), "allow", `a move inside a substitution is not followed: ${hidden}`);
 	}
 	assert.equal(check(`cat <(cp /tmp/r.json ${records}/h/a.json)`, "/"), "block", "a process substitution makes a read-only command a writer");
+	assert.equal(check(`cd ${records}/h && ls  # check what's there\ncat /tmp/r.json > abc.json`, "/"), "block", "an apostrophe in a comment doesn't hide a later write");
+	assert.notEqual(check("cd \"$X\" && ls  # what's there\ncat /tmp/r.json > abc.json", `${records}/h`), "allow", "an apostrophe in a comment doesn't hide a later write");
 	assert.equal(check("cat <(cd .pi && sed -i s/x/y/ guard.json)", project), "confirm", "a move inside a process substitution asks before a write");
 	assert.notEqual(check("case x in x) cd eng-kit/reviews;; esac; rm x"), "allow", "a move in a case arm is not followed");
 	for (const write of ["command -p cd eng-kit && cd reviews && rm x", "chdir eng-kit && cd reviews && rm x"]) assert.notEqual(check(write), "allow", write);
@@ -735,7 +740,7 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 	assert.match(check(`chdir ${wt} && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "zsh chdir is not followed");
 	assert.match(check(`cd ${wt}; cd ""; cd - && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "after cd \"\" the previous folder depends on the shell");
-	for (const hidden of [`echo $(cd ${dir} && gh pr create --fill)`, `echo $( cd ${dir} && gh pr create --fill )`, "echo ` cd "+dir+" && gh pr create --fill`", `echo $(builtin cd ${dir} && gh pr create --fill)`, `cat <(cd ${dir} && gh pr create --fill)`]) {
+	for (const hidden of [`echo $(cd ${dir} && gh pr create --fill)`, `echo $( cd ${dir} && gh pr create --fill )`, "echo ` cd "+dir+" && gh pr create --fill`", `echo $(builtin cd ${dir} && gh pr create --fill)`, `cat <(cd ${dir} && gh pr create --fill)`, `echo x$(cd ${dir} && gh pr create --fill)`]) {
 		assert.equal(action(check(hidden, OPTIONS, wt)), "block", `a move inside a substitution is not followed: ${hidden}`);
 	}
 	assert.match(check(`grep -q x README.md &&>/dev/null cd ${wt}; gh pr create --fill`)!.reason!, /can't tell which checkout/, "&&> is && then a redirection");
@@ -775,6 +780,8 @@ test("a PR created inside a compound command is registered, even when a later st
 	settlePr(dir, "t5", true, root);
 	assert.deepEqual(open(), ["feat/a"], "a separator inside the subshell doesn't end the outer && chain");
 	notePr(dir, "t6", `echo $( cd ${wt} && gh pr create --fill )`, dir, root);
+	notePr(dir, "t7", `PR=$(cd ${wt} && gh pr create --fill)`, dir, root);
+	settlePr(dir, "t7", true, root);
 	settlePr(dir, "t6", true, root);
 	assert.deepEqual(open(), ["feat/a"], "a move inside a substitution is not followed");
 	const other = repo();
