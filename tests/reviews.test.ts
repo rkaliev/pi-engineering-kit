@@ -652,7 +652,8 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	];
 	for (const command of unfollowed) assert.equal(check(command, "/"), "confirm", `a move the guard doesn't follow asks before a write: ${command}`);
 	const nine = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((d) => `cd ${d}`).join("; ");
-	assert.notEqual(check(`${nine}; cd ${records}/h && cp /tmp/r.json r.json`, "/"), "allow", "past the folder cap nothing is hidden");
+	assert.equal(check(`${nine}; cd ${records}/h && cp /tmp/r.json r.json`, "/"), "block", "past the folder cap an absolute folder still counts");
+	assert.equal(check("cd \"a 2>/dev/null x/../../../eng-kit/reviews/h\" && cp /tmp/r.json r.json"), "block", "a redirection inside quotes is part of the folder");
 	assert.equal(check(`popd > ${records}/h/x.json`, "/"), "block", "a redirection on a move is checked");
 	assert.equal(check(`cd ${project} && cd . > .pi/guard.json`, "/"), "confirm", "a redirection on a move is checked");
 	assert.equal(check(`cd ${tmpdir()} && cd -- -/../eng-kit/reviews/h && cp /tmp/r.json r.json`, "/"), "block", "after -- a dash word is a folder");
@@ -754,12 +755,12 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 });
 
-test("gate files: a > inside quotes is text, not a write", () => {
+test("gate files: a > is a write wherever it stands, since the guard can't pair quotes as the shell does", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");
-	const check = (command: string) => checkGateFiles(command, project, project, ".pi/guard.json")?.action ?? "allow";
-	assert.equal(check(`grep "a>b" ${records}/x`), "allow");
+	const check = (command: string, cwd = project) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
 	assert.equal(check(`cat x > ${records}/y`), "block");
+	assert.equal(check(`cd ${records}/h && cat <<EOF\nls what's here\nEOF\ncat /tmp/r.json > abc.json`, "/"), "block", "an apostrophe in a heredoc body doesn't hide a later write");
 });
 
 test("a PR created inside a compound command is registered, even when a later step fails or a subshell moved", () => {

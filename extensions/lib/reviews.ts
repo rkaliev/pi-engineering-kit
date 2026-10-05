@@ -380,12 +380,11 @@ function inTemp(path: string): boolean {
 
 /**
  * Writing redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `>& file`) and `tee` make any command a writer;
- * `2>/dev/null`, `2>&1` and `>&-` don't. A `>` in quotes is text only in a command the guard can read (see
- * plainShell) with no substitution: a substitution runs inside double quotes too, and an apostrophe in a comment
- * would open a quote the shell never sees.
+ * `2>/dev/null`, `2>&1` and `>&-` don't. The text is scanned as written, quotes included: the guard can't pair
+ * quotes as the shell does (a substitution in double quotes runs, an apostrophe in a comment or heredoc body opens
+ * nothing), so a `>` in a quoted message counts too.
  */
 function writes(command: string): boolean {
-	if (!/\$\(|`/.test(command) && plainShell(command)) command = blankQuoted(command);
 	return (
 		[...command.matchAll(/(&>>?|\d*>[>|&]?)\s*([^\s;&|()<>]*)/g)].some(([, op, target]) => target !== "/dev/null" && !(op!.endsWith("&") && /^(\d+|-)$/.test(target!))) ||
 		/\btee\b/.test(command)
@@ -492,7 +491,8 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 				continue;
 			}
 			for (const dir of isAbsolute(path) ? [cwd] : [...dirs]) {
-				if (dirs.size >= 256) unknown = true;
+				// An absolute folder doesn't multiply the set, so it always counts.
+				if (dirs.size >= 256 && !isAbsolute(path)) unknown = true;
 				else dirs.add(resolve(dir, path));
 			}
 		}
@@ -502,7 +502,15 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 
 /** The command without redirections that write nothing (`2>/dev/null`, `>/dev/null`, `&>/dev/null`, `2>&1`, `>&-`), so they don't make a move look unusual. */
 function quiet(command: string): string {
-	return command.replace(/(^|[\s;&|()])(?:\d*>&(?:\d+|-)|&>>?\s*\/dev\/null|\d*>>?\s*\/dev\/null)(?=[\s;&|()]|$)/g, "$1");
+	// Matched on the text with quotes blanked (same length), so a `2>/dev/null` inside quotes stays part of its word.
+	const text = blankQuoted(command);
+	let out = "";
+	let at = 0;
+	for (const m of text.matchAll(/(^|[\s;&|()])(?:\d*>&(?:\d+|-)|&>>?\s*\/dev\/null|\d*>>?\s*\/dev\/null)(?=[\s;&|()]|$)/g)) {
+		out += command.slice(at, m.index! + m[1]!.length);
+		at = m.index! + m[0].length;
+	}
+	return out + command.slice(at);
 }
 
 /**
@@ -524,12 +532,12 @@ function moveSegments(command: string): Array<{ full: string[]; words: string[];
 
 /**
  * Whether the command's shape lets the guard follow its moves at all: no comment, unquoted command or process
- * substitution or backtick, brace group, `|&` or `case`. In any of these a `cd` may sit where the segments can't
+ * substitution or backtick, brace group, `|&`, heredoc or `case`. In any of these a `cd` may sit where the segments can't
  * place it. A substitution inside quotes stays one word and runs in a subshell, so it can't move the shell.
  */
 function plainShell(command: string): boolean {
 	const text = blankQuoted(command).replace(/\\./g, "").replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}/g, "");
-	return !/\$\(|`|#|[{}]|[<>]\(|\|&|(^|[\s;&|(])case\s/.test(text);
+	return !/\$\(|`|#|[{}]|[<>]\(|\|&|<<|(^|[\s;&|(])case\s/.test(text);
 }
 
 /** zsh's `chdir` is a move too; the guard never follows it. */
