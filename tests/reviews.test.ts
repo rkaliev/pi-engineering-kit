@@ -652,6 +652,12 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	assert.equal(check(`popd > ${records}/h/x.json`, "/"), "block", "a redirection on a move is checked");
 	assert.equal(check(`cd ${project} && cd . > .pi/guard.json`, "/"), "confirm", "a redirection on a move is checked");
 	assert.equal(check(`cd ${tmpdir()} && cd -- -/../eng-kit/reviews/h && cp /tmp/r.json r.json`, "/"), "block", "after -- a dash word is a folder");
+	assert.equal(check(`cd ${records}/h && cat "$(printf x > f.json)"`, "/"), "block", "a substitution in double quotes still runs");
+	assert.equal(check('cat "`echo x > a.json`"', `${records}/h`), "block", "a backtick substitution in double quotes still runs");
+	assert.equal(check(`cd > .pi/guard.json`, project), "confirm", "a redirection on a move with no folder is a write");
+	assert.equal(check(`pushd > ${records}/h/x.json`, "/"), "block", "a redirection on pushd is a write");
+	assert.equal(check(`cd "$X"; npm test; cp /tmp/r.json ${records}/h/a.json`, "/"), "block", "a write into the records blocks even after a move the guard doesn't follow");
+	assert.equal(check(`cd ${records} 2>/dev/null && ls`, "/"), "allow", "reading the records with a harmless redirection");
 });
 
 test("cd options, cd -, pushd and popd are followed to the checkout a landing runs in", () => {
@@ -692,6 +698,18 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 	assert.equal(action(check(`(cd ${wt} && git push -u origin feat/b) && gh pr create --fill`)), "block", "a landing inside ( … ) ends the subshell too");
 	assert.equal(check(`cd ${wt} 2>/dev/null && git push origin HEAD:main`), undefined, "a harmless redirection keeps the move plain");
+	const notRun = [
+		`grep -q x README.md && cd ${wt}; gh pr create --fill`,
+		`ls # ; cd ${wt}\ngh pr create --fill`,
+		`echo $(true; cd ${wt}); gh pr create --fill`,
+		`cat <(ls; cd ${wt}); gh pr create --fill`,
+		`(echo $(ls -a); cd ${wt}); gh pr create --fill`,
+		`true |& cd ${wt}; git push origin HEAD:main`,
+		`git status ||\ncd ${wt}\ngit push origin HEAD:main`,
+		`command cd ${wt} && git push origin HEAD:main`,
+	];
+	for (const command of notRun) assert.match(check(command)!.reason!, /can't tell which checkout/, `a move that may not run in this shell: ${command}`);
+	assert.doesNotMatch(check("git log --grep cd && git push origin HEAD:main")!.reason!, /can't tell/, "cd as an argument is not a move");
 });
 
 test("gate files: a > inside quotes is text, not a write", () => {
