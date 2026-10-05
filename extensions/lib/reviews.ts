@@ -439,10 +439,14 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const move = parseMove(words.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean));
 		if (move !== undefined && move !== "other" && !redirected) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
-		const readOnly = !redirects && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
+		// A substitution runs its own command, and `--output` makes git write a file.
+		const runs = tokens.some((t) => /\$\(|`|[<>]\(/.test(t) || t.startsWith("--output"));
+		const readOnly = !redirects && !runs && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
-		const paths = dirs.flatMap((dir) => tokens.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
-		const named = tokens.some((t) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(t));
+		// A path may follow `=` (`of=…`, `--output=…`) or `$(`.
+		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^.*?(\$\(|`)/, "")]);
+		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
+		const named = candidates.some((t) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(t));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
@@ -493,7 +497,7 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 
 /** The command without redirections that write nothing (`2>/dev/null`, `>/dev/null`, `&>/dev/null`, `2>&1`, `>&-`), so they don't make a move look unusual. */
 function quiet(command: string): string {
-	return command.replace(/(^|[\s;&|()])(?:\d*>&(?:\d+|-)|&>>?\/dev\/null|\d*>>?\/dev\/null)(?=[\s;&|()]|$)/g, "$1");
+	return command.replace(/(^|[\s;&|()])(?:\d*>&(?:\d+|-)|&>>?\s*\/dev\/null|\d*>>?\s*\/dev\/null)(?=[\s;&|()]|$)/g, "$1");
 }
 
 /**
@@ -515,15 +519,18 @@ function moveSegments(command: string): Array<{ full: string[]; words: string[];
 
 /**
  * Whether the command's shape lets the guard follow its moves at all: no comment, command or process substitution,
- * backtick, brace group or `|&`. In any of these a `cd` may sit where the segments can't place it.
+ * backtick, brace group, `|&` or `case`. In any of these a `cd` may sit where the segments can't place it.
  */
 function plainShell(command: string): boolean {
 	if (/\$\(|`/.test(command)) return false;
 	const text = blankQuoted(command).replace(/\\./g, "").replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}/g, "");
-	return !/#|[{}]|[<>]\(|\|&/.test(text);
+	return !/#|[{}]|[<>]\(|\|&|(^|[\s;&|(])case\s/.test(text);
 }
 
-const MOVES = new Set(["cd", "pushd", "popd"]);
+/** zsh's `chdir` is a move too; the guard never follows it. */
+const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
+/** Prefixes whose own options come before the command: `command -p cd`, `time -p cd`. */
+const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 /** Words that may stand before a command in the same segment. */
 const PREFIXES = new Set(["{", "}", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 
@@ -537,9 +544,9 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  */
 function parseMove(words: string[]): Move | "other" | undefined {
 	// The command word comes after reserved words, `builtin`-style prefixes and assignments.
-	const at = words.findIndex((w) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+	const at = words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
 	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
-	if (at > 0) return "other";
+	if (at > 0 || words[at] === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;
 	let physical = false;
@@ -576,7 +583,15 @@ function segmentsOf(tokens: string[]): Array<{ raw: string[]; alone: boolean; be
 		raw = [];
 	}
 	if (raw.length > 0) out.push({ raw, before, after: "" });
-	return out.map(({ raw, before, after }) => ({ raw, before, alone: before !== "||" && before !== "|" && after !== "|" && after !== "&" }));
+	// A list (up to `;`, a newline or `&`) that ends in `&` runs in the background as a whole: `cd x && make &`.
+	let start = 0;
+	const background = out.map(() => false);
+	out.forEach(({ after }, i) => {
+		if (after === "&&" || after === "||" || after === "|") return;
+		if (after === "&") for (let j = start; j <= i; j++) background[j] = true;
+		start = i + 1;
+	});
+	return out.map(({ raw, before, after }, i) => ({ raw, before, alone: !background[i] && before !== "||" && before !== "|" && after !== "|" }));
 }
 
 const SEPARATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
@@ -681,14 +696,14 @@ class Subshells {
 	 * `&&` may have been skipped, so once the `&&` chain breaks (`;`, a newline, `||`) the folder is unknown.
 	 */
 	enter(raw: string[], before: string): void {
-		if (this.conditional && before !== "&&") {
-			this.conditional = false;
-			this.state = { dirs: [], prev: [], stack: [] };
-		}
 		if (this.closing) {
 			this.closing = false;
 			this.inside = false;
 			this.state = this.outside;
+		}
+		if (this.conditional && before !== "&&") {
+			this.conditional = false;
+			this.state = { dirs: [], prev: [], stack: [] };
 		}
 		if (raw[0]?.startsWith("(")) {
 			if (this.inside || raw[0].startsWith("((") || this.textParens) this.lost = true;
@@ -753,6 +768,8 @@ function changeDir(state: DirState, move: Move): DirState | undefined {
 		target = isAbsolute(path) ? [resolve(path)] : state.dirs.map((d) => resolve(d, path));
 	}
 	if (target.length === 0 || !target.every(isDir)) return undefined;
+	// `-P` resolves symlinks: the shell is in the real folder, and a later `..` leaves that.
+	if (move.physical) target = target.map(safeRealpath);
 	return { dirs: target, prev: state.dirs, stack: cmd === "pushd" ? [state.dirs, ...state.stack] : state.stack };
 }
 
