@@ -654,6 +654,8 @@ test("gate files: every folder a cd, pushd or popd may reach is checked, in any 
 	const nine = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((d) => `cd ${d}`).join("; ");
 	assert.equal(check(`${nine}; cd ${records}/h && cp /tmp/r.json r.json`, "/"), "block", "past the folder cap an absolute folder still counts");
 	assert.equal(check("cd \"a 2>/dev/null x/../../../eng-kit/reviews/h\" && cp /tmp/r.json r.json"), "block", "a redirection inside quotes is part of the folder");
+	assert.equal(check(`cd ${records}/h && ls # what's there\ncp /tmp/r.json abc.json`, "/"), "block", "in a command the guard can't read, no step counts as read-only");
+	for (const back of ["cd - && cp /tmp/r.json a.json", "cd ~-/x && cp /tmp/r.json a.json"]) assert.equal(check(back, "/"), "confirm", `the previous folder before any move is an earlier command's: ${back}`);
 	assert.equal(check(`popd > ${records}/h/x.json`, "/"), "block", "a redirection on a move is checked");
 	assert.equal(check(`cd ${project} && cd . > .pi/guard.json`, "/"), "confirm", "a redirection on a move is checked");
 	assert.equal(check(`cd ${tmpdir()} && cd -- -/../eng-kit/reviews/h && cp /tmp/r.json r.json`, "/"), "block", "after -- a dash word is a folder");

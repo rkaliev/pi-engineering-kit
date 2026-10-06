@@ -434,6 +434,8 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const { dirs, unknown } = reachable(command, cwd);
 	// The tokens lose the `<` of `<(…)`, so a process substitution is found in the text.
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
+	// In a command the guard can't read (a comment or heredoc may swallow the next line), no step is read-only.
+	const readable = plainShell(command);
 	let ask: GuardDecision | undefined;
 	for (const { full, words, redirected } of moveSegments(command)) {
 		const tokens = full.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -443,7 +445,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const runs = processSubst || tokens.some((t) => /\$\(|`/.test(t) || t.startsWith("--ou"));
 		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
-		const readOnly = !redirects && !runs && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
+		const readOnly = readable && !redirects && !runs && (READ_ONLY.has(tokens[0] ?? "") || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
 		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.
 		const inner = (t: string) => (/\$\(|`/.test(t) ? tokenize(t.replace(/^.*?(\$\(|`)/, "").replace(/[)`]+$/, "")) : []);
@@ -467,14 +469,16 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
  * Every folder the shell may be in during the command: the start folder and any folder a `cd`, `pushd` or
  * `popd` may reach from any of them. The set only grows, so a failed move or a subshell never hides a folder;
  * `cd -`, `~-` and `popd` return to one already in it, and a write may create a folder first, so a folder need
- * not exist. `unknown` when a move isn't plain (see parseMove) or the set would pass 256 folders: then any write
- * asks.
+ * not exist. `unknown` when a move isn't plain (see parseMove), when `cd -` or `~-` comes before any move in the
+ * command (the previous folder is then an earlier command's), or when the set would pass 256 folders: then any
+ * write asks.
  */
 function reachable(command: string, cwd: string): { dirs: string[]; unknown: boolean } {
 	const dirs = new Set([cwd]);
 	let unknown = false;
 	const simple = plainShell(command);
 	if (hiddenMove(command)) unknown = true;
+	let moved = false;
 	for (const { words: raw, alone, redirected } of moveSegments(command)) {
 		const words = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const move = parseMove(words);
@@ -484,6 +488,8 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 		// A move the guard doesn't follow still adds its literal words: more candidates only block more.
 		const args = move === "other" ? words.filter((w) => !MOVES.has(w)) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
 		for (const arg of args) {
+			// Before any move in this command, the previous folder is one an earlier command left in OLDPWD.
+			if ((arg === "-" || /^~-(?=\/|$)/.test(arg)) && !moved) unknown = true;
 			if (arg === "-" || arg === "") continue;
 			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true);
 			if (path === undefined) {
@@ -496,6 +502,7 @@ function reachable(command: string, cwd: string): { dirs: string[]; unknown: boo
 				else dirs.add(resolve(dir, path));
 			}
 		}
+		moved = true;
 	}
 	return { dirs: [...dirs], unknown };
 }
