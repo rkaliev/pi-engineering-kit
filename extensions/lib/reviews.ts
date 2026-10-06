@@ -281,9 +281,17 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
+	const visible = checkSegments(command, cwd, projectDir, options, root);
 	if (hiddenLanding(command)) {
-		return decision(options.missing, "the guard can't read where this command lands: a heredoc body hides a landing, or one sits in a substitution in double quotes or in an unquoted heredoc body. Run the landing as its own command, outside any substitution.", options);
+		// A question must still say why a landing the guard can see isn't covered.
+		const also = visible?.reason ? ` Also: ${visible.reason}` : "";
+		return decision(options.missing, `the guard can't read where this command lands: a heredoc body hides a landing, or one sits in a substitution in double quotes or in an unquoted heredoc body. Run the landing as its own command, outside any substitution.${also}`, options);
 	}
+	return visible;
+}
+
+/** The review gate over the landings the command's segments show. */
+function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const shell = new Subshells(cwd, command);
 	let unsafeBefore = false;
 	for (const { raw, alone, before } of segmentsOf(tokenize(stripRedirects(command)))) {

@@ -753,9 +753,10 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 		assert.equal(check(text), undefined, `an unquoted heredoc body's text and escaped backticks don't run: ${text}`);
 	}
 	assert.doesNotMatch(check(`cd ${wt} && git commit -m "$(cat <<'EOF'\nfix: the user's input\nEOF\n)" && git push origin HEAD:main`)?.reason ?? "", /can't read/, "a commit message heredoc in a substitution reads as before");
-	for (const hidden of [`git commit -F - <<'EOF'\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<-EOF\nit's\n\tEOF\ngit push origin HEAD:main`, `echo "$(cd ${dir} && gh pr create --fill)"`, `cat <<<'x'\necho "$(gh pr create --fill)"`, `git commit -F - <<\\EOF\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<'EOF'\ngit push is now gated\nit's documented\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\nRun `git push origin main`\nEOF\n)\"", `git push origin HEAD:main\ngit commit -F - <<'EOF'\nfix: the user's input\nEOF\ngit push origin HEAD:main`]) {
+	for (const hidden of [`git commit -F - <<'EOF'\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<-EOF\nit's\n\tEOF\ngit push origin HEAD:main`, `echo "$(cd ${dir} && gh pr create --fill)"`, `cat <<<'x'\necho "$(gh pr create --fill)"`, `git commit -F - <<\\EOF\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<'EOF'\ngit push is now gated\nit's documented\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\nRun `git push origin main`\nEOF\n)\"", `git push origin HEAD:main\ngit commit -F - <<'EOF'\nfix: the user's input\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\n## Release\n```\ngit push origin HEAD:main\n```\nEOF\n)\""]) {
 		assert.match(check(hidden, OPTIONS, wt)?.reason ?? "", /can't read/, `a landing the segments don't show: ${hidden}`);
 	}
+	assert.match(check(`git push origin HEAD:main && echo "PR: $(gh pr create --fill)"`)?.reason ?? "", /can't read.*Also: Review gate: /s, "a hidden landing's question still names the visible landing's problem");
 	symlinkSync(join(wt, "src"), join(dir, "lnk"));
 	assert.equal(check(`cd -P lnk && cd .. && git push origin HEAD:main`), undefined, "cd -P follows the symlink's real folder");
 	assert.equal(action(check(`cd -PL lnk && cd .. && git push origin HEAD:main`)), "block", "the last of -P and -L wins");

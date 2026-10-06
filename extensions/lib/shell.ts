@@ -446,16 +446,25 @@ export function heredocs(command: string): { text: string; substitutions: string
 	const out: string[] = [];
 	const substitutions: string[] = [];
 	const open: Array<{ word: string; tabs: boolean; quoted: boolean }> = [];
+	// A body is scanned whole: a substitution may span its lines (a code fence between backticks).
+	let body: string[] = [];
+	const scan = () => {
+		if (open[0] && !open[0].quoted) substitutions.push(...quotedSubstitutions(`"${body.join("\n").replace(/\\./g, "").replace(/"/g, "")}"`));
+		body = [];
+	};
 	for (const line of command.split("\n")) {
 		if (open.length > 0) {
-			if ((open[0]!.tabs ? line.replace(/^\t+/, "") : line) === open[0]!.word) open.shift();
-			else if (!open[0]!.quoted) substitutions.push(...quotedSubstitutions(`"${line.replace(/\\./g, "").replace(/"/g, "")}"`));
+			if ((open[0]!.tabs ? line.replace(/^\t+/, "") : line) === open[0]!.word) {
+				scan();
+				open.shift();
+			} else body.push(line);
 			continue;
 		}
 		out.push(line);
 		// `<<<` is a here-string, not a heredoc.
 		for (const m of line.matchAll(/(?<!<)<<(-?)[ \t]*(\\?)(['"]?)([\w.-]+)\3/g)) open.push({ word: m[4]!, tabs: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
 	}
+	scan();
 	return { text: out.join("\n"), substitutions };
 }
 
