@@ -131,7 +131,8 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 
 function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined {
 	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
-	if (tokens.includes("--no-verify") || words.includes("--no-verify")) {
+	// git takes any unambiguous abbreviation of a long option; `--no-ver` is ambiguous with `--no-verbose`.
+	if ([...tokens, ...words].some((t) => /^--no-veri(?:fy?)?$/.test(t))) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
 	const gitAt = words.indexOf("git");
@@ -187,6 +188,8 @@ export function tokenize(command: string): string[] {
 	let current = "";
 	let quote: "'" | '"' | "$'" | null = null;
 	let has = false;
+	// The unquoted, unescaped `<` or `>` just before this character, if any: `>&`, `<&` and `>|` continue it.
+	let operator = "";
 	const push = () => {
 		if (has) tokens.push(current);
 		current = "";
@@ -194,6 +197,8 @@ export function tokenize(command: string): string[] {
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i]!;
+		const after = operator;
+		operator = "";
 		if (quote === "'") {
 			if (ch === "'") quote = null;
 			else current += ch;
@@ -242,6 +247,11 @@ export function tokenize(command: string): string[] {
 			i++;
 			continue;
 		}
+		// `&>`, `&>>`, `>&`, `<&` and `>|` are redirections, not a background `&` or a pipe.
+		if ((ch === "&" && (command[i + 1] === ">" || after !== "")) || (ch === "|" && after === ">")) {
+			push();
+			continue;
+		}
 		if (ch === ";" || ch === "|" || ch === "&" || ch === "\n") {
 			push();
 			tokens.push(ch);
@@ -249,6 +259,7 @@ export function tokenize(command: string): string[] {
 		}
 		if (/\s/.test(ch) || ch === "<" || ch === ">") {
 			push();
+			if (ch === "<" || ch === ">") operator = ch;
 			continue;
 		}
 		current += ch;

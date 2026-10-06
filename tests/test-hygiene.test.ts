@@ -48,13 +48,13 @@ function hits(stdout: string): string[] {
 
 test("the version is on one of the first lines, before the imports", () => {
 	const src = readFileSync(SCRIPT, "utf8").split("\n");
-	const v = src.indexOf('export const VERSION = "4";');
+	const v = src.indexOf('export const VERSION = "5";');
 	assert.ok(v >= 0 && v < 25, "VERSION line");
 	assert.ok(v < src.findIndex((l) => l.startsWith("import ")));
 });
 
 test("exports a version and pure helpers", () => {
-	assert.equal(VERSION, "4");
+	assert.equal(VERSION, "5");
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("a/b/c.spec.ts"));
 	assert.ok(globToRegExp("**/*.{test,spec}.ts").test("c.test.ts"));
 	assert.ok(!globToRegExp("*.ts").test("a/c.ts"));
@@ -78,6 +78,10 @@ const RULE_CASES: Case[] = [
 	c("prose with mode: in a reason is not a marker", "tests/test_m.py", `@pytest.mark.skip(reason="strict mode: fails")\ndef test_m(): pass\n`, "tests/test_m.py:1 skip-without-reason"),
 	c("a marker followed by a format verb", "pkg/m_test.go", `t.Skipf("platform: %s unsupported", runtime.GOOS)\n`),
 	c("mocha this.skip without issue", "test/a.js", `it("x", function () {\n  this.skip();\n});\n`, "test/a.js:2 skip-without-reason"),
+	c("vitest context.skip keeps its one-argument reason", "src/a.test.ts", `it("x", (context) => {\n  context.skip("platform: no symlinks on windows");\n});\n`),
+	c("vitest context.skip without a marker", "src/a.test.ts", `it("x", (context) => {\n  context.skip("needs db");\n});\n`, "src/a.test.ts:2 skip-without-reason"),
+	c("mocha context.skip names a suite, not a reason", "test/a.js", `context.skip("platform: suite", () => {});\n`, "test/a.js:1 skip-without-reason"),
+	c("a skipped test with an issue after its name", "src/a.test.ts", `it.skip("name", () => {}); // #12\n`),
 	c("mocha this.skip with issue", "test/a.js", `it("x", function () {\n  this.skip(); // #12\n});\n`),
 	c("junit DisabledOnOs without issue", "src/test/java/AT.java", `@DisabledOnOs(OS.WINDOWS)\nvoid t() {}\n`, "src/test/java/AT.java:1 skip-without-reason"),
 	c("junit DisabledIf with issue", "src/test/java/AT.java", `@DisabledIf("x") // PROJ-4\nvoid t() {}\n`),

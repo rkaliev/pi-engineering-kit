@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 
@@ -440,7 +440,7 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	const kit = "/kit";
 	const check = (command: string) => checkReviewerCommand(command, project, ["npm test", "npm run lint"], kit)?.action ?? "allow";
 	const tmp = join(tmpdir(), "r");
-	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git log --oneline -5", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", `git worktree add ${tmp} abc`, `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "git diff a..b | head -50", "cat f | grep x", "grep -rn foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd tests && git status", `node ${kit}/scripts/review-log.ts abc`]) {
+	for (const ok of ["git diff a..b", "git diff --stat a..b -- src", "git log --oneline -5", "git -C /x log --oneline", "git show a:CLAUDE.md", "git merge-base origin/main HEAD", "git merge-base --is-ancestor abc origin/main", `git worktree add ${tmp} abc`, `git worktree add --detach ${tmp} abc`, `git worktree remove --force ${tmp}`, "git worktree list", "git diff a..b | head -50", "cat f | grep x", "grep -rn foo src 2>/dev/null", "npm test", "npm test 2>&1 | tail -20", "cd tests && git status", `node ${kit}/scripts/review-log.ts abc`]) {
 		assert.equal(check(ok), "allow", ok);
 	}
 	const bad = [
@@ -543,14 +543,250 @@ test("gate files: >| and >&file are writes too", () => {
 		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", write);
 	}
 	assert.equal(checkGateFiles("cat .pi/guard.json >&2", project, project, ".pi/guard.json"), undefined, ">&2 is not a file");
+	for (const write of [`cat x >&${records}/h/a.json`, `jq . x >& ${records}/h/a.json`, `cat x &>${records}/h/a.json`, `head x >|${records}/h/a.json`]) {
+		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", `a read-only command that redirects into the records: ${write}`);
+	}
+});
+
+test("redirections read as the shell does: >| and >& take a word, &< is a background & then <", () => {
+	const flat = (command: string) => stripRedirects(command).replace(/\s+/g, " ").trim();
+	assert.equal(flat("git push >|log origin main"), "git push origin main");
+	assert.equal(flat("git push >& log origin main"), "git push origin main");
+	assert.equal(flat("true &</dev/null git push x"), "true & git push x");
+	assert.equal(flat("a >| b; git push origin main"), "a ; git push origin main");
+	assert.equal(flat("a &&>/dev/null b"), "a && b", "&& comes before &>");
+	const { check } = repo();
+	for (const hidden of ["git push >|log origin HEAD:main", "git push >& log origin HEAD:main", "git commit -qm x &</dev/null git push origin HEAD:main"]) {
+		assert.equal(action(check(hidden)), "block", hidden);
+	}
+});
+
+test("a push without a refspec lands where @{push} points", () => {
+	const { git, check } = repo();
+	assert.equal(action(check("git push")), "allow", "no upstream: the branch pushes to its own name");
+	git("branch", "-q", "--set-upstream-to=origin/main");
+	git("config", "push.default", "upstream");
+	for (const command of ["git push", "git push origin", "git push -o ci.skip"]) assert.equal(action(check(command)), "block", command);
+	git("config", "push.default", "simple");
+	assert.equal(action(check("git push")), "allow", "simple refuses an upstream of another name, so nothing lands");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push --tags")), "allow", "--tags pushes tags, not the branch");
+	git("config", "push.default", "simple");
+	git("remote", "add", "up/stream", git("remote", "get-url", "origin"));
+	git("fetch", "-q", "up/stream");
+	git("branch", "-q", "--set-upstream-to=up/stream/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "block", "a remote whose name contains a slash");
+});
+
+test("the remote @{push} names decides what is already landed", () => {
+	const { dir, git, run, check } = repo();
+	const other = mkdtempSync(join(tmpdir(), "reviews-other-"));
+	run(other, "init", "-q", "--bare", "-b", "main");
+	git("remote", "add", "up", other);
+	git("push", "-q", "up", "HEAD:main");
+	git("fetch", "-q", "up");
+	git("branch", "-q", "--set-upstream-to=up/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "allow", "HEAD is already on up/main, where the push goes");
+	run(dir, "status");
+});
+
+test("a push without a refspec is checked against the remote branch, whatever the fetch refspec calls it", () => {
+	const { git, commit, check } = repo();
+	git("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/mirror/*");
+	git("fetch", "-q", "origin");
+	git("branch", "-q", "--set-upstream-to=mirror/main");
+	git("config", "push.default", "upstream");
+	assert.equal(action(check("git push")), "block", "feat/a's upstream is main on origin, tracked as mirror/main");
+	git("switch", "-q", "main");
+	commit({ "src/m.ts": "export const m = 1;\n" });
+	for (const command of ["git push", "git push origin", "git push --branches origin"]) assert.equal(action(check(command)), "block", `on the base: ${command}`);
+});
+
+test("&> needs no space before it: the words after it stay with the command", () => {
+	assert.equal(stripRedirects("git push origin feat&>log main").replace(/\s+/g, " ").trim(), "git push origin feat main");
+	const { check } = repo();
+	assert.equal(action(check("git push origin feat/a&>/dev/null HEAD:main")), "block");
+});
+
+test("gate files: every folder a cd, pushd or popd may reach is checked, in any form", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	mkdirSync(join(project, ".pi"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	const check = (command: string, cwd = tmpdir()) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
+	const writes = [
+		"cd nope; cd eng-kit/reviews; rm x",
+		"cd -- eng-kit/reviews; rm x",
+		"cd -P eng-kit/reviews; rm x",
+		"cd $TMPDIR/eng-kit/reviews && rm x",
+		"cd ${TMPDIR}/eng-kit/reviews && rm x",
+		"pushd eng-kit/reviews && popd && rm x",
+		"pushd eng-kit/reviews >/dev/null && cp /tmp/r.json r.json",
+		"cd eng-kit/reviews 2>/dev/null && cp /tmp/r.json r.json",
+		"cd eng-kit/reviews # into the records\ncp /tmp/r.json r.json",
+		`pushd ${records} && pushd / && pushd && rm x`,
+		`pushd ${records} && pushd / && pushd +1 && rm x`,
+		`cd ${records} && cd / && cd ~- && rm x`,
+		`pushd ${records} && pushd / && cd "$X" && popd && rm x`,
+		`cd ${records}/h; cd ""; echo x > y.json`,
+		`cd ${records} && (cd /) && rm x`,
+		`cd ${records} && (cd / && (ls) && cd /) && rm x`,
+		`(cd ${records}/h && ls $(pwd) && cp /tmp/r.json r.json)`,
+		"cd ${TMPDIR}eng-kit/reviews && rm x",
+		"echo x > ${TMPDIR}eng-kit/reviews/h/a.json",
+		"cd $TMPDIR && cd eng-kit/reviews && rm x",
+	];
+	for (const write of writes) assert.equal(check(write), "block", `the shell may be in the records: ${write}`);
+	assert.equal(check('cd "$X" && rm x', records), "block", "a cd the guard can't follow keeps the folders it knows");
+	assert.equal(check(`cd ${project} && cd .pi 2>/dev/null && sed -i s/a/b/ guard.json`, "/"), "confirm", "a redirection on cd keeps its folder");
+	assert.equal(check(`cd $HOME && cd ${relative(homedir(), project)}/.pi && sed -i s/a/b/ guard.json`, "/"), "confirm", "$HOME expands");
+	assert.equal(check("cd src && rm x"), "allow", "a folder outside the records");
+	assert.equal(check("cd src 2>/dev/null && npm test"), "allow", "a harmless redirection keeps the move plain");
+	const unfollowed = [
+		"{ cd eng-kit/reviews; rm x; }",
+		"if true; then cd eng-kit/reviews; fi; rm x",
+		'cd "$TMPDIR"eng-kit/reviews && cp /tmp/r.json r.json',
+		"cd a b c d e f g h 2>/dev/null; rm x",
+		"cd $X && npm test",
+	];
+	for (const command of unfollowed) assert.equal(check(command, "/"), "confirm", `a move the guard doesn't follow asks before a write: ${command}`);
+	const nine = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((d) => `cd ${d}`).join("; ");
+	assert.equal(check(`${nine}; cd ${records}/h && cp /tmp/r.json r.json`, "/"), "block", "past the folder cap an absolute folder still counts");
+	assert.equal(check("cd \"a 2>/dev/null x/../../../eng-kit/reviews/h\" && cp /tmp/r.json r.json"), "block", "a redirection inside quotes is part of the folder");
+	assert.equal(check(`cd ${records}/h && ls # what's there\ncp /tmp/r.json abc.json`, "/"), "block", "in a command the guard can't read, no step counts as read-only");
+	for (const back of ["cd - && cp /tmp/r.json a.json", "cd ~-/x && cp /tmp/r.json a.json"]) assert.equal(check(back, "/"), "confirm", `the previous folder before any move is an earlier command's: ${back}`);
+	assert.equal(check(`popd > ${records}/h/x.json`, "/"), "block", "a redirection on a move is checked");
+	assert.equal(check(`cd ${project} && cd . > .pi/guard.json`, "/"), "confirm", "a redirection on a move is checked");
+	assert.equal(check(`cd ${tmpdir()} && cd -- -/../eng-kit/reviews/h && cp /tmp/r.json r.json`, "/"), "block", "after -- a dash word is a folder");
+	assert.equal(check(`cd ${records}/h && cat "$(printf x > f.json)"`, "/"), "block", "a substitution in double quotes still runs");
+	assert.equal(check('cat "`echo x > a.json`"', `${records}/h`), "block", "a backtick substitution in double quotes still runs");
+	assert.equal(check(`cd > .pi/guard.json`, project), "confirm", "a redirection on a move with no folder is a write");
+	assert.equal(check(`pushd > ${records}/h/x.json`, "/"), "block", "a redirection on pushd is a write");
+	assert.equal(check(`cd "$X"; npm test; cp /tmp/r.json ${records}/h/a.json`, "/"), "block", "a write into the records blocks even after a move the guard doesn't follow");
+	assert.equal(check(`cd ${records} 2>/dev/null && ls`, "/"), "allow", "reading the records with a harmless redirection");
+	assert.equal(check("pushd src > /dev/null && npm test"), "allow", "a harmless redirection with a space");
+	assert.equal(check(`cd ${project} && git commit -m "$(cat <<'EOF'\nmsg\nEOF\n)"`, "/"), "allow", "a substitution in quotes keeps the move plain");
+	for (const hidden of [`echo $(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`, `echo $( cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json )`, `X=$(cd ${tmpdir()}/eng-kit && cp /tmp/r.json reviews/h/a.json)`]) {
+		assert.notEqual(check(hidden, "/"), "allow", `a move inside a substitution is not followed: ${hidden}`);
+	}
+	assert.equal(check(`cat <(cp /tmp/r.json ${records}/h/a.json)`, "/"), "block", "a process substitution makes a read-only command a writer");
+	assert.equal(check(`cd ${records}/h && ls  # check what's there\ncat /tmp/r.json > abc.json`, "/"), "block", "an apostrophe in a comment doesn't hide a later write");
+	assert.notEqual(check("cd \"$X\" && ls  # what's there\ncat /tmp/r.json > abc.json", `${records}/h`), "allow", "an apostrophe in a comment doesn't hide a later write");
+	assert.equal(check("cat <(cd .pi && sed -i s/x/y/ guard.json)", project), "confirm", "a move inside a process substitution asks before a write");
+	assert.notEqual(check("case x in x) cd eng-kit/reviews;; esac; rm x"), "allow", "a move in a case arm is not followed");
+	for (const write of ["command -p cd eng-kit && cd reviews && rm x", "chdir eng-kit && cd reviews && rm x"]) assert.notEqual(check(write), "allow", write);
+	for (const write of [`cat $(cp /tmp/r.json ${records}/h/a.json)`, `git show HEAD:x --output=${records}/h/a.json`, `git show HEAD:x --outp=${records}/h/a.json`, `echo "$(cp /tmp/r.json ${records}/h/a.json)"`, `cd "$(cp /tmp/r.json ${records}/h/a.json)"`, `dd if=/tmp/r.json of=${records}/h/a.json`]) {
+		assert.equal(check(write, "/"), "block", `a read-only command that writes the records: ${write}`);
+	}
+});
+
+test("cd options, cd -, pushd and popd are followed to the checkout a landing runs in", () => {
+	const { dir, git, commit, check, review, base } = repo();
+	const wt = join(dir, ".worktrees", "b");
+	git("worktree", "add", "-q", "-b", "feat/b", wt, "main");
+	const b = commit({ "src/b.ts": "export const b = 1;\n" }, wt);
+	review(report(b, "Yes", base));
+	for (const moved of [`cd -P ${wt} && git push origin HEAD:main`, `cd -- ${wt} && git push origin HEAD:main`, `cd ${wt} && cd src && cd - && git push origin HEAD:main`]) {
+		assert.equal(check(moved), undefined, moved);
+	}
+	assert.equal(action(check(`pushd ${wt} && popd && git push origin HEAD:main`)), "block", "popd returns to the unreviewed main checkout");
+	for (const unknown of ["popd && git push origin HEAD:main", "cd - && git push origin HEAD:main", "cd $TMPDIR && git push origin HEAD:main"]) {
+		assert.match(check(unknown)!.reason!, /can't tell which checkout/, unknown);
+	}
+	// A failed cd or popd leaves the shell's previous folder as it was, so `cd -` goes back to the unreviewed checkout.
+	for (const failed of [`cd ${dir}; cd ${wt}; cd nope; cd - && gh pr create --fill`, `cd ${dir}; cd ${wt}; popd; cd - && gh pr create --fill`, `(cd src && (ls) && cd ${wt}) && gh pr create --fill`]) {
+		assert.equal(action(check(failed)), "block", failed);
+	}
+	for (const inside of [`(cd ${dir} && ls $(pwd) && gh pr create --fill)`, `(cd ${dir} && echo "a (b)" && gh pr create --fill)`]) {
+		assert.equal(action(check(inside, OPTIONS, wt)), "block", `still inside the subshell: ${inside}`);
+	}
+	assert.match(check("cd -P src/.. && git push origin HEAD:main")!.reason!, /can't tell which checkout/, "cd -P with .. resolves physically");
+	const unfollowed = [
+		`true || cd ${wt}; git push origin HEAD:main`,
+		`cd ${wt} | cat; git push origin HEAD:main`,
+		`cd ${wt} & git push origin HEAD:main`,
+		`cd ${wt} -P && git push origin HEAD:main`,
+		`cd -e ${wt} && git push origin HEAD:main`,
+		`{ cd ${wt}; } && git push origin HEAD:main`,
+		`builtin cd ${wt} && git push origin HEAD:main`,
+		`if true; then cd ${wt}; fi; git push origin HEAD:main`,
+		`cd ${wt} # the worktree\ngit push origin HEAD:main`,
+	];
+	for (const command of unfollowed) assert.match(check(command)!.reason!, /can't tell which checkout/, command);
+	for (const inside of [`(cd ${dir} && echo "done)" && gh pr create --fill)`, `(cd ${dir} && echo x\\) && gh pr create --fill)`, `(cd ${dir} && echo ')' && gh pr create --fill)`]) {
+		assert.equal(action(check(inside, OPTIONS, wt)), "block", `a parenthesis in text doesn't close the subshell: ${inside}`);
+	}
+	assert.equal(action(check(`(cd ${wt} && git push -u origin feat/b) && gh pr create --fill`)), "block", "a landing inside ( … ) ends the subshell too");
+	assert.equal(check(`cd ${wt} 2>/dev/null && git push origin HEAD:main`), undefined, "a harmless redirection keeps the move plain");
+	const notRun = [
+		`grep -q x README.md && cd ${wt}; gh pr create --fill`,
+		`ls # ; cd ${wt}\ngh pr create --fill`,
+		`echo $(true; cd ${wt}); gh pr create --fill`,
+		`cat <(ls; cd ${wt}); gh pr create --fill`,
+		`(echo $(ls -a); cd ${wt}); gh pr create --fill`,
+		`true |& cd ${wt}; git push origin HEAD:main`,
+		`git status ||\ncd ${wt}\ngit push origin HEAD:main`,
+		`command cd ${wt} && git push origin HEAD:main`,
+	];
+	for (const command of notRun) assert.match(check(command)!.reason!, /can't tell which checkout/, `a move that may not run in this shell: ${command}`);
+	assert.doesNotMatch(check("git log --grep cd && git push origin HEAD:main")!.reason!, /can't tell/, "cd as an argument is not a move");
+	for (const command of [
+		`grep -q x README.md && cd ${wt} && (ls); git push origin HEAD:main`,
+		`cd ${wt} && npm test & git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls; ls); git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls || ls); git push origin HEAD:main`,
+		`grep -q x README.md && cd ${wt} && (ls\nls); git push origin HEAD:main`,
+		`cd ${wt} && (ls; ls) & git push origin HEAD:main`,
+	]) {
+		assert.match(check(command)!.reason!, /can't tell which checkout/, `a move that may not run in this shell: ${command}`);
+	}
+	assert.match(check(`chdir ${wt} && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "zsh chdir is not followed");
+	assert.match(check(`cd ${wt}; cd ""; cd - && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "after cd \"\" the previous folder depends on the shell");
+	for (const hidden of [`echo $(cd ${dir} && gh pr create --fill)`, `echo $( cd ${dir} && gh pr create --fill )`, "echo ` cd "+dir+" && gh pr create --fill`", `echo $(builtin cd ${dir} && gh pr create --fill)`, `cat <(cd ${dir} && gh pr create --fill)`, `echo x$(cd ${dir} && gh pr create --fill)`]) {
+		assert.equal(action(check(hidden, OPTIONS, wt)), "block", `a move inside a substitution is not followed: ${hidden}`);
+	}
+	assert.match(check(`grep -q x README.md &&>/dev/null cd ${wt}; gh pr create --fill`)!.reason!, /can't tell which checkout/, "&&> is && then a redirection");
+	assert.equal(check(`cd ${wt} && gh pr create --title t --body "$(cat <<'EOF'\nbody\nEOF\n)"`), undefined, "a substitution in quotes can't move the shell");
+	symlinkSync(join(wt, "src"), join(dir, "lnk"));
+	assert.equal(check(`cd -P lnk && cd .. && git push origin HEAD:main`), undefined, "cd -P follows the symlink's real folder");
+	assert.equal(action(check(`cd -PL lnk && cd .. && git push origin HEAD:main`)), "block", "the last of -P and -L wins");
+	assert.match(check(`pushd ${wt} && cd src && popd && git push origin HEAD:main`)!.reason!, /can't tell which checkout/, "cd may push the stack (zsh AUTO_PUSHD)");
+	for (const inside of [`(cd ${dir} && echo $(git rev-parse HEAD) && gh pr create --fill)`, `(cd ${dir}; cat <(ls); gh pr create --fill)`]) {
+		assert.equal(action(check(inside, OPTIONS, wt)), "block", `a subshell in a command the guard can't follow: ${inside}`);
+	}
+});
+
+test("gate files: a > is a write wherever it stands, since the guard can't pair quotes as the shell does", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	const check = (command: string, cwd = project) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
+	assert.equal(check(`cat x > ${records}/y`), "block");
+	assert.equal(check(`cd ${records}/h && cat <<EOF\nls what's here\nEOF\ncat /tmp/r.json > abc.json`, "/"), "block", "an apostrophe in a heredoc body doesn't hide a later write");
 });
 
 test("a PR created inside a compound command is registered, even when a later step fails or a subshell moved", () => {
-	const { dir, root } = repo();
+	const { dir, root, git } = repo();
 	const open = () => openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root);
 	notePr(dir, "t1", "(cd /tmp) && gh pr create --fill", dir, root);
 	settlePr(dir, "t1", true, root);
 	assert.deepEqual(open(), ["feat/a"], "the subshell's cd ends with it");
+	const wt = join(dir, ".worktrees", "n");
+	git("worktree", "add", "-q", "-b", "feat/n", wt, "main");
+	notePr(dir, "t3", `(cd src && (ls) && cd ${wt}) && gh pr create --fill`, dir, root);
+	settlePr(dir, "t3", true, root);
+	assert.deepEqual(open(), ["feat/a"], "after a nested subshell the folder stays unknown: feat/n is not noted");
+	notePr(dir, "t4", `grep -q x README.md && cd ${wt} && (ls); gh pr create --fill`, dir, root);
+	settlePr(dir, "t4", true, root);
+	assert.deepEqual(open(), ["feat/a"], "a move in a broken && chain is not followed: feat/n is not noted");
+	notePr(dir, "t5", `grep -q x README.md && cd ${wt} && (ls; ls); gh pr create --fill`, dir, root);
+	settlePr(dir, "t5", true, root);
+	assert.deepEqual(open(), ["feat/a"], "a separator inside the subshell doesn't end the outer && chain");
+	notePr(dir, "t6", `echo $( cd ${wt} && gh pr create --fill )`, dir, root);
+	notePr(dir, "t7", `PR=$(cd ${wt} && gh pr create --fill)`, dir, root);
+	settlePr(dir, "t7", true, root);
+	settlePr(dir, "t6", true, root);
+	assert.deepEqual(open(), ["feat/a"], "a move inside a substitution is not followed");
 	const other = repo();
 	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
 	settlePr(other.dir, "t2", false, other.root);

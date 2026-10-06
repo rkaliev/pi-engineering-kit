@@ -34,7 +34,7 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 1. Run verification-before-completion on the final state. Don't offer options while tests are red. The task file is already deleted (executing-plans, Finish); the guard refuses a PR or a merge into the base while it exists.
 2. Determine the base branch (`git merge-base HEAD main`, or ask).
 3. After a `Yes` on HEAD, do option 2 without asking, unless the user asked for another. The other options wait for the user's choice:
-   1. **Merge locally** into the base branch with `--ff-only` after the rebase (a merge commit is a new, unreviewed commit: review it before pushing the base), re-run the tests on the merged result, delete the branch.
+   1. **Merge locally** into the base branch with `--ff-only` after the rebase, so the reviewed commit lands as it is (if the base moved, rebase and review again), re-run the tests on the merged result, delete the branch.
    2. **Push and open a PR** (the default). One concern per PR; if the diff is far over about 1000 meaningful lines, suggest splitting it.
       The PR body: one or two sentences on what changed and why; at most seven bullets for the decisions a reviewer needs; `Out of scope:` bullets for what was deliberately left out; how it was verified (the commands run, and how each new test was seen failing first, as test-standard defines it); risks and rollback; screenshots for UI; a link to the task file at the last commit that had it (`blob/<sha>/docs/tasks/…`), and the issue it closes (`Closes …`) last.
    3. **Keep the branch** as is for later.

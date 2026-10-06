@@ -13,7 +13,7 @@ You do the whole review yourself: do not dispatch other agents.
 {TASK_FILE_OR_PLAN_AND_SPEC_PATHS, NUMBERED CRITERIA}
 
 ## Range
-Rules base: {RULES_BASE} (the merge-base with the remote base branch)
+Rules base: {RULES_BASE} (the merge-base with the remote base branch {REMOTE_BASE})
 git diff --stat {BASE}..{HEAD}
 git diff {BASE}..{HEAD}
 Also read in full any new file the diff introduces.
@@ -57,7 +57,9 @@ Also read in full any new file the diff introduces.
   a repeat round: review {BASE}..{HEAD} and re-check every finding in the reports it prints
   (fixed / still valid / withdrawn, with why); the author's summary is not the source, and if it
   prints `no recorded review`, the range starts at a commit nobody reviewed: say Inconclusive. If
-  {BASE} is {RULES_BASE}, the reports it may print are of code already on the base: set them aside. Match findings by the underlying defect, not by
+  {BASE} is {RULES_BASE}, run `git merge-base --is-ancestor {BASE} {REMOTE_BASE}`: if it succeeds, the
+  reports it may print are of code already on the base, so set them aside; if it fails, the range
+  was filled wrong: say Inconclusive. Match findings by the underlying defect, not by
   wording or rule: the same defect restated is not a new finding.
 - No praise, no empty sections. Never invent a link, path or line number; cite only what you opened.
 

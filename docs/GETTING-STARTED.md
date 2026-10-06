@@ -246,7 +246,7 @@ From here on, commands are typed inside pi.
 | 5 | (the agent says "done") | If there were no checks after the edits, the verify gate sends the agent back: "Verify gate: files changed…". The agent calls `run_verification` and gives a report: files, commands with results, criteria 1–5, what was not verified |
 | 6 | `/review tasks/01-percent-discount.md` | The `deep` model. The review is read-only: Criteria / Confirmed / Assumptions / Questions / Verdict |
 | 7 | `/verify` | A manual run of the checks; the agent sees the result too |
-| 8 | `/finish` | The merge / PR / keep / discard options. Merge runs only after you choose; the work branch is pushed and the PR opened once the review covers HEAD |
+| 8 | `/finish` | PR by default after a Yes; merge, keep or discard on your choice. Merge runs only after you choose; the work branch is pushed and the PR opened once the review covers HEAD |
 
 How to check guard: create `.env` with any value and ask the agent to read it. Reading through the `read` tool is blocked, and `cat .env` in the shell needs confirmation. `git push --force` is refused with a hint about `--force-with-lease`; a plain push of your own `feat/…` branch passes, a push to the base asks.
 
