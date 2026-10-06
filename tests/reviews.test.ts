@@ -749,7 +749,11 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 	assert.match(check(`grep -q x README.md &&>/dev/null cd ${wt}; gh pr create --fill`)!.reason!, /can't tell which checkout/, "&&> is && then a redirection");
 	assert.equal(check(`cd ${wt} && gh pr create --title t --body "$(cat <<'EOF'\nbody\nEOF\n)"`), undefined, "a substitution in quotes can't move the shell");
-	for (const hidden of [`git commit -F - <<'EOF'\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<-EOF\nit's\n\tEOF\ngit push origin HEAD:main`, `echo "$(cd ${dir} && gh pr create --fill)"`, `cat <<<'x'\necho "$(gh pr create --fill)"`, `git commit -F - <<\\EOF\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<'EOF'\ngit push is now gated\nit's documented\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\nRun `git push origin main`\nEOF\n)\""]) {
+	for (const text of [`cd ${wt} && gh pr create --title t --body "$(cat <<EOF\n| git push origin main | it's gated |\nEOF\n)"`, `cd ${wt} && gh pr create --title t --body "$(cat <<EOF\nRun \\\`git push origin main\\\` after\nEOF\n)"`]) {
+		assert.equal(check(text), undefined, `an unquoted heredoc body's text and escaped backticks don't run: ${text}`);
+	}
+	assert.doesNotMatch(check(`cd ${wt} && git commit -m "$(cat <<'EOF'\nfix: the user's input\nEOF\n)" && git push origin HEAD:main`)?.reason ?? "", /can't read/, "a commit message heredoc in a substitution reads as before");
+	for (const hidden of [`git commit -F - <<'EOF'\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<-EOF\nit's\n\tEOF\ngit push origin HEAD:main`, `echo "$(cd ${dir} && gh pr create --fill)"`, `cat <<<'x'\necho "$(gh pr create --fill)"`, `git commit -F - <<\\EOF\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<'EOF'\ngit push is now gated\nit's documented\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\nRun `git push origin main`\nEOF\n)\"", `git push origin HEAD:main\ngit commit -F - <<'EOF'\nfix: the user's input\nEOF\ngit push origin HEAD:main`]) {
 		assert.match(check(hidden, OPTIONS, wt)?.reason ?? "", /can't read/, `a landing the segments don't show: ${hidden}`);
 	}
 	symlinkSync(join(wt, "src"), join(dir, "lnk"));
@@ -799,6 +803,9 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(dir, "t5", `PR=$(cd ${wk} && gh pr create --fill)`, dir, root);
 	settlePr(dir, "t5", true, root);
 	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m", "feat/k"], "a move inside an unquoted substitution names the PR's folder");
+	writeFileSync(join(reviewsDir(dir, root), "prs-pending.json"), JSON.stringify({ t6: { branch: "feat/old", at: Date.now(), last: true } }));
+	settlePr(dir, "t6", true, root);
+	assert.ok(open().includes("feat/old"), "an entry noted by 0.21.1 keeps its branch");
 	const other = repo();
 	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
 	settlePr(other.dir, "t2", false, other.root);

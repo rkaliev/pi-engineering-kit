@@ -437,25 +437,26 @@ export function safeRealpath(path: string): string {
 }
 
 /**
- * The command with heredoc bodies made plain text: the lines after a line with `<<WORD` (`<<-`, a quoted WORD) up
- * to the line that ends it. A quoted WORD's body is dropped; an unquoted one's runs its `$(…)` and backticks, so it
- * stays as one double-quoted word per line. The operator is found in the raw text, so a `<<` in quotes changes lines
- * too: callers use this text only to find more, never to see less.
+ * The command split from its heredoc bodies: `text` is the command without them (the lines after a line with
+ * `<<WORD`, `<<-` or a quoted WORD, up to the line that ends it), and `substitutions` are the `$(…)` and backtick
+ * substitutions in unquoted bodies, which the shell runs (an escaped `\`` or `\$` doesn't). The operator is found in
+ * the raw text, so a `<<` in quotes drops lines too: callers use this only to find more, never to see less.
  */
-export function dropHeredocBodies(command: string): string {
+export function heredocs(command: string): { text: string; substitutions: string[] } {
 	const out: string[] = [];
+	const substitutions: string[] = [];
 	const open: Array<{ word: string; tabs: boolean; quoted: boolean }> = [];
 	for (const line of command.split("\n")) {
 		if (open.length > 0) {
 			if ((open[0]!.tabs ? line.replace(/^\t+/, "") : line) === open[0]!.word) open.shift();
-			else if (!open[0]!.quoted) out.push(`"${line.replace(/["\\]/g, "")}"`);
+			else if (!open[0]!.quoted) substitutions.push(...quotedSubstitutions(`"${line.replace(/\\./g, "").replace(/"/g, "")}"`));
 			continue;
 		}
 		out.push(line);
 		// `<<<` is a here-string, not a heredoc.
 		for (const m of line.matchAll(/(?<!<)<<(-?)[ \t]*(\\?)(['"]?)([\w.-]+)\3/g)) open.push({ word: m[4]!, tabs: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
 	}
-	return out.join("\n");
+	return { text: out.join("\n"), substitutions };
 }
 
 /** The text of each `$(…)` and backtick substitution inside double quotes: it runs, but stays one word. */

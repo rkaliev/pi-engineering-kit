@@ -14,7 +14,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, wri
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
-import { blankQuoted, dropHeredocBodies, follow, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
@@ -151,26 +151,21 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
-	const note = (branches: Array<string | undefined>, last: boolean) => {
-		const unique = [...new Set(branches.filter((b) => b !== undefined))];
-		if (unique.length === 0) return;
-		const pending = readJson(projectDir, PENDING_FILE, root);
-		// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
-		pending[callId] = { branches: unique, at: Date.now(), last };
-		writeJson(projectDir, PENDING_FILE, pending, root);
-	};
+	const branches: Array<string | undefined> = [];
+	// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
+	let last = true;
 	// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
 	const head = (l: Extract<Landing, { kind: "pr" }>) => l.target?.replace(/^[^:]+:/, "");
 	// Every folder the texts' moves may reach, and any folder a move names where the guard can't follow it.
 	const anywhere = (texts: string[]) => [...texts.flatMap((t) => reachable(t, cwd).dirs), ...namedFolders(command, cwd)];
 	if (hiddenLanding(command)) {
-		// The segments miss this PR (the user confirmed it): read the texts that show it, from any folder they may reach.
-		const text = dropHeredocBodies(command);
-		const subs = quotedSubstitutions(text);
+		// The segments may miss a PR (the user confirmed it): read the texts that show it, from any folder they may reach.
+		const { text, substitutions } = heredocs(command);
+		const subs = [...quotedSubstitutions(text), ...substitutions];
 		const prs = [text, ...subs].flatMap((t) => segmentsOf(tokenize(stripRedirects(t))).map(({ raw }) => landing(raw.map((w) => w.replace(/^\(+|\)+$/g, "")).filter(Boolean))));
 		const dirs = anywhere([text, ...subs]);
-		note(prs.flatMap((l) => (l?.kind === "pr" && !l.merge && !l.repo ? (head(l) !== undefined ? [head(l)] : dirs.map(currentBranch)) : [])), false);
-		return;
+		for (const l of prs) if (l?.kind === "pr" && !l.merge && !l.repo) branches.push(...(head(l) !== undefined ? [head(l)] : dirs.map(currentBranch)));
+		last = false;
 	}
 	const shell = new Subshells(cwd, command);
 	const segments = segmentsOf(tokenize(stripRedirects(command)));
@@ -182,9 +177,15 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 		if (shell.move(raw, alone, before) === undefined && l?.kind === "pr" && !l.merge && !l.repo) {
 			// After a move the guard doesn't follow (the user confirmed it), the PR may come from any folder the command may reach.
 			const dirs = dir !== undefined ? [dir] : anywhere([command]);
-			note(head(l) !== undefined ? [head(l)] : dirs.map(currentBranch), index === segments.length - 1);
+			branches.push(...(head(l) !== undefined ? [head(l)] : dirs.map(currentBranch)));
+			if (index !== segments.length - 1) last = false;
 		}
 	});
+	const unique = [...new Set(branches.filter((b) => b !== undefined))];
+	if (unique.length === 0) return;
+	const pending = readJson(projectDir, PENDING_FILE, root);
+	pending[callId] = { branches: unique, at: Date.now(), last };
+	writeJson(projectDir, PENDING_FILE, pending, root);
 }
 
 /** After the call: register its noted PR branches if it succeeded (or failed after the PR step), forget them if not. */
@@ -281,7 +282,7 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	if (hiddenLanding(command)) {
-		return decision(options.missing, "the guard can't read where this command lands: a landing follows a heredoc body or sits in a substitution in double quotes. Run the landing as its own command.", options);
+		return decision(options.missing, "the guard can't read where this command lands: a heredoc body hides a landing, or one sits in a substitution in double quotes or in an unquoted heredoc body. Run the landing as its own command, outside any substitution.", options);
 	}
 	const shell = new Subshells(cwd, command);
 	let unsafeBefore = false;
@@ -330,13 +331,13 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 	return undefined;
 }
 
-/** The landings (not commits) of a command's segments, each as what it lands where, so a message's text doesn't count. */
-function landings(command: string): Set<string> {
-	const found = new Set<string>();
+/** The landings (not commits) of a command's segments, counted by what each lands where, so a message's text doesn't count. */
+function landings(command: string): Map<string, number> {
+	const found = new Map<string, number>();
 	for (const { raw } of segmentsOf(tokenize(stripRedirects(command)))) {
 		const words = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(words);
-		if (l !== undefined && l.kind !== "commit") found.add(JSON.stringify(l));
+		if (l !== undefined && l.kind !== "commit") found.set(JSON.stringify(l), (found.get(JSON.stringify(l)) ?? 0) + 1);
 	}
 	return found;
 }
@@ -346,15 +347,11 @@ function landings(command: string): Set<string> {
  * swallows the lines after it, and a substitution in double quotes stays one word although it runs.
  */
 function hiddenLanding(command: string): boolean {
-	const text = dropHeredocBodies(command);
-	// Which landings, not how many: a landing-like line in a heredoc body must not stand in for a hidden one.
+	const { text, substitutions } = heredocs(command);
+	// Each landing as many times as it appears: a landing-like line in a heredoc body, or a repeat of a visible
+	// landing, must not stand in for a hidden one.
 	const seen = landings(command);
-	return [...landings(text)].some((l) => !seen.has(l)) || substituted(text, 0);
-}
-
-/** Whether a substitution in double quotes, or one nested in it (up to four deep), lands. */
-function substituted(text: string, depth: number): boolean {
-	return depth < 4 && quotedSubstitutions(text).some((s) => landings(s).size > 0 || substituted(dropHeredocBodies(s), depth + 1));
+	return [...landings(text)].some(([l, n]) => n > (seen.get(l) ?? 0)) || [...quotedSubstitutions(text), ...substitutions].some((s) => landings(s).size > 0);
 }
 
 /** Folders named after any move word, `$(cd x`, `` `cd x`` and `(cd x` included, that exist from `cwd`. */
