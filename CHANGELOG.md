@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.21.2
+
+- **Hidden landings ask.** A landing after a heredoc body (an apostrophe in the body opens a quote the shell never sees) or inside a substitution in double quotes (`echo "$(cd wt && gh pr create)"`) is one the guard can't read: run it as its own command. `git commit -m "$(cat <<'EOF' … EOF)" && git push` reads as before.
+- **Review records:** zsh's `>!file`, `file -C`, `less -o` and a `$TMPDIR` path with `.` or `//` count as writes into them.
+- **A PR confirmed after a move the guard doesn't follow** is registered for every branch it may come from, so a later push to it is gated too.
+- The shell parser moved from `extensions/lib/reviews.ts` to `extensions/lib/shell.ts`; no behavior change.
+
 ## 0.21.1
 
 - **The review gate reads the shell more closely.** `>|` and `>& file` take their file name, so `git push >|log origin HEAD:main` is a push of `HEAD:main`; a `&` before `<` stays a command separator. Push options with a separate value (`-o`, `--push-option`, `--repo`, `--receive-pack`, `--exec`) no longer name the remote, and `--repo` is the remote when no operand names one. A `git push` without a refspec is checked where git would push it (`@{push}`), so a branch whose upstream is the base can't land on it unreviewed under `push.default=upstream`, whatever the fetch refspec calls the remote branch (the remote and branch come from the branch's config). `&>` counts as a redirection with no space before it, and `git push --branches` is read like `--all`.
