@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, stripRedirects, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
@@ -748,6 +749,14 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 	}
 	assert.match(check(`grep -q x README.md &&>/dev/null cd ${wt}; gh pr create --fill`)!.reason!, /can't tell which checkout/, "&&> is && then a redirection");
 	assert.equal(check(`cd ${wt} && gh pr create --title t --body "$(cat <<'EOF'\nbody\nEOF\n)"`), undefined, "a substitution in quotes can't move the shell");
+	for (const text of [`cd ${wt} && gh pr create --title t --body "$(cat <<EOF\n| git push origin main | it's gated |\nEOF\n)"`, `cd ${wt} && gh pr create --title t --body "$(cat <<EOF\nRun \\\`git push origin main\\\` after\nEOF\n)"`]) {
+		assert.equal(check(text), undefined, `an unquoted heredoc body's text and escaped backticks don't run: ${text}`);
+	}
+	assert.doesNotMatch(check(`cd ${wt} && git commit -m "$(cat <<'EOF'\nfix: the user's input\nEOF\n)" && git push origin HEAD:main`)?.reason ?? "", /can't read/, "a commit message heredoc in a substitution reads as before");
+	for (const hidden of [`git commit -F - <<'EOF'\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<-EOF\nit's\n\tEOF\ngit push origin HEAD:main`, `echo "$(cd ${dir} && gh pr create --fill)"`, `cat <<<'x'\necho "$(gh pr create --fill)"`, `git commit -F - <<\\EOF\nLet's go\nEOF\ngh pr create --fill`, `git commit -F - <<'EOF'\ngit push is now gated\nit's documented\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\nRun `git push origin main`\nEOF\n)\"", `git push origin HEAD:main\ngit commit -F - <<'EOF'\nfix: the user's input\nEOF\ngit push origin HEAD:main`, "gh pr create --fill --body \"$(cat <<EOF\n## Release\n```\ngit push origin HEAD:main\n```\nEOF\n)\""]) {
+		assert.match(check(hidden, OPTIONS, wt)?.reason ?? "", /can't read/, `a landing the segments don't show: ${hidden}`);
+	}
+	assert.match(check(`git push origin HEAD:main && echo "PR: $(gh pr create --fill)"`)?.reason ?? "", /can't read.*Also: Review gate: /s, "a hidden landing's question still names the visible landing's problem");
 	symlinkSync(join(wt, "src"), join(dir, "lnk"));
 	assert.equal(check(`cd -P lnk && cd .. && git push origin HEAD:main`), undefined, "cd -P follows the symlink's real folder");
 	assert.equal(action(check(`cd -PL lnk && cd .. && git push origin HEAD:main`)), "block", "the last of -P and -L wins");
@@ -763,30 +772,41 @@ test("gate files: a > is a write wherever it stands, since the guard can't pair 
 	const check = (command: string, cwd = project) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
 	assert.equal(check(`cat x > ${records}/y`), "block");
 	assert.equal(check(`cd ${records}/h && cat <<EOF\nls what's here\nEOF\ncat /tmp/r.json > abc.json`, "/"), "block", "an apostrophe in a heredoc body doesn't hide a later write");
+	for (const write of [`echo x >!${records}/h/a.json`, `cd ${records}/h && file -C -m x`, `cd ${records}/h && less -o a.json /etc/hosts`, "cp /tmp/r.json $TMPDIR/eng-kit/./reviews/h/a.json"]) {
+		assert.equal(check(write, "/"), "block", `a write into the records: ${write}`);
+	}
+	for (const write of ["cp -R /tmp/forged/. $TMPDIR/eng-kit/reviews/.."]) {
+		assert.equal(check(write, "/"), "block", `a $TMPDIR path written through the records still blocks, as in 0.21.1: ${write}`);
+	}
 });
 
 test("a PR created inside a compound command is registered, even when a later step fails or a subshell moved", () => {
-	const { dir, root, git } = repo();
+	const { dir, root, git, commit } = repo();
 	const open = () => openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root);
 	notePr(dir, "t1", "(cd /tmp) && gh pr create --fill", dir, root);
 	settlePr(dir, "t1", true, root);
 	assert.deepEqual(open(), ["feat/a"], "the subshell's cd ends with it");
 	const wt = join(dir, ".worktrees", "n");
 	git("worktree", "add", "-q", "-b", "feat/n", wt, "main");
+	commit({ "src/n.ts": "export const n = 1;\n" }, wt);
 	notePr(dir, "t3", `(cd src && (ls) && cd ${wt}) && gh pr create --fill`, dir, root);
 	settlePr(dir, "t3", true, root);
-	assert.deepEqual(open(), ["feat/a"], "after a nested subshell the folder stays unknown: feat/n is not noted");
-	notePr(dir, "t4", `grep -q x README.md && cd ${wt} && (ls); gh pr create --fill`, dir, root);
+	assert.deepEqual(open(), ["feat/a", "feat/n"], "after a move the guard doesn't follow, every branch the PR may come from is noted");
+	const wm = join(dir, ".worktrees", "m");
+	git("worktree", "add", "-q", "-b", "feat/m", wm, "main");
+	commit({ "src/m.ts": "export const m = 1;\n" }, wm);
+	notePr(dir, "t4", `PR="$(cd ${wm} && gh pr create --fill)"`, dir, root);
 	settlePr(dir, "t4", true, root);
-	assert.deepEqual(open(), ["feat/a"], "a move in a broken && chain is not followed: feat/n is not noted");
-	notePr(dir, "t5", `grep -q x README.md && cd ${wt} && (ls; ls); gh pr create --fill`, dir, root);
+	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m"], "a confirmed PR create the segments don't show is noted too");
+	const wk = join(dir, ".worktrees", "k");
+	git("worktree", "add", "-q", "-b", "feat/k", wk, "main");
+	commit({ "src/k.ts": "export const k = 1;\n" }, wk);
+	notePr(dir, "t5", `PR=$(cd ${wk} && gh pr create --fill)`, dir, root);
 	settlePr(dir, "t5", true, root);
-	assert.deepEqual(open(), ["feat/a"], "a separator inside the subshell doesn't end the outer && chain");
-	notePr(dir, "t6", `echo $( cd ${wt} && gh pr create --fill )`, dir, root);
-	notePr(dir, "t7", `PR=$(cd ${wt} && gh pr create --fill)`, dir, root);
-	settlePr(dir, "t7", true, root);
+	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m", "feat/k"], "a move inside an unquoted substitution names the PR's folder");
+	writeFileSync(join(reviewsDir(dir, root), "prs-pending.json"), JSON.stringify({ t6: { branch: "feat/old", at: Date.now(), last: true } }));
 	settlePr(dir, "t6", true, root);
-	assert.deepEqual(open(), ["feat/a"], "a move inside a substitution is not followed");
+	assert.ok(open().includes("feat/old"), "an entry noted by 0.21.1 keeps its branch");
 	const other = repo();
 	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
 	settlePr(other.dir, "t2", false, other.root);
