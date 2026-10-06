@@ -2,9 +2,9 @@
 
 ## 0.21.2
 
-- **Hidden landings ask.** A landing after a heredoc body (an apostrophe in the body opens a quote the shell never sees) or inside a substitution in double quotes (`echo "$(cd wt && gh pr create)"`) is one the guard can't read: run it as its own command. `git commit -m "$(cat <<'EOF' … EOF)" && git push` reads as before.
+- **Hidden landings ask.** A landing a heredoc body hides (an apostrophe in the body opens a quote the shell never sees), one inside a substitution in double quotes (`echo "$(cd wt && gh pr create)"`), and one in a `$(…)` or backticks of an unquoted heredoc body (`<<EOF` runs them, so a PR body with `` `git push origin main` `` pushes) is one the guard can't read: run it as its own command. Landings are compared by what they land where, so a landing-like line in a message doesn't stand in for a real one. `git commit -m "$(cat <<'EOF' … EOF)" && git push` reads as before.
 - **Review records:** zsh's `>!file`, `file -C`, `less -o` and a `$TMPDIR` path with `.` or `//` count as writes into them.
-- **A PR confirmed after a move the guard doesn't follow** is registered for every branch it may come from, so a later push to it is gated too.
+- **A PR confirmed after a move the guard doesn't follow, or after a hidden-landing question,** is registered for the branch of every folder the command may reach or names (`PR="$(cd wt && gh pr create)"` included), so a later push to it is gated too.
 - The shell parser moved from `extensions/lib/reviews.ts` to `extensions/lib/shell.ts`; no behavior change.
 
 ## 0.21.1

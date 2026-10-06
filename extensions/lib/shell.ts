@@ -135,7 +135,7 @@ export function plainShell(command: string): boolean {
 }
 
 /** zsh's `chdir` is a move too; the guard never follows it. */
-const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
+export const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
 
 /** Whether a command the guard can't follow (see plainShell) names a move anywhere, as in `echo $( cd x )`. */
 function hiddenMove(command: string): boolean {
@@ -437,21 +437,23 @@ export function safeRealpath(path: string): string {
 }
 
 /**
- * The command without heredoc bodies: the lines after a line with `<<WORD` (`<<-`, a quoted WORD) up to the line
- * that ends it. The operator is found in the raw text, so a `<<` in quotes drops lines too: callers use this text
- * only to find more, never to see less.
+ * The command with heredoc bodies made plain text: the lines after a line with `<<WORD` (`<<-`, a quoted WORD) up
+ * to the line that ends it. A quoted WORD's body is dropped; an unquoted one's runs its `$(…)` and backticks, so it
+ * stays as one double-quoted word per line. The operator is found in the raw text, so a `<<` in quotes changes lines
+ * too: callers use this text only to find more, never to see less.
  */
 export function dropHeredocBodies(command: string): string {
 	const out: string[] = [];
-	const open: Array<{ word: string; tabs: boolean }> = [];
+	const open: Array<{ word: string; tabs: boolean; quoted: boolean }> = [];
 	for (const line of command.split("\n")) {
 		if (open.length > 0) {
 			if ((open[0]!.tabs ? line.replace(/^\t+/, "") : line) === open[0]!.word) open.shift();
+			else if (!open[0]!.quoted) out.push(`"${line.replace(/["\\]/g, "")}"`);
 			continue;
 		}
 		out.push(line);
 		// `<<<` is a here-string, not a heredoc.
-		for (const m of line.matchAll(/(?<!<)<<(-?)[ \t]*(['"]?)([\w.-]+)\2/g)) open.push({ word: m[3]!, tabs: m[1] === "-" });
+		for (const m of line.matchAll(/(?<!<)<<(-?)[ \t]*(\\?)(['"]?)([\w.-]+)\3/g)) open.push({ word: m[4]!, tabs: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
 	}
 	return out.join("\n");
 }
