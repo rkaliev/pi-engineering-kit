@@ -17,7 +17,8 @@ import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from ".
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { checkWorkDocs, WORK_DOC_DIRS } from "./lib/workdocs.ts";
+import { appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
+import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
 /** The part of a pi-subagents result the review gate reads. */
 interface SubagentRun {
@@ -28,9 +29,11 @@ interface SubagentRun {
 	timedOut?: boolean;
 	interrupted?: boolean;
 	stopped?: boolean;
+	model?: string;
+	usage?: Partial<Tokens>;
 }
 
-export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?: string } = {}) {
+export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?: string; usageRoot?: string } = {}) {
 	// Reviews from one user message combine to the worst verdict; the next message starts a new round.
 	const session = randomUUID();
 	let prompt = 0;
@@ -94,6 +97,9 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		const runs = (event.details as { results?: SubagentRun[] } | undefined)?.results;
 		if (!Array.isArray(runs)) return undefined;
 		runs.forEach((run, index) => {
+			if (run.usage) recordUsage(ctx, { kind: "subagent", id: `${event.toolCallId}-${index}`, agent: run.agent ?? "subagent", model: run.model ?? "unknown", tokens: tokensOf(run.usage) });
+		});
+		runs.forEach((run, index) => {
 			if (run.agent !== "reviewer") return;
 			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
 			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
@@ -118,6 +124,41 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		});
 		return undefined;
 	});
+
+	// Token use per branch (lib/usage.ts): the session's own usage after each agent run, shown with the subagents' in the status.
+	pi.on("agent_end", async (_event, ctx) => {
+		const sessionManager = (ctx as { sessionManager?: { getSessionId(): string; getBranch(): unknown[] } }).sessionManager;
+		if (!sessionManager) return undefined;
+		const tokens: Tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+		for (const entry of sessionManager.getBranch() as Array<{ type?: string; message?: { role?: string; usage?: Partial<Tokens> } }>) {
+			if (entry.type === "message" && entry.message?.role === "assistant" && entry.message.usage) addTokens(tokens, entry.message.usage);
+		}
+		recordUsage(ctx, { kind: "session", id: sessionManager.getSessionId(), tokens });
+		const branch = currentBranch(ctx.cwd);
+		if (ctx.hasUI && branch) {
+			const summary = branchSummary(ctx.cwd, branch, options.usageRoot);
+			ctx.ui.setStatus("eng-kit", `sub ${formatTokens(summary.subagents)} · branch ${formatTokens(summary.total)}`);
+		}
+		return undefined;
+	});
+
+	pi.registerCommand("usage", {
+		description: "Show the tokens this branch used: the main session and each subagent type",
+		handler: async (_args, ctx) => {
+			const branch = currentBranch(ctx.cwd);
+			ctx.ui.notify(branch ? `Tokens on ${branch}: ${summaryLine(branchSummary(ctx.cwd, branch, options.usageRoot))}` : "Not on a branch: no token ledger to show.", "info");
+		},
+	});
+
+	/** Adds a record to the branch's ledger. A convenience: it never fails the tool call or the agent run. */
+	function recordUsage(ctx: ExtensionContext, record: { kind: "subagent"; id: string; agent: string; model: string; tokens: Tokens } | { kind: "session"; id: string; tokens: Tokens }): void {
+		try {
+			const branch = currentBranch(ctx.cwd);
+			if (branch) appendUsage(ctx.cwd, { ...record, branch, at: Date.now() }, options.usageRoot);
+		} catch {
+			// The ledger is optional.
+		}
+	}
 }
 
 /** Combine two guard decisions: a block wins; two confirmations become one that names both reasons. */
@@ -153,4 +194,16 @@ function loadConfig(ctx: ExtensionContext): GuardConfig {
 
 function strings(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+function tokensOf(usage: Partial<Tokens>): Tokens {
+	return addTokens({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, usage);
+}
+
+function addTokens(sum: Tokens, usage: Partial<Tokens>): Tokens {
+	for (const key of ["input", "output", "cacheWrite", "cacheRead"] as const) {
+		const n = usage[key];
+		if (typeof n === "number" && Number.isFinite(n)) sum[key] += n;
+	}
+	return sum;
 }
