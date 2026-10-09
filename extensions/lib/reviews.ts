@@ -690,7 +690,7 @@ function readRecord(path: string): ReviewRecord | undefined {
 }
 
 /** Another local user could plant records in a shared temp folder: only trust our own. */
-function ownDir(dir: string): boolean {
+export function ownDir(dir: string): boolean {
 	const uid = process.getuid?.();
 	return uid === undefined || statSync(dir).uid === uid;
 }
@@ -727,7 +727,7 @@ function hash(text: string): string {
 	return createHash("sha1").update(text).digest("hex");
 }
 
-function writeAtomic(path: string, text: string): void {
+export function writeAtomic(path: string, text: string): void {
 	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
 	writeFileSync(tmp, text, { mode: 0o600 });
 	renameSync(tmp, path);

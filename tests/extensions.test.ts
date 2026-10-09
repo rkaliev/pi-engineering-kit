@@ -686,3 +686,29 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	assert.equal(log.status, 0, log.stderr);
 	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
 });
+
+test("token ledger: subagent results and the session's usage fill the branch's ledger; the status text and /usage show it", async () => {
+	const dir = project({ "README.md": "x\n" });
+	spawnSync("git", ["init", "-q", "-b", "feat/u"], { cwd: dir });
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")), usageRoot: mkdtempSync(join(tmpdir(), "guard-usage-")) });
+	const statuses: string[] = [];
+	const notes: string[] = [];
+	const base = ctx(dir);
+	const c = {
+		...base,
+		ui: { ...base.ui, setStatus: (_key: string, text: string) => statuses.push(text), notify: (m: string) => notes.push(m) },
+		sessionManager: { getSessionId: () => "s1", getBranch: () => [{ type: "message", message: { role: "assistant", usage: { input: 5000, output: 0, cacheRead: 0, cacheWrite: 0 } } }] },
+	};
+	const usage = { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 };
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "scout", exitCode: 0, finalOutput: "x", model: "m", usage }] }, isError: false }, c);
+	await g.emit("agent_end", {}, c);
+	await g.emit("agent_end", {}, c);
+	assert.equal(statuses.at(-1), "sub 1k · branch 6k", "a second snapshot of the session replaces the first");
+	await g.commands.get("usage").handler("", c);
+	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k");
+	const child = { ...c, hasUI: false, sessionManager: { getSessionId: () => "child", getBranch: () => [{ type: "message", message: { role: "assistant", usage: { input: 9000, output: 0, cacheRead: 0, cacheWrite: 0 } } }] } };
+	await g.emit("agent_end", {}, child);
+	await g.commands.get("usage").handler("", c);
+	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k", "a run without a UI (a subagent's own process) adds no session: the parent already counted it");
+});

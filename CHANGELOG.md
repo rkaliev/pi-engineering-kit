@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.0
+
+- **Token ledger per branch.** The guard adds each `subagent` result's usage and what an interactive session added to a private ledger per repository and branch in the temp folder, shows `sub 1.2M · branch 5.6M` in pi's footer, and `/usage` prints a branch's tokens by agent (`main 3.4M · reviewer 2.1M · implementer 800k · total 6.3M`); `/finish` points to it.
+
 ## 0.21.2
 
 - **Hidden landings ask.** A landing a heredoc body hides (an apostrophe in the body opens a quote the shell never sees), one inside a substitution in double quotes (`echo "$(cd wt && gh pr create)"`), and one in a `$(…)` or backticks of an unquoted heredoc body (`<<EOF` runs them, so a PR body with `` `git push origin main` `` pushes) is one the guard can't read: run it as its own command. Landings are compared by what they land and how often (not by folder), so a landing-like line in a message or a repeat of a visible landing doesn't stand in for a hidden one; plain text and escaped backticks in an unquoted body don't count. `git commit -m "$(cat <<'EOF' … EOF)" && git push` reads as before.
