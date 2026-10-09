@@ -22,7 +22,7 @@ name: api-auditor
 description: Read-only API auditor. Use after … to …
 tools: read, grep, find, ls, bash   # strict allowlist; omitted = pi's builtin tools
 model: <provider/id>                # omitted = the parent's default model, unless settings set one
-thinking: high                      # off | minimal | low | medium | high | xhigh | max
+thinking: xhigh                     # off | minimal | low | medium | high | xhigh | max
 inheritProjectContext: true         # custom agents start without AGENTS.md unless set
 ---
 ```
