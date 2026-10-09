@@ -59,10 +59,11 @@ test("the ledger folder is private, and a planted ledger symlink is never writte
 test("compacting the ledger keeps every branch's totals and drops superseded records", () => {
 	const { dir, root } = project();
 	for (let i = 1; i <= 20; i++) appendSessionSnapshot(dir, "s1", tokens(i * 10), i <= 10 ? "main" : "feat/a", root);
-	for (let i = 0; i < 5; i++) appendUsage(dir, { kind: "subagent", id: "r1", agent: "reviewer", model: "m", tokens: tokens(7), branch: "feat/a", at: i }, root);
+	for (let i = 0; i < 5; i++) appendUsage(dir, { kind: "subagent", id: "r1", agent: "reviewer", model: "m", tokens: tokens(7), branch: "feat/a", at: Date.now() }, root);
 	const before = [branchSummary(dir, "main", root), branchSummary(dir, "feat/a", root)];
+	appendUsage(dir, { kind: "subagent", id: "old", agent: "reviewer", model: "m", tokens: tokens(1000), branch: "feat/a", at: 1 }, root);
 	compactLedger(dir, root);
-	assert.deepEqual([branchSummary(dir, "main", root), branchSummary(dir, "feat/a", root)], before);
+	assert.deepEqual([branchSummary(dir, "main", root), branchSummary(dir, "feat/a", root)], before, "records older than 30 days are dropped; the rest keep their totals");
 	assert.equal(readFileSync(join(reviewsDir(dir, root), "ledger.jsonl"), "utf8").trim().split("\n").length, 3, "one record per session and branch, one per subagent run");
 	appendSessionSnapshot(dir, "s1", tokens(230), "feat/a", root);
 	assert.equal(branchSummary(dir, "feat/a", root).byAgent.main, 130, "the session's running total survives compaction");

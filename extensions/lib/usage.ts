@@ -22,8 +22,10 @@ export interface BranchSummary {
 	total: number;
 }
 
-/** Past this size the ledger is compacted on the next write. */
+/** Past this size, and twice the size the last compaction left, the ledger is compacted on the next write. */
 const COMPACT_BYTES = 256 * 1024;
+/** Records older than this are dropped when the ledger is compacted, like the review records. */
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const KEYS = ["input", "output", "cacheWrite", "cacheRead"] as const;
 
 /**
@@ -64,7 +66,8 @@ export function appendUsage(projectDir: string, record: UsageRecord, root?: stri
 		} finally {
 			closeSync(fd);
 		}
-		if (statSync(path).size > COMPACT_BYTES) compactLedger(projectDir, root);
+		const compacted = Number(readLines(join(dir, "ledger.compacted"))[0]) || 0;
+		if (statSync(path).size > Math.max(COMPACT_BYTES, 2 * compacted)) compactLedger(projectDir, root);
 	} catch {
 		// The ledger is optional.
 	}
@@ -97,11 +100,17 @@ export function branchSummary(projectDir: string, branch: string, root?: string)
 	return { byAgent, subagents, total: Object.values(byAgent).reduce((a, b) => a + b, 0) };
 }
 
-/** Rewrites the ledger with one record per session and branch and one per subagent run; totals don't change. */
-export function compactLedger(projectDir: string, root?: string): void {
+/**
+ * Rewrites the ledger with one record per session and branch and one per subagent run, dropping records older than
+ * 30 days; the other totals don't change. A ledger it can't read is left as it is.
+ */
+export function compactLedger(projectDir: string, root?: string, now = Date.now()): void {
 	try {
+		const records = readLedger(projectDir, root);
+		if (records.length === 0) return;
 		const kept = new Map<string, UsageRecord>();
-		for (const record of readLedger(projectDir, root)) {
+		for (const record of records) {
+			if (typeof record.at !== "number" || now - record.at > MAX_AGE_MS) continue;
 			if (record.kind === "subagent") {
 				kept.set(`subagent:${record.id}`, record);
 				continue;
@@ -116,7 +125,10 @@ export function compactLedger(projectDir: string, root?: string): void {
 		}
 		// Oldest first, so the latest snapshot of each session stays last.
 		const lines = [...kept.values()].sort((a, b) => a.at - b.at).map((r) => JSON.stringify(r));
-		writeAtomic(join(ledgerDir(projectDir, root), "ledger.jsonl"), lines.length > 0 ? `${lines.join("\n")}\n` : "");
+		const text = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+		const dir = ledgerDir(projectDir, root);
+		writeAtomic(join(dir, "ledger.jsonl"), text);
+		writeAtomic(join(dir, "ledger.compacted"), `${Buffer.byteLength(text)}\n`);
 	} catch {
 		// The ledger is optional.
 	}
