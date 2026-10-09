@@ -707,4 +707,8 @@ test("token ledger: subagent results and the session's usage fill the branch's l
 	assert.equal(statuses.at(-1), "sub 1k · branch 6k", "a second snapshot of the session replaces the first");
 	await g.commands.get("usage").handler("", c);
 	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k");
+	const child = { ...c, hasUI: false, sessionManager: { getSessionId: () => "child", getBranch: () => [{ type: "message", message: { role: "assistant", usage: { input: 9000, output: 0, cacheRead: 0, cacheWrite: 0 } } }] } };
+	await g.emit("agent_end", {}, child);
+	await g.commands.get("usage").handler("", c);
+	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k", "a run without a UI (a subagent's own process) adds no session: the parent already counted it");
 });

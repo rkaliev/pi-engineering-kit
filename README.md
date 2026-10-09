@@ -111,7 +111,7 @@ Also asks first, because they can point a push elsewhere or write outside the re
 
 ### token usage
 
-The guard also keeps a token ledger per repository and branch, from the `subagent` results' usage and the session's own, shows `sub 1.2M · branch 5.6M` next to pi's footer and prints a branch's tokens by agent with `/usage`; `/finish` points to it. pi's own footer already shows context use and the session's cost.
+The guard also keeps a token ledger per repository and branch, from the `subagent` results' usage and the session's own, shows `sub 1.2M · branch 5.6M` in pi's footer and prints a branch's tokens by agent with `/usage`; `/finish` points to it. pi's own footer already shows context use and the session's cost.
 
 ### verify
 

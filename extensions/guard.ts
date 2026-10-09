@@ -17,7 +17,7 @@ import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from ".
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
+import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
 /** The part of a pi-subagents result the review gate reads. */
@@ -125,19 +125,23 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		return undefined;
 	});
 
-	// Token use per branch (lib/usage.ts): the session's own usage after each agent run, shown with the subagents' in the status.
+	// Token use per branch (lib/usage.ts): after each agent run, what the session added, shown with the subagents' in the
+	// status. Only an interactive run records it: a run without a UI is usually a subagent's own process, which the
+	// parent already counts from the subagent result.
 	pi.on("agent_end", async (_event, ctx) => {
-		const sessionManager = (ctx as { sessionManager?: { getSessionId(): string; getBranch(): unknown[] } }).sessionManager;
-		if (!sessionManager) return undefined;
-		const tokens: Tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
-		for (const entry of sessionManager.getBranch() as Array<{ type?: string; message?: { role?: string; usage?: Partial<Tokens> } }>) {
-			if (entry.type === "message" && entry.message?.role === "assistant" && entry.message.usage) addTokens(tokens, entry.message.usage);
-		}
-		recordUsage(ctx, { kind: "session", id: sessionManager.getSessionId(), tokens });
-		const branch = currentBranch(ctx.cwd);
-		if (ctx.hasUI && branch) {
+		if (!ctx.hasUI) return undefined;
+		try {
+			const branch = currentBranch(ctx.cwd);
+			if (!branch) return undefined;
+			const tokens: Tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+			for (const entry of ctx.sessionManager.getBranch()) {
+				if (entry.type === "message" && entry.message.role === "assistant") addTokens(tokens, entry.message.usage);
+			}
+			appendSessionSnapshot(ctx.cwd, ctx.sessionManager.getSessionId(), tokens, branch, options.usageRoot);
 			const summary = branchSummary(ctx.cwd, branch, options.usageRoot);
 			ctx.ui.setStatus("eng-kit", `sub ${formatTokens(summary.subagents)} · branch ${formatTokens(summary.total)}`);
+		} catch {
+			// The ledger is optional.
 		}
 		return undefined;
 	});
@@ -151,7 +155,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	});
 
 	/** Adds a record to the branch's ledger. A convenience: it never fails the tool call or the agent run. */
-	function recordUsage(ctx: ExtensionContext, record: { kind: "subagent"; id: string; agent: string; model: string; tokens: Tokens } | { kind: "session"; id: string; tokens: Tokens }): void {
+	function recordUsage(ctx: ExtensionContext, record: { kind: "subagent"; id: string; agent: string; model: string; tokens: Tokens }): void {
 		try {
 			const branch = currentBranch(ctx.cwd);
 			if (branch) appendUsage(ctx.cwd, { ...record, branch, at: Date.now() }, options.usageRoot);
