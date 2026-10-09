@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.23.0
+
+- **Extra thinking for hard work.** The `deep` mode in `templates/model-routing.json` (brainstorm, plan, review, debug, security-review) now uses `thinking: "xhigh"` (was `high`). `/kit-init` doesn't overwrite an existing `.pi/model-routing.json`: change `deep.thinking` there yourself to get it.
+
 ## 0.22.0
 
 - **Token ledger per branch.** The guard adds each `subagent` result's usage and what an interactive session added to a private ledger per repository and branch in the temp folder, shows `sub 1.2M · branch 5.6M` in pi's footer, and `/usage` prints a branch's tokens by agent (`main 3.4M · reviewer 2.1M · implementer 800k · total 6.3M`); `/finish` points to it.

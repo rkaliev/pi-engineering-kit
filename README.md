@@ -128,7 +128,7 @@ Configure it in `~/.pi/agent/model-routing.json` (global) and/or `.pi/model-rout
 ```json
 {
   "modes": {
-    "deep": { "model": ["anthropic/claude-opus-5-5"], "thinking": "high" },
+    "deep": { "model": ["anthropic/claude-opus-5-5"], "thinking": "xhigh" },
     "fast": { "model": ["anthropic/claude-sonnet-5"], "thinking": "medium" }
   },
   "commands": { "review": "deep", "plan": "deep", "implement": "fast", "skill:security-review": "deep" }
