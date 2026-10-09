@@ -67,6 +67,29 @@ test("compacting the ledger keeps every branch's totals and drops superseded rec
 	assert.equal(readFileSync(join(reviewsDir(dir, root), "ledger.jsonl"), "utf8").trim().split("\n").length, 3, "one record per session and branch, one per subagent run");
 	appendSessionSnapshot(dir, "s1", tokens(230), "feat/a", root);
 	assert.equal(branchSummary(dir, "feat/a", root).byAgent.main, 130, "the session's running total survives compaction");
+	compactLedger(dir, root, Date.now() + 365 * 24 * 60 * 60 * 1000);
+	appendSessionSnapshot(dir, "s1", tokens(240), "feat/a", root);
+	assert.equal(branchSummary(dir, "feat/a", root).byAgent.main, 10, "a session resumed after its records expired adds only what is new");
+	const other = project();
+	appendSessionSnapshot(other.dir, "s1", tokens(300), "main", root);
+	assert.equal(branchSummary(other.dir, "main", root).byAgent.main, 60, "a session that moves to another repository adds only what is new there");
+});
+
+test("the ledger compacts only after it doubles, and an unreadable ledger is never emptied", () => {
+	const { dir, root } = project();
+	appendUsage(dir, { kind: "subagent", id: "a", agent: "x", model: "m", tokens: tokens(1), branch: "main", at: Date.now() }, root);
+	const ledger = join(reviewsDir(dir, root), "ledger.jsonl");
+	const garbage = `${"x".repeat(1000)}\n`.repeat(300);
+	writeFileSync(ledger, readFileSync(ledger, "utf8") + garbage);
+	writeFileSync(join(reviewsDir(dir, root), "ledger.compacted"), `${10 * 1024 * 1024}\n`);
+	appendUsage(dir, { kind: "subagent", id: "b", agent: "x", model: "m", tokens: tokens(1), branch: "main", at: Date.now() }, root);
+	assert.ok(readFileSync(ledger, "utf8").includes(garbage), "below twice the last compacted size: not compacted");
+	writeFileSync(join(reviewsDir(dir, root), "ledger.compacted"), "0\n");
+	appendUsage(dir, { kind: "subagent", id: "c", agent: "x", model: "m", tokens: tokens(1), branch: "main", at: Date.now() }, root);
+	assert.equal(readFileSync(ledger, "utf8").trim().split("\n").length, 3, "past 256 KB and twice the last size: compacted");
+	writeFileSync(ledger, garbage);
+	compactLedger(dir, root);
+	assert.equal(readFileSync(ledger, "utf8"), garbage, "a ledger with no readable record is left as it is");
 });
 
 test("token counts read at a glance", () => {

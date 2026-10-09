@@ -4,8 +4,9 @@
  * Like the review records it lives in a private folder in the temp dir that only its owner's records are read from.
  */
 import { closeSync, constants, mkdirSync, openSync, readFileSync, statSync, writeSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ownDir, reviewsDir, writeAtomic } from "./reviews.ts";
 
 export type Tokens = { input: number; output: number; cacheWrite: number; cacheRead: number };
@@ -27,6 +28,7 @@ const COMPACT_BYTES = 256 * 1024;
 /** Records older than this are dropped when the ledger is compacted, like the review records. */
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const KEYS = ["input", "output", "cacheWrite", "cacheRead"] as const;
+const USAGE_ROOT = join(tmpdir(), "eng-kit", "usage");
 
 /**
  * Tokens per model in a Claude Code transcript. The format is internal, so only `message.id`, `message.model` and
@@ -73,13 +75,18 @@ export function appendUsage(projectDir: string, record: UsageRecord, root?: stri
 	}
 }
 
-/** Records what session `id` used since its previous snapshot (on any branch) as spent on `branch`. */
+/**
+ * Records what session `id` used since its previous snapshot as spent on `branch`. The previous running total is kept
+ * per session, outside any repository's ledger, so a session that moves to another repository or comes back after its
+ * records expired adds only what is new.
+ */
 export function appendSessionSnapshot(projectDir: string, id: string, now: Tokens, branch: string, root?: string): void {
-	const previous = latestTotal(readLedger(projectDir, root), id) ?? zero();
+	const previous = readBaseline(id, root) ?? latestTotal(readLedger(projectDir, root), id) ?? zero();
 	if (KEYS.every((k) => now[k] === previous[k])) return;
 	// A total that went down (a rewound session) adds nothing and becomes the new baseline.
 	const tokens = Object.fromEntries(KEYS.map((k) => [k, Math.max(0, count(now[k]) - count(previous[k]))])) as Tokens;
 	appendUsage(projectDir, { kind: "session", id, tokens, total: now, branch, at: Date.now() }, root);
+	writeBaseline(id, now, root);
 }
 
 /** A branch's tokens: every session increment spent on it plus each subagent run's latest record. */
@@ -171,8 +178,34 @@ function latestTotal(records: UsageRecord[], id: string): Tokens | undefined {
 	return best?.total;
 }
 
-function ledgerDir(projectDir: string, root = join(tmpdir(), "eng-kit", "usage")): string {
+function ledgerDir(projectDir: string, root = USAGE_ROOT): string {
 	return reviewsDir(projectDir, root);
+}
+
+/** Each session's last running total, next to the repositories' ledgers: `<root>/sessions/<sha1 of the id>.json`. */
+function baselinePath(id: string, root = USAGE_ROOT): string {
+	return join(root, "sessions", `${createHash("sha1").update(id).digest("hex")}.json`);
+}
+
+function readBaseline(id: string, root?: string): Tokens | undefined {
+	try {
+		const path = baselinePath(id, root);
+		if (!ownDir(dirname(path))) return undefined;
+		const total = (parse(readFileSync(path, "utf8")) as { total?: Tokens } | undefined)?.total;
+		return total && typeof total === "object" ? total : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function writeBaseline(id: string, total: Tokens, root?: string): void {
+	try {
+		const path = baselinePath(id, root);
+		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+		if (ownDir(dirname(path))) writeAtomic(path, `${JSON.stringify({ total, at: Date.now() })}\n`);
+	} catch {
+		// The ledger is optional.
+	}
 }
 
 function zero(): Tokens {
