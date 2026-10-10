@@ -30,6 +30,7 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 | Situation | Skill |
 |---|---|
 | Build, add or change behavior | brainstorming |
+| Settled requirements (spec, task file, ticket) | test-driven-development before any code |
 | Bug, failing test, unexpected behavior | systematic-debugging |
 | Unfamiliar or legacy repo, no AGENTS.md | onboarding-existing-codebase |
 | New project, or a technology choice | choosing-a-stack |
@@ -62,7 +63,6 @@ When unsure, take the heavier path. If hidden complexity shows up mid-task, stop
 |---|---|
 | "Too simple for a skill" | Simple work goes wrong too. The check takes seconds. |
 | "Let me look around first" | Skills tell you how to look. Check them first. |
-| "I remember that skill" | Skills change. Read the current file. |
 | "Should work now" | Run it and read the output. |
 | "Quick fix, then investigate" | The first fix sets the pattern. Find the root cause first. |
 | "They answered, so the design is approved" | An answer covers only that question. Approval is a yes to the design you showed. |

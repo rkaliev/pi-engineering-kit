@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.0
+
+- **test-driven-development for settled requirements.** using-skills' "Where to start" names it for a spec, task file or ticket, before any code. Without it, an agent given a ready spec skipped brainstorming and with it the TDD skill, and took "module not found" for a failing test. The red-flag row "I remember that skill" is gone: the rule above it already says so.
+
 ## 0.23.0
 
 - **Extra thinking for hard work.** The `deep` mode in `templates/model-routing.json` (brainstorm, plan, review, debug, security-review) now uses `thinking: "xhigh"` (was `high`). `/kit-init` doesn't overwrite an existing `.pi/model-routing.json`: change `deep.thinking` there yourself to get it.
