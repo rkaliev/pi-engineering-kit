@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -213,6 +213,96 @@ test("verify ignores edits outside the project and doc edits by default", async 
 	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1);
+});
+
+/** A git repository with `src/a.ts` committed and the given files, so shell changes are found from the working tree. */
+function gitProject(files: Record<string, string>) {
+	const dir = project({ ...files, "src/a.ts": "export const a = 1;\n" });
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: dir, stdio: "pipe" });
+	git("init", "-q", "-b", "main");
+	git("add", "-A");
+	git("commit", "-q", "-m", "initial");
+	return { dir, edit: (content: string) => writeFileSync(join(dir, "src/a.ts"), content) };
+}
+
+const COMMANDS = { "AGENTS.md": "## Commands\n- `npm test`\n- `npm run typecheck`\n" };
+
+test("verify: a file changed from the shell marks the workspace, also when the command fails", async () => {
+	for (const isError of [false, true]) {
+		const { dir, edit } = gitProject(COMMANDS);
+		const { pi, emit, sent } = fakePi();
+		verify(pi);
+		const c = ctx(dir);
+		await emit("session_start", { reason: "startup" }, c);
+		edit("export const a = 2;\n");
+		await emit("tool_result", { toolName: "bash", input: { command: "cat > src/a.ts <<'EOF'\nexport const a = 2;\nEOF" }, isError }, c);
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(sent.length, 1, `isError: ${isError}`);
+		assert.match(sent[0]!.message.content, /src\/a\.ts/);
+	}
+});
+
+test("verify: a verification run that changes files doesn't mark the workspace again", async () => {
+	const { dir, edit } = gitProject(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	edit("export const a = 2;\n");
+	await emit("tool_result", { toolName: "bash", input: { command: "sed -i '' 's/1/2/' src/a.ts" }, isError: false }, c);
+	await emit("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: false }, c);
+	edit("export const a = 3;\n");
+	await emit("tool_result", { toolName: "bash", input: { command: "npm run typecheck" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "the typecheck run's own change keeps npm test green");
+});
+
+test("verify: outside git the command's text decides", async () => {
+	const dir = project(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "bash", input: { command: "echo x > /tmp/y" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "a write outside the project");
+	await emit("tool_result", { toolName: "bash", input: { command: "echo x > src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+});
+
+test("verify: without commands the user gets one notice and the agent no follow-up", async () => {
+	const dir = project({});
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "nothing to run, so no follow-up");
+	assert.equal(c.notes.length, 1);
+	assert.match(c.notes[0]!, /no verification commands/i);
+	assert.match(c.notes[0]!, /\.pi\/verify\.json/);
+	assert.match(c.notes[0]!, /kit-init/);
+	await emit("input", { text: "more", source: "interactive" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(c.notes.length, 1, "once per session");
+});
+
+test("verify: the follow-up asks for the complete final report", async () => {
+	const dir = project(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	const text = sent[0]!.message.content;
+	assert.match(text, /complete final report/);
+	assert.match(text, /what changed/);
+	assert.match(text, /what the user must do next/);
+	assert.match(text, /the checks you ran and their results/);
 });
 
 test("verify also reminds to commit an approved task file", async () => {

@@ -17,9 +17,11 @@ import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
+import { changedPaths, shellWriteTargets, treeFingerprint } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
+const MAX_LISTED = 5;
 
 interface CheckResult {
 	command: string;
@@ -34,6 +36,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let remindedThisPrompt = false;
 	let approvalRemindedThisPrompt = false;
 	let workDocsRemindedThisPrompt = false;
+	/** The last fingerprint of the project's git working tree; absent until the first one (and outside git). */
+	let tree: Record<string, string> | undefined;
+	/** Project-relative paths changed since the last green run, newest last. */
+	let edited: string[] = [];
+	/** The user was already told this session that there are no verification commands. */
+	let notified = false;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -41,8 +49,34 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	const markGreen = (commands: string[], all: string[], ctx: ExtensionContext) => {
 		for (const c of commands) greenSinceEdit.add(c);
-		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) unverified = verifyState.unverified = false;
+		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) {
+			unverified = verifyState.unverified = false;
+			edited = [];
+		}
 		setStatus(ctx);
+	};
+
+	const markEdited = (paths: string[], ctx: ExtensionContext) => {
+		unverified = verifyState.unverified = true;
+		greenSinceEdit = new Set();
+		edited = [...edited.filter((e) => !paths.includes(e)), ...paths].slice(-MAX_LISTED);
+		setStatus(ctx);
+	};
+
+	/**
+	 * What changed in the project since the last fingerprint: from the git working tree, or, outside git, from the
+	 * files `command` writes. The first fingerprint of a session is a baseline, not a change.
+	 */
+	const changes = (cwd: string, command?: string): string[] => {
+		const ignore = resolveIgnore(cwd);
+		const next = treeFingerprint(cwd, ignore);
+		if (next) {
+			const paths = tree ? changedPaths(tree, next) : [];
+			tree = next;
+			return paths;
+		}
+		if (command === undefined) return [];
+		return shellWriteTargets(command, cwd, cwd).filter((p) => !isIgnored(p, ignore));
 	};
 
 	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
@@ -65,6 +99,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			if (r.code !== 0) break; // later checks rarely matter while an earlier one fails
 		}
 		const ok = results.length === resolved.commands.length && results.every((r) => r.code === 0);
+		// The checks' own changes (a formatter, `lint --fix`) don't count against them.
+		changes(ctx.cwd);
 		if (ok) markGreen(resolved.commands, resolved.commands, ctx);
 
 		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
@@ -85,6 +121,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		remindedThisPrompt = false;
 		approvalRemindedThisPrompt = false;
 		workDocsRemindedThisPrompt = false;
+		edited = [];
+		notified = false;
+		// The baseline the verify gate compares shell commands against.
+		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd));
 		setStatus(ctx);
 	});
 
@@ -99,16 +139,21 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("tool_result", async (event, ctx) => {
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
-			if (!countsAsEdit(String(event.input.path ?? ""), ctx.cwd)) return undefined;
-			unverified = verifyState.unverified = true;
-			greenSinceEdit = new Set();
-			setStatus(ctx);
+			const path = String(event.input.path ?? "");
+			if (!countsAsEdit(path, ctx.cwd)) return undefined;
+			markEdited([path ? relative(ctx.cwd, resolve(ctx.cwd, path)).replaceAll("\\", "/") : "(unknown file)"], ctx);
+			changes(ctx.cwd);
 			return undefined;
 		}
-		if ((event.toolName === "bash" || event.toolName === "powershell") && unverified) {
+		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const shell = String(event.input.command ?? "");
 			const { commands } = resolveVerifyCommands(ctx.cwd);
 			const ran = commands.filter((c) => commandMatches(shell, c));
+			// Files the command changed, whatever wrote them (a failed command may have written too); a verification
+			// run's own changes don't count against it.
+			const paths = changes(ctx.cwd, shell);
+			if (ran.length === 0 && paths.length > 0) markEdited(paths, ctx);
+			if (!unverified) return undefined;
 			if (ran.length === 0) return undefined;
 			if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
 			else markGreen(ran, commands, ctx);
@@ -118,14 +163,23 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		const parts: string[] = [];
+		// A change no command reported (a background process, a subagent's script) is found here.
+		const late = changes(ctx.cwd);
+		if (late.length > 0) markEdited(late, ctx);
 		if (unverified && !remindedThisPrompt) {
-			remindedThisPrompt = true;
 			const { commands } = resolveVerifyCommands(ctx.cwd);
-			const how =
-				commands.length > 0
-					? `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`
-					: "No verification commands are configured; state exactly how the change was verified, or that it was not.";
-			parts.push(`Verify gate: files changed since the last passing verification. ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing.`);
+			if (commands.length > 0) {
+				remindedThisPrompt = true;
+				const changed = edited.length > 0 ? ` Changed since the last green run: ${edited.join(", ")}.` : "";
+				const how = `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`;
+				parts.push(
+					`Verify gate: files changed since the last passing verification.${changed} ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing. Your next message is the last one the user reads: make it the complete final report (what changed, what the user must do next, the checks you ran and their results), not only the verification.`,
+				);
+			} else if (!notified) {
+				// Nothing to run, so a follow-up would only repeat the agent's report: tell the user once instead.
+				notified = true;
+				if (ctx.hasUI) ctx.ui.notify('Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
+			}
 		}
 		const dirs = workDocDirs(ctx);
 		if (!approvalRemindedThisPrompt) {
