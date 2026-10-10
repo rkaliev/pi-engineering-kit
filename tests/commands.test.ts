@@ -55,3 +55,14 @@ test("a bash call proves a verification command only when it runs it exactly and
 	assert.equal(commandMatches("npm test -- --grep x", "npm test"), false, "filtered runs do not prove the suite");
 	assert.equal(commandMatches("echo npm test", "npm test"), false);
 });
+
+test("without configured commands they are detected from the project's manifests; configured ones still win", () => {
+	const dir = mkdtempSync(join(tmpdir(), "verify-"));
+	assert.deepEqual(resolveVerifyCommands(dir), { commands: [], source: "none" }, "an empty folder has none");
+	writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test", lint: "eslint ." } }));
+	writeFileSync(join(dir, "package-lock.json"), "{}");
+	assert.deepEqual(resolveVerifyCommands(dir), { commands: ["npm run lint", "npm test"], source: "detected" });
+	mkdirSync(join(dir, ".pi"));
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["make check"] }));
+	assert.deepEqual(resolveVerifyCommands(dir), { commands: ["make check"], source: ".pi/verify.json" });
+});

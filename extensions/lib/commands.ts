@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectJson } from "./config.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -45,7 +45,7 @@ export function isIgnored(relPath: string, globs: string[]): boolean {
 
 export interface ResolvedCommands {
 	commands: string[];
-	source: ".pi/verify.json" | "AGENTS.md" | "none";
+	source: ".pi/verify.json" | "AGENTS.md" | "detected" | "none";
 	error?: string;
 }
 
@@ -70,7 +70,8 @@ export function resolveVerifyCommands(cwd: string): ResolvedCommands {
 			// file absent: try the next one
 		}
 	}
-	return { commands: [], source: "none" };
+	const detected = manifestCommands(cwd);
+	return detected.length > 0 ? { commands: detected, source: "detected" } : { commands: [], source: "none" };
 }
 
 /** Pull verifying commands (test/typecheck/lint/build) out of a "## Commands"-style section. */
@@ -107,4 +108,58 @@ export function commandMatches(shellCommand: string, verifyCommand: string): boo
 	const segments = splitSegments(tokens);
 	if (segments.some((seg) => seg[0] === "cd" || seg[0] === "pushd")) return false;
 	return segments.some((seg) => seg.length === wanted.length && seg.every((t, i) => t === wanted[i]));
+}
+
+/** The verification commands the project's manifests imply, fastest first (package.json scripts, turbo, gradle, cargo, go, dotnet, pytest, make). */
+export function manifestCommands(cwd: string): string[] {
+	const has = (rel: string) => existsSync(join(cwd, rel));
+	const pm = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
+	// Never download a tool to verify a project: these run only a locally installed turbo
+	// (`npx --no` refuses to install; `bunx --no-install` skips installation; pnpm and yarn run local bins only).
+	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx --no-install", npm: "npx --no" }[pm];
+	const turboFile = ["turbo.json", "turbo.jsonc"].find(has);
+	if (turboFile) {
+		try {
+			// turbo.json allows comments; strip them outside strings before parsing.
+			const text = readFileSync(join(cwd, turboFile), "utf8").replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "$1");
+			const turbo = JSON.parse(text);
+			const keys = Object.keys(turbo.tasks ?? turbo.pipeline ?? {});
+			// A task counts when declared, also per package (`web#test`, `//#lint`).
+			// `build` is left out on purpose: CI builds; verify stays fast.
+			const tasks = ["typecheck", "type-check", "lint", "test"].filter((t) => keys.some((k) => k === t || k.endsWith(`#${t}`)));
+			if (tasks.length > 0) return [`${exec} turbo run ${tasks.join(" ")}`];
+		} catch {
+			// unreadable turbo.json: fall through to the package.json scripts
+		}
+	}
+	if (has("package.json")) {
+		let scripts: Record<string, string> = {};
+		try {
+			scripts = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).scripts ?? {};
+		} catch {
+			// unreadable package.json: fall through to other tools
+		}
+		const commands: string[] = [];
+		for (const name of ["typecheck", "type-check", "lint", "test", "build"]) {
+			const body = scripts[name];
+			if (!body || /no test specified/.test(body)) continue;
+			commands.push(name === "test" && pm !== "bun" ? `${pm} test` : `${pm} run ${name}`);
+		}
+		if (commands.length > 0) return commands;
+	}
+	if (has("gradlew")) return ["./gradlew check"];
+	if (has("Cargo.toml")) return ["cargo test"];
+	if (has("go.mod")) return ["go vet ./...", "go test ./..."];
+	if (safeList(cwd).some((f) => f.endsWith(".sln") || f.endsWith(".csproj"))) return ["dotnet test"];
+	if (has("pyproject.toml") || has("pytest.ini")) return ["pytest"];
+	if (has("Makefile") && /^test:/m.test(readFileSync(join(cwd, "Makefile"), "utf8"))) return ["make test"];
+	return [];
+}
+
+function safeList(dir: string): string[] {
+	try {
+		return readdirSync(dir);
+	} catch {
+		return [];
+	}
 }
