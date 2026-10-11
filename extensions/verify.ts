@@ -78,22 +78,29 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
 	 * its siblings' writes aren't its own.
 	 */
-	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean }) => {
+	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean }): string[] => {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
-		const now = gitOff ? undefined : treeFingerprint(cwd, ignore);
-		if (!now) gitOff = true;
-		const before = after && callId !== undefined ? (pending.get(callId) ?? tree) : tree;
+		const why: { slow?: boolean } = {};
+		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why);
+		if (why.slow) gitOff = true;
+		// A call's own snapshot (by id; `run_verification` takes the last tree just before it runs).
+		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
+		const before = own ?? tree;
 		let paths: string[] = [];
 		if (now && before) paths = changedPaths(before, now, cwd, ignore);
 		else if (after) paths = shellWriteTargets(after.command, cwd, cwd).filter((p) => !isIgnored(p, ignore));
-		if (paths.length > 0 && (after ? !after.exempt : ctx.hasUI)) markEdited(paths, ctx);
+		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
+		const counts = after ? !(after.exempt && own) : ctx.hasUI;
+		const marked = paths.length > 0 && counts ? paths : [];
+		if (marked.length > 0) markEdited(marked, ctx);
 		if (callId !== undefined) {
 			pending.delete(callId);
 			if (!after && now) pending.set(callId, now);
 			while (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value!);
 		}
 		if (now) tree = now;
+		return marked;
 	};
 
 	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
@@ -144,8 +151,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		notified = false;
 		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
-		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd));
-		gitOff = !tree;
+		const why: { slow?: boolean } = {};
+		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), why);
+		gitOff = why.slow === true;
 		setStatus(ctx);
 	});
 
@@ -160,7 +168,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	// The working tree before a shell call, so its result can name what that call changed.
 	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName === "bash" || event.toolName === "powershell") track(ctx, String(event.toolCallId ?? ""));
+		// A worker subagent writes from its own process: its changes are its call's, like a shell call's.
+		if (["bash", "powershell", "subagent"].includes(event.toolName)) track(ctx, String(event.toolCallId ?? ""));
 		return undefined;
 	});
 
@@ -173,14 +182,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			track(ctx);
 			return undefined;
 		}
+		if (event.toolName === "subagent") {
+			track(ctx, String(event.toolCallId ?? ""), { command: "", exempt: false });
+			return undefined;
+		}
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const shell = String(event.input.command ?? "");
 			const { commands } = resolveVerifyCommands(ctx.cwd);
 			const ran = commands.filter((c) => commandMatches(shell, c));
 			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
 			// passed and did nothing else keeps its own changes off the count.
-			track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands) });
-			if (!unverified) return undefined;
+			const marked = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands) });
+			// A call that changed files proves nothing about them, whatever checks it also ran.
+			if (!unverified || marked.length > 0) return undefined;
 			if (ran.length === 0) return undefined;
 			if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
 			else markGreen(ran, commands, ctx);

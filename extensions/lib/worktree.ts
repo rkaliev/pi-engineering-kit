@@ -7,9 +7,11 @@ import { statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored } from "./commands.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs, stripRedirects } from "./shell.ts";
+import { blankQuoted, heredocs, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
+/** A fingerprint slower than this is too costly to take around every shell call. */
+const SLOW_MS = 1000;
 /** More listed paths than this and the session falls back to the command text. */
 export const MAX_ENTRIES = 5000;
 
@@ -37,12 +39,18 @@ function git(projectDir: string, args: string[]): string {
  * The files `git status` lists under `projectDir` (changed, new or deleted), by content identity only, so staging or
  * committing them is not a change; gitignored files and paths matching `ignore` are left out. `undefined` outside git,
  * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
+ * `why.slow` says the repository is too big or slow to fingerprint (a timeout, the cap, over a second), as opposed
+ * to not being a repository (yet).
  */
-export function treeFingerprint(projectDir: string, ignore: string[]): Tree | undefined {
+export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean } = {}): Tree | undefined {
+	const started = Date.now();
 	try {
 		const prefix = git(projectDir, ["rev-parse", "--show-prefix"]).trim();
 		const records = git(projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
-		if (records.length > MAX_ENTRIES + 1) return undefined;
+		if (records.length > MAX_ENTRIES + 1) {
+			why.slow = true;
+			return undefined;
+		}
 		const files: Record<string, string> = {};
 		const add = (repoPath: string) => {
 			if (!repoPath.startsWith(prefix)) return;
@@ -62,8 +70,10 @@ export function treeFingerprint(projectDir: string, ignore: string[]): Tree | un
 		} catch {
 			// no commit yet
 		}
+		if (Date.now() - started > SLOW_MS) why.slow = true;
 		return { head, files };
-	} catch {
+	} catch (err) {
+		if ((err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM") why.slow = true;
 		return undefined;
 	}
 }
@@ -124,19 +134,43 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	return [...new Set(inside)];
 }
 
+const SEPARATORS = new Set(["&&", "||", ";", "|", "|&", "&", "\n"]);
+
 /**
- * A command that does nothing but verify: every segment, outside heredoc bodies and after redirections, is one of
- * `commands` exactly, a call `isScript` accepts (the edition's own verify script), or `tail`, `head` or `grep` reading
- * the output. Only such a run keeps its own writes (a formatter, `lint --fix`, its output file) off the count.
+ * A command that does nothing but verify, so its own writes (a formatter, `lint --fix`) stay off the count: no writing
+ * redirection, and outside heredoc bodies only checks (`commands` exactly, or a call `isScript` accepts) joined by
+ * `&&`, where a call `isScript` accepts may be piped into `tail`, `head` or `grep` (it records its own result; a check
+ * piped elsewhere would hide its exit code).
  */
 export function verificationOnly(shell: string, commands: string[], isScript: (words: string[]) => boolean = () => false): boolean {
-	const readers = ["tail", "head", "grep"];
+	const text = heredocs(shell).text;
+	if (writes(text)) return false;
 	const wanted = commands.map((c) => tokenize(stripRedirects(c)));
-	const segments = splitSegments(tokenize(stripRedirects(heredocs(shell).text)));
+	const isCheck = (words: string[]) => wanted.some((w) => w.length === words.length && w.every((t, i) => t === words[i]));
+	let words: string[] = [];
+	let joinedBy = "";
+	const segments: Array<{ words: string[]; joinedBy: string }> = [];
+	for (const token of [...tokenize(stripRedirects(text)), ";"]) {
+		if (!SEPARATORS.has(token)) words.push(token);
+		else if (words.length > 0) {
+			segments.push({ words, joinedBy });
+			words = [];
+			joinedBy = token;
+		}
+	}
+	let headIsScript = false;
+	let piped = false;
 	return (
-		segments.some((seg) => !readers.includes(seg[0] ?? "")) &&
-		segments.every(
-			(seg) => readers.includes(seg[0] ?? "") || isScript(seg) || wanted.some((w) => w.length === seg.length && w.every((t, i) => t === seg[i])),
-		)
+		segments.length > 0 &&
+		segments.every((seg, i) => {
+			if (seg.joinedBy === "|") {
+				piped = true;
+				return headIsScript && ["tail", "head", "grep"].includes(seg.words[0] ?? "");
+			}
+			// After a pipeline, `&&` would follow the reader's exit code, not the check's.
+			if (i > 0 && (seg.joinedBy !== "&&" || piped)) return false;
+			headIsScript = isScript(seg.words);
+			return headIsScript || isCheck(seg.words);
+		})
 	);
 }

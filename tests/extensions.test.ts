@@ -249,11 +249,9 @@ test("verify: a verification run that changes files doesn't mark the workspace a
 	verify(pi);
 	const c = ctx(dir);
 	await emit("session_start", { reason: "startup" }, c);
-	edit("export const a = 2;\n");
-	await emit("tool_result", { toolName: "bash", input: { command: "sed -i '' 's/1/2/' src/a.ts" }, isError: false }, c);
-	await emit("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: false }, c);
-	edit("export const a = 3;\n");
-	await emit("tool_result", { toolName: "bash", input: { command: "npm run typecheck" }, isError: false }, c);
+	await bashCall(emit, c, "sed -i '' 's/1/2/' src/a.ts", false, () => edit("export const a = 2;\n"));
+	await bashCall(emit, c, "npm test");
+	await bashCall(emit, c, "npm run typecheck", false, () => edit("export const a = 3;\n"));
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 0, "the typecheck run's own change keeps npm test green");
 });
@@ -396,6 +394,66 @@ test("verify: without a UI, changes between tool calls aren't this process's", a
 	await bashCall(emit, c, "node gen.js", false, () => edit("export const a = 3;\n"));
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1, "its own command's write");
+});
+
+test("verify: in a project with one command, a write chained after it still gets a follow-up", async () => {
+	for (const command of ["npm test && sed -i '' 's/1/2/' src/a.ts", "npm test && grep -v x src/a.ts > src/b.ts", "npm test | tail -5"]) {
+		const { dir, edit } = gitProject({ "package.json": '{"scripts":{"test":"node --test"}}', "package-lock.json": "{}" });
+		const { pi, emit, sent } = fakePi();
+		verify(pi);
+		const c = ctx(dir);
+		await emit("session_start", { reason: "startup" }, c);
+		await bashCall(emit, c, command, false, () => edit("export const a = 2;\n"));
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(sent.length, 1, command);
+	}
+});
+
+test("verify: a check reported without its tool_call can't claim earlier changes", async () => {
+	const { dir, edit } = gitProject(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	edit("export const a = 2;\n");
+	await emit("tool_result", { toolName: "bash", toolCallId: "no-call", input: { command: "npm test" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+});
+
+test("verify: a worker subagent's changes are counted as its call's, with or without a UI", async () => {
+	const { dir, edit } = gitProject(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	writeFileSync(join(dir, "src/sibling.ts"), "a sibling's write before the call\n");
+	await emit("tool_call", { toolName: "subagent", toolCallId: "w0", input: {} }, c);
+	await emit("tool_result", { toolName: "subagent", toolCallId: "w0", input: {}, content: [], isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "a change before the call isn't the worker's");
+	await emit("input", { text: "next", source: "interactive" }, c);
+	await emit("tool_call", { toolName: "subagent", toolCallId: "w1", input: {} }, c);
+	edit("export const a = 2;\n");
+	await emit("tool_result", { toolName: "subagent", toolCallId: "w1", input: {}, content: [], isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /src\/a\.ts/);
+});
+
+test("verify: a folder that becomes a git repository mid-session is fingerprinted from then on", async () => {
+	const dir = project({ ...COMMANDS, "src/a.ts": "export const a = 1;\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: dir, stdio: "pipe" });
+	git("init", "-q", "-b", "main");
+	git("add", "-A");
+	git("commit", "-q", "-m", "initial");
+	await bashCall(emit, c, "node gen.js", false, () => writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n"));
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "only the fingerprint can see a script's write");
 });
 
 test("verify also reminds to commit an approved task file", async () => {
@@ -739,6 +797,8 @@ test("review gate: detected commands don't make a review Inconclusive", async ()
 		await g.emit("input", { text: "review", source: "interactive" }, ctx(dir));
 		await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
 		assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block, undefined);
+		const chained = await g.emit("tool_call", { toolName: "bash", input: { command: "npm test && gh pr create --fill" } }, ctx(dir));
+		assert.equal(chained?.block, true, "a detected command is no read-only step before a landing");
 	} finally {
 		verifyState.unverified = false;
 	}
