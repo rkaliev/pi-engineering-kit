@@ -2,10 +2,12 @@
  * Verify gate: the model does not decide that work is done — the project's checks do.
  *
  * - `/verify` and the `run_verification` tool run the project's verification commands
- *   (`.pi/verify.json`, else the Commands section of AGENTS.md).
- * - Files edited since the last fully green run make the workspace "unverified".
- * - When the agent stops with unverified edits, it gets one follow-up asking for evidence
- *   (at most once per user message, so it can never loop). The same follow-up carries the approval
+ *   (`.pi/verify.json`, else the Commands section of AGENTS.md, else the ones the manifests imply).
+ * - Files edited since the last fully green run make the workspace "unverified": by `edit`/`write`, or by
+ *   a shell call, found from a git working-tree fingerprint taken before and after it (lib/worktree.ts).
+ * - When the agent stops with unverified edits, it gets one follow-up asking for evidence and its whole
+ *   report (at most once per user message, so it can never loop); with no commands at all the user gets
+ *   one notice per session instead. The same follow-up carries the approval
  *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
  *   files must be deleted).
  */
@@ -17,11 +19,12 @@ import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { changedPaths, shellWriteTargets, treeFingerprint, type Tree } from "./lib/worktree.ts";
+import { changedPaths, shellWriteTargets, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
 const MAX_LISTED = 5;
+const MAX_PENDING = 8;
 
 interface CheckResult {
 	command: string;
@@ -38,6 +41,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let workDocsRemindedThisPrompt = false;
 	/** The last fingerprint of the project's git working tree; absent until the first one (and outside git). */
 	let tree: Tree | undefined;
+	/** The fingerprint taken before each running shell call, by tool call id. */
+	let pending = new Map<string, Tree>();
+	/** git failed, timed out or listed too many files once: the command text decides for the rest of the session. */
+	let gitOff = false;
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
@@ -64,19 +71,29 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	};
 
 	/**
-	 * What changed in the project since the last fingerprint: from the git working tree, or, outside git, from the
-	 * files `command` writes. The first fingerprint of a session is a baseline, not a change.
+	 * Compares the working tree with the last fingerprint and counts what changed, then keeps the new one. With
+	 * `callId` alone (a shell call starting) it also keeps the tree for that call; with `after` (its result) it compares
+	 * with the tree taken before the call and counts it unless `exempt`, and outside git, without a fingerprint or once
+	 * git has failed, reads the files the command writes from its text. A change between calls (the user's editor, a
+	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
+	 * its siblings' writes aren't its own.
 	 */
-	const changes = (cwd: string, command?: string): string[] => {
+	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean }) => {
+		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
-		const next = treeFingerprint(cwd, ignore);
-		if (next) {
-			const paths = tree ? changedPaths(tree, next, cwd, ignore) : [];
-			tree = next;
-			return paths;
+		const now = gitOff ? undefined : treeFingerprint(cwd, ignore);
+		if (!now) gitOff = true;
+		const before = after && callId !== undefined ? (pending.get(callId) ?? tree) : tree;
+		let paths: string[] = [];
+		if (now && before) paths = changedPaths(before, now, cwd, ignore);
+		else if (after) paths = shellWriteTargets(after.command, cwd, cwd).filter((p) => !isIgnored(p, ignore));
+		if (paths.length > 0 && (after ? !after.exempt : ctx.hasUI)) markEdited(paths, ctx);
+		if (callId !== undefined) {
+			pending.delete(callId);
+			if (!after && now) pending.set(callId, now);
+			while (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value!);
 		}
-		if (command === undefined) return [];
-		return shellWriteTargets(command, cwd, cwd).filter((p) => !isIgnored(p, ignore));
+		if (now) tree = now;
 	};
 
 	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
@@ -89,6 +106,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 				report: `${why} Add them to .pi/verify.json ({"commands": ["npm test"]}) or to a "## Commands" section in AGENTS.md.`,
 			};
 		}
+		// Changes made before the run are counted first; only the run's own changes are its own.
+		track(ctx);
 		const timeoutSec = readProjectJson<VerifyConfig>(ctx.cwd, "verify").timeoutSec ?? DEFAULT_TIMEOUT_SEC;
 		const results: CheckResult[] = [];
 		for (const command of resolved.commands) {
@@ -100,7 +119,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		}
 		const ok = results.length === resolved.commands.length && results.every((r) => r.code === 0);
 		// The checks' own changes (a formatter, `lint --fix`) don't count against them.
-		changes(ctx.cwd);
+		track(ctx, undefined, { command: "", exempt: true });
 		if (ok) markGreen(resolved.commands, resolved.commands, ctx);
 
 		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
@@ -123,8 +142,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		workDocsRemindedThisPrompt = false;
 		edited = [];
 		notified = false;
+		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
 		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd));
+		gitOff = !tree;
 		setStatus(ctx);
 	});
 
@@ -137,22 +158,28 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		return { action: "continue" as const };
 	});
 
+	// The working tree before a shell call, so its result can name what that call changed.
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName === "bash" || event.toolName === "powershell") track(ctx, String(event.toolCallId ?? ""));
+		return undefined;
+	});
+
 	pi.on("tool_result", async (event, ctx) => {
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
 			const path = String(event.input.path ?? "");
 			if (!countsAsEdit(path, ctx.cwd)) return undefined;
 			markEdited([path ? relative(ctx.cwd, resolve(ctx.cwd, path)).replaceAll("\\", "/") : "(unknown file)"], ctx);
-			changes(ctx.cwd);
+			// The edit is counted; the next comparison starts after it.
+			track(ctx);
 			return undefined;
 		}
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const shell = String(event.input.command ?? "");
 			const { commands } = resolveVerifyCommands(ctx.cwd);
 			const ran = commands.filter((c) => commandMatches(shell, c));
-			// Files the command changed, whatever wrote them (a failed command may have written too); a verification
-			// run's own changes don't count against it.
-			const paths = changes(ctx.cwd, shell);
-			if (ran.length === 0 && paths.length > 0) markEdited(paths, ctx);
+			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
+			// passed and did nothing else keeps its own changes off the count.
+			track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands) });
 			if (!unverified) return undefined;
 			if (ran.length === 0) return undefined;
 			if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
@@ -163,12 +190,16 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		const parts: string[] = [];
-		// A change no command reported (a background process, a subagent's script) is found here.
-		const late = changes(ctx.cwd);
-		if (late.length > 0) markEdited(late, ctx);
+		// A change no command reported (the user's editor, a background process) is found here.
+		track(ctx);
 		if (unverified && !remindedThisPrompt) {
-			const { commands } = resolveVerifyCommands(ctx.cwd);
-			if (commands.length > 0) {
+			const { commands, error } = resolveVerifyCommands(ctx.cwd);
+			if (error) {
+				remindedThisPrompt = true;
+				parts.push(
+					`Verify gate: files changed since the last passing verification, and the verification commands can't be read: ${error} Fix .pi/verify.json, run the checks and read the output. Your next message is the last one the user reads: make it the complete final report (what changed, what the user must do next, the checks you ran and their results), not only the verification.`,
+				);
+			} else if (commands.length > 0) {
 				remindedThisPrompt = true;
 				const changed = edited.length > 0 ? ` Changed since the last green run: ${edited.join(", ")}.` : "";
 				const how = `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`;
@@ -204,8 +235,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		name: "run_verification",
 		label: "Run verification",
 		description:
-			"Run the project's verification commands (tests, typecheck, lint, build) from .pi/verify.json or AGENTS.md and return pass/fail with the failing output tail.",
-		promptSnippet: "run_verification: run the project's configured tests/typecheck/lint/build and get evidence",
+			"Run the project's verification commands (tests, typecheck, lint, build) from .pi/verify.json, AGENTS.md or the project's manifests and return pass/fail with the failing output tail.",
+		promptSnippet: "run_verification: run the project's tests/typecheck/lint/build and get evidence",
 		promptGuidelines: ["Run run_verification before claiming work is complete, fixed, or passing."],
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {

@@ -19,7 +19,7 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 type Handler = (event: any, ctx: any) => unknown;
 
-function fakePi(execCodes: Record<string, number> = {}) {
+function fakePi(execCodes: Record<string, number> = {}, onExec: (command: string) => void = () => {}) {
 	const handlers = new Map<string, Handler[]>();
 	const sent: Array<{ message: any; options: any }> = [];
 	const tools = new Map<string, any>();
@@ -52,6 +52,7 @@ function fakePi(execCodes: Record<string, number> = {}) {
 		async exec(_shell: string, args: string[]) {
 			const command = args[args.length - 1]!;
 			execs.push(command);
+			onExec(command);
 			const code = execCodes[command] ?? 0;
 			return { stdout: code === 0 ? "ok" : `boom in ${command}`, stderr: "", code, killed: false };
 		},
@@ -303,6 +304,98 @@ test("verify: the follow-up asks for the complete final report", async () => {
 	assert.match(text, /what changed/);
 	assert.match(text, /what the user must do next/);
 	assert.match(text, /the checks you ran and their results/);
+});
+
+/** One bash call as pi reports it: `tool_call` before it runs, `tool_result` after, with the same id. */
+async function bashCall(emit: (event: string, payload: any, ctx: any) => Promise<unknown>, c: any, command: string, isError = false, during = () => {}) {
+	const toolCallId = `call-${Math.random()}`;
+	await emit("tool_call", { toolName: "bash", toolCallId, input: { command } }, c);
+	during();
+	await emit("tool_result", { toolName: "bash", toolCallId, input: { command }, isError }, c);
+}
+
+test("verify: committing after a green run is not an edit", async () => {
+	const { dir, edit } = gitProject(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "sed -i '' 's/1/2/' src/a.ts", false, () => edit("export const a = 2;\n"));
+	await bashCall(emit, c, "npm test");
+	await bashCall(emit, c, "npm run typecheck");
+	await bashCall(emit, c, "git commit -qam 'a = 2'", false, () => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "a = 2"], { cwd: dir }));
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0);
+	assert.equal(verifyState.unverified, false);
+});
+
+test("verify: a write chained with a check, or made by a failed check, is not exempt", async () => {
+	const cases: Array<[string, boolean]> = [
+		["npm test && sed -i '' 's/1/2/' src/a.ts", false],
+		["npm test; cat > src/a.ts <<'EOF'\nexport const a = 2;\nEOF", false],
+		["npm test", true],
+	];
+	for (const [command, isError] of cases) {
+		const { dir, edit } = gitProject(COMMANDS);
+		const { pi, emit, sent } = fakePi();
+		verify(pi);
+		const c = ctx(dir);
+		await emit("session_start", { reason: "startup" }, c);
+		await bashCall(emit, c, command, isError, () => edit("export const a = 2;\n"));
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(sent.length, 1, command);
+		assert.match(sent[0]!.message.content, /src\/a\.ts/, command);
+	}
+});
+
+test("verify: run_verification counts earlier changes, but not its own", async () => {
+	const failing = gitProject(COMMANDS);
+	const f = fakePi({ "npm test": 1 });
+	verify(f.pi);
+	const fc = ctx(failing.dir);
+	await f.emit("session_start", { reason: "startup" }, fc);
+	failing.edit("export const a = 2;\n");
+	await f.tools.get("run_verification").execute("id", {}, undefined, undefined, fc);
+	await f.emit("agent_end", { messages: [] }, fc);
+	assert.equal(f.sent.length, 1, "the change before a failed run is marked");
+	assert.match(f.sent[0]!.message.content, /src\/a\.ts/);
+
+	const own = gitProject(COMMANDS);
+	const o = fakePi({}, (command) => command === "npm run typecheck" && own.edit("export const a = 3;\n"));
+	verify(o.pi);
+	const oc = ctx(own.dir);
+	await o.emit("session_start", { reason: "startup" }, oc);
+	await o.tools.get("run_verification").execute("id", {}, undefined, undefined, oc);
+	await o.emit("agent_end", { messages: [] }, oc);
+	assert.equal(o.sent.length, 0, "a formatter run by the checks is theirs");
+});
+
+test("verify: a broken .pi/verify.json still gets a follow-up naming the error", async () => {
+	const dir = project({ ".pi/verify.json": '{"commands": ["npm test"],}', "package.json": '{"scripts":{"test":"node --test"}}' });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /verify\.json/);
+	assert.match(sent[0]!.message.content, /JSON|parse|Unexpected|Expected/i);
+});
+
+test("verify: without a UI, changes between tool calls aren't this process's", async () => {
+	const { dir, edit } = gitProject(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	edit("export const a = 2;\n");
+	await bashCall(emit, c, "ls");
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "a sibling's write");
+	await bashCall(emit, c, "node gen.js", false, () => edit("export const a = 3;\n"));
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "its own command's write");
 });
 
 test("verify also reminds to commit an approved task file", async () => {
@@ -624,6 +717,31 @@ test("review gate: reviewGate: false only in a trusted project; the guard config
 	assert.match(asked.asked[0]!, /guard config decides/);
 	assert.equal((await call("write", { path: join(tmpdir(), "eng-kit", "reviews", "x.json") }))?.block, true);
 	assert.equal((await call("bash", { command: `echo '{}' > .pi/guard.json` }))?.block, true, "declined confirmation");
+});
+
+test("review gate: detected commands don't make a review Inconclusive", async () => {
+	const dir = project({ "package.json": '{"scripts":{"test":"node --test"}}', "package-lock.json": "{}" });
+	const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" }).stdout.trim();
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "t@example.com");
+	git("config", "user.name", "t");
+	git("add", "-A");
+	git("commit", "-qm", "init");
+	git("switch", "-qc", "feat/a");
+	writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: a");
+	const head = git("rev-parse", "HEAD");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	try {
+		verifyState.unverified = true;
+		await g.emit("input", { text: "review", source: "interactive" }, ctx(dir));
+		await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${head}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
+		assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, ctx(dir)))?.block, undefined);
+	} finally {
+		verifyState.unverified = false;
+	}
 });
 
 test("review gate: a review that ran on unverified edits counts as Inconclusive", async () => {

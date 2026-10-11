@@ -74,7 +74,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
 			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
-				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd).commands };
+				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				decision = join(decision, review);
 			}
@@ -105,7 +105,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
 			// A review counts only for code that passed the checks: one that ran on unverified edits is Inconclusive.
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
-			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd).commands.length > 0) {
+			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
 				recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput });
 				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
 				return;

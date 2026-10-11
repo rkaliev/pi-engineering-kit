@@ -7,7 +7,7 @@ import { statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored } from "./commands.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs } from "./shell.ts";
+import { blankQuoted, heredocs, stripRedirects } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -122,4 +122,21 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 		.filter((rel) => rel !== "" && !rel.startsWith("..") && !isAbsolute(rel))
 		.map((rel) => rel.replaceAll("\\", "/"));
 	return [...new Set(inside)];
+}
+
+/**
+ * A command that does nothing but verify: every segment, outside heredoc bodies and after redirections, is one of
+ * `commands` exactly, a call `isScript` accepts (the edition's own verify script), or `tail`, `head` or `grep` reading
+ * the output. Only such a run keeps its own writes (a formatter, `lint --fix`, its output file) off the count.
+ */
+export function verificationOnly(shell: string, commands: string[], isScript: (words: string[]) => boolean = () => false): boolean {
+	const readers = ["tail", "head", "grep"];
+	const wanted = commands.map((c) => tokenize(stripRedirects(c)));
+	const segments = splitSegments(tokenize(stripRedirects(heredocs(shell).text)));
+	return (
+		segments.some((seg) => !readers.includes(seg[0] ?? "")) &&
+		segments.every(
+			(seg) => readers.includes(seg[0] ?? "") || isScript(seg) || wanted.some((w) => w.length === seg.length && w.every((t, i) => t === seg[i])),
+		)
+	);
 }

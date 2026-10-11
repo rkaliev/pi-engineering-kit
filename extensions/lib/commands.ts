@@ -54,8 +54,11 @@ const VERIFYING =
 	/\b(test|tests|typecheck|type-check|tsc|lint|build|check|vet|clippy|assemble\w*|analyze|verify|vitest|jest|pytest|mocha|rspec|phpunit|ctest)\b/i;
 const LONG_RUNNING = /\b(dev|start|serve|watch|preview)\b/i;
 
-/** Verification commands: `.pi/verify.json` first, then the Commands section of AGENTS.md. */
-export function resolveVerifyCommands(cwd: string): ResolvedCommands {
+/**
+ * Verification commands: `.pi/verify.json` first, then the Commands section of AGENTS.md, then the ones the manifests
+ * imply (`detect: false` leaves those out: the review gate trusts configured commands only).
+ */
+export function resolveVerifyCommands(cwd: string, options: { detect?: boolean } = {}): ResolvedCommands {
 	const config = readProjectJson<VerifyConfig>(cwd, "verify");
 	if (config.error) return { commands: [], source: "none", error: config.error };
 	if (Array.isArray(config.commands)) {
@@ -70,6 +73,7 @@ export function resolveVerifyCommands(cwd: string): ResolvedCommands {
 			// file absent: try the next one
 		}
 	}
+	if (options.detect === false) return { commands: [], source: "none" };
 	const detected = manifestCommands(cwd);
 	return detected.length > 0 ? { commands: detected, source: "detected" } : { commands: [], source: "none" };
 }
@@ -152,7 +156,11 @@ export function manifestCommands(cwd: string): string[] {
 	if (has("go.mod")) return ["go vet ./...", "go test ./..."];
 	if (safeList(cwd).some((f) => f.endsWith(".sln") || f.endsWith(".csproj"))) return ["dotnet test"];
 	if (has("pyproject.toml") || has("pytest.ini")) return ["pytest"];
-	if (has("Makefile") && /^test:/m.test(readFileSync(join(cwd, "Makefile"), "utf8"))) return ["make test"];
+	try {
+		if (has("Makefile") && /^test:/m.test(readFileSync(join(cwd, "Makefile"), "utf8"))) return ["make test"];
+	} catch {
+		// an unreadable Makefile (a folder, no permission): no command from it
+	}
 	return [];
 }
 
