@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.0
+
+- **The verify gate sees bash edits.** A file changed by a bash command (a heredoc, `sed -i`, a script, a code generator, `npm install`) makes the workspace unverified like an `edit` or `write`. In a git repository the extension fingerprints the working tree (`git status` plus each changed file's size and time) at `session_start`, compares it after every bash result, failed or not, and at `agent_end`; gitignored files and `ignore` globs don't count, nor do the changes a verification run makes itself. Outside git, the command's `>`, `>>`, `tee` and `sed -i` targets inside the project count. The follow-up names the changed files.
+- **Commands are detected when none are configured.** Without `.pi/verify.json` and a Commands section, the gate, `/verify`, `run_verification` and the review gate's "unverified edits" check use the commands `/kit-init` would detect from the manifests.
+- **No commands at all: a notice, not a follow-up.** The gate no longer asks the agent to "state how it was verified" when there is nothing to run; the user gets one notice per session to run `/kit-init` or add `.pi/verify.json`.
+- **The follow-up keeps the report whole.** It asks for the complete final report again (what changed, what the user must do next, the checks and their results), so the agent's last message isn't a verification-only note.
+
 ## 0.24.0
 
 - **test-driven-development for settled requirements.** using-skills' "Where to start" names it for a spec, task file or ticket, before any code. Without it, an agent given a ready spec skipped brainstorming and with it the TDD skill, and took "module not found" for a failing test. The red-flag row "I remember that skill" is gone: the rule above it already says so.
