@@ -10,6 +10,17 @@ import { splitSegments, tokenize } from "./patterns.ts";
 import { blankQuoted, heredocs } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
+/** More listed paths than this and the session falls back to the command text. */
+export const MAX_ENTRIES = 5000;
+
+/** A fingerprint of the working tree: the commit checked out, and each listed file's content identity. */
+export interface Tree {
+	/** `HEAD`, or `""` before the first commit. */
+	head: string;
+	/** Project-relative path → `"<size> <mtimeMs>"`, or `"deleted"`. */
+	files: Record<string, string>;
+}
+
 const MAX_BUFFER = 16 * 1024 * 1024;
 
 function git(projectDir: string, args: string[]): string {
@@ -23,44 +34,69 @@ function git(projectDir: string, args: string[]): string {
 }
 
 /**
- * Each changed, new or deleted file under `projectDir` (project-relative path) mapped to `"<XY> <size> <mtimeMs>"`,
- * or `"deleted"`; gitignored files and paths matching `ignore` are left out. `undefined` outside git, on an error or
- * after the timeout, so the caller can fall back to the command's text.
+ * The files `git status` lists under `projectDir` (changed, new or deleted), by content identity only, so staging or
+ * committing them is not a change; gitignored files and paths matching `ignore` are left out. `undefined` outside git,
+ * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
  */
-export function treeFingerprint(projectDir: string, ignore: string[]): Record<string, string> | undefined {
+export function treeFingerprint(projectDir: string, ignore: string[]): Tree | undefined {
 	try {
 		const prefix = git(projectDir, ["rev-parse", "--show-prefix"]).trim();
 		const records = git(projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
-		const tree: Record<string, string> = {};
-		const add = (status: string, repoPath: string) => {
+		if (records.length > MAX_ENTRIES + 1) return undefined;
+		const files: Record<string, string> = {};
+		const add = (repoPath: string) => {
 			if (!repoPath.startsWith(prefix)) return;
 			const path = repoPath.slice(prefix.length);
-			if (isIgnored(path, ignore)) return;
-			try {
-				const { size, mtimeMs } = statSync(join(projectDir, path));
-				tree[path] = `${status} ${size} ${mtimeMs}`;
-			} catch {
-				tree[path] = "deleted";
-			}
+			if (!isIgnored(path, ignore)) files[path] = identity(join(projectDir, path));
 		};
 		for (let i = 0; i < records.length; i++) {
 			const record = records[i]!;
 			if (record.length < 4) continue;
-			const status = record.slice(0, 2);
-			add(status, record.slice(3));
-			// A rename or copy is followed by its source path: both count.
-			if (status[0] === "R" || status[0] === "C") add(status, records[++i] ?? "");
+			add(record.slice(3));
+			// A rename or copy (in either column) is followed by its source path: both count.
+			if (/[RC]/.test(record.slice(0, 2))) add(records[++i] ?? "");
 		}
-		return tree;
+		let head = "";
+		try {
+			head = git(projectDir, ["rev-parse", "--verify", "-q", "HEAD"]).trim();
+		} catch {
+			// no commit yet
+		}
+		return { head, files };
 	} catch {
 		return undefined;
 	}
 }
 
-/** The paths whose entry was added, removed or differs, sorted; empty means nothing changed. */
-export function changedPaths(before: Record<string, string>, after: Record<string, string>): string[] {
-	const paths = new Set([...Object.keys(before), ...Object.keys(after)]);
-	return [...paths].filter((p) => before[p] !== after[p]).sort();
+/**
+ * The project files whose content changed between two fingerprints, sorted; empty means nothing changed. A path that
+ * left the list (staged and committed, or restored) counts only if its size or time now differ; when `HEAD` moved, the
+ * files its commits touched that were clean before count too (an edit committed in the same command, a checkout).
+ */
+export function changedPaths(before: Tree, after: Tree, projectDir: string, ignore: string[] = []): string[] {
+	const changed = new Set<string>();
+	for (const path of new Set([...Object.keys(before.files), ...Object.keys(after.files)])) {
+		const now = after.files[path] ?? identity(join(projectDir, path));
+		if (before.files[path] !== now) changed.add(path);
+	}
+	if (before.head && after.head && before.head !== after.head) {
+		try {
+			const touched = git(projectDir, ["diff", "--name-only", "--relative", "-z", before.head, after.head, "--", "."]).split("\0");
+			for (const path of touched) if (path && !(path in before.files) && !isIgnored(path, ignore)) changed.add(path);
+		} catch {
+			// an unreachable commit (a rewritten history): the listed files above still count
+		}
+	}
+	return [...changed].sort();
+}
+
+function identity(file: string): string {
+	try {
+		const { size, mtimeMs } = statSync(file);
+		return `${size} ${mtimeMs}`;
+	} catch {
+		return "deleted";
+	}
 }
 
 /**

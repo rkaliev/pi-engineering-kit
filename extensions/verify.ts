@@ -17,7 +17,7 @@ import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { changedPaths, shellWriteTargets, treeFingerprint } from "./lib/worktree.ts";
+import { changedPaths, shellWriteTargets, treeFingerprint, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -37,7 +37,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let approvalRemindedThisPrompt = false;
 	let workDocsRemindedThisPrompt = false;
 	/** The last fingerprint of the project's git working tree; absent until the first one (and outside git). */
-	let tree: Record<string, string> | undefined;
+	let tree: Tree | undefined;
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
@@ -71,7 +71,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const ignore = resolveIgnore(cwd);
 		const next = treeFingerprint(cwd, ignore);
 		if (next) {
-			const paths = tree ? changedPaths(tree, next) : [];
+			const paths = tree ? changedPaths(tree, next, cwd, ignore) : [];
 			tree = next;
 			return paths;
 		}
