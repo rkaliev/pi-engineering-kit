@@ -2,7 +2,7 @@
 
 ## 0.25.2
 
-- **The guard reads only what the shell will run.** A heredoc body fed to anything but a shell (`cat > file <<EOF`, `python3 - <<EOF`) is data, so writing a script that mentions `rm -r`, `git push --force` or `npm publish` is no longer refused or asked; a body fed to `bash`, `sh`, `ssh` and the like is still read as commands, and the substitutions of an unquoted body are still checked. A `<<` inside quotes opens nothing, and a line that ends inside a quote keeps everything after it. A redirection's target is no longer taken for a path to delete, so `rm -rf build 2>/dev/null` and `git rm -rq x 2>/dev/null` pass while `rm -rf ~/x 2>/dev/null` stays blocked. Your own guard.json patterns still match the whole command.
+- **Two harmless shapes no longer trip the guard.** A recursive `rm` silenced with `2>/dev/null` (or `>/dev/null`, `&>/dev/null`) no longer counts `/dev/null` as a path outside the project, so `rm -rf build 2>/dev/null` and `git rm -rq x 2>/dev/null` pass while `rm -rf ~/x 2>/dev/null` stays blocked. A command that, as a whole, only writes a file through a quoted heredoc (`cat > file <<'EOF'`, `cat >> file`, `tee [-a] file`, then the body and the delimiter as the last line) is judged by its first line, so writing a script that mentions `rm -r`, `git push --force` or `npm publish` is no longer refused or asked; every other heredoc and command is judged exactly as before. Your own guard.json patterns still match the whole command.
 
 ## 0.25.0
 
