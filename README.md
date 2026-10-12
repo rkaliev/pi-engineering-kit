@@ -90,6 +90,8 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 | `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines |
 | writing into the review records | `gh pr create`, `glab mr create`, merging into or pushing to the base branch and pushing to a PR branch the agent opened, without a reviewer `Yes` for the commit being landed or chained after anything but read-only steps and the project's verification commands (review gate); every PR/MR merge (`gh pr merge`, `glab mr merge`), even after a `Yes`; editing `.pi/guard.json` (edit/write, or a shell command naming it) |
 
+**What the guard reads:** the command as the shell will run it. A heredoc body fed to anything but a shell (`cat > file <<EOF`, `python3 - <<EOF`) is data, though the substitutions of an unquoted body are checked; a body fed to `bash`, `sh`, `ssh` and the like is read as commands. A redirection's target (`2>/dev/null`, `> ../log`) isn't a path to delete. Your own `block`, `confirm` and `allow` patterns still match the whole command.
+
 `.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
 
 **Pushing the work branch.** A plain `git push` of the agent's own work branch passes without a question when all of these hold:
