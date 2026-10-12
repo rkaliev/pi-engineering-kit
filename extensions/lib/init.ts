@@ -1,9 +1,9 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ciCoverage } from "./ci.ts";
 import { readProjectJson } from "./config.ts";
-import { DEFAULT_IGNORE, resolveVerifyCommands } from "./commands.ts";
+import { DEFAULT_IGNORE, manifestCommands, resolveVerifyCommands } from "./commands.ts";
 
 export interface InitItem {
 	/** Path relative to the project root. */
@@ -103,57 +103,7 @@ function planSettings(cwd: string): InitItem {
 export function detectVerifyCommands(cwd: string): string[] {
 	const fromAgents = resolveVerifyCommands(cwd);
 	if (fromAgents.source === "AGENTS.md" && fromAgents.commands.length > 0) return fromAgents.commands;
-
-	const has = (rel: string) => existsSync(join(cwd, rel));
-	const pm = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
-	// Never download a tool to verify a project: these run only a locally installed turbo
-	// (`npx --no` refuses to install; `bunx --no-install` skips installation; pnpm and yarn run local bins only).
-	const exec = { pnpm: "pnpm", yarn: "yarn", bun: "bunx --no-install", npm: "npx --no" }[pm];
-	const turboFile = ["turbo.json", "turbo.jsonc"].find(has);
-	if (turboFile) {
-		try {
-			// turbo.json allows comments; strip them outside strings before parsing.
-			const text = readFileSync(join(cwd, turboFile), "utf8").replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "$1");
-			const turbo = JSON.parse(text);
-			const keys = Object.keys(turbo.tasks ?? turbo.pipeline ?? {});
-			// A task counts when declared, also per package (`web#test`, `//#lint`).
-			// `build` is left out on purpose: CI builds; verify stays fast.
-			const tasks = ["typecheck", "type-check", "lint", "test"].filter((t) => keys.some((k) => k === t || k.endsWith(`#${t}`)));
-			if (tasks.length > 0) return [`${exec} turbo run ${tasks.join(" ")}`];
-		} catch {
-			// unreadable turbo.json: fall through to the package.json scripts
-		}
-	}
-	if (has("package.json")) {
-		let scripts: Record<string, string> = {};
-		try {
-			scripts = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).scripts ?? {};
-		} catch {
-			// unreadable package.json: fall through to other tools
-		}
-		const commands: string[] = [];
-		for (const name of ["typecheck", "type-check", "lint", "test", "build"]) {
-			const body = scripts[name];
-			if (!body || /no test specified/.test(body)) continue;
-			commands.push(name === "test" && pm !== "bun" ? `${pm} test` : `${pm} run ${name}`);
-		}
-		if (commands.length > 0) return commands;
-	}
-	if (has("gradlew")) return ["./gradlew check"];
-	if (has("Cargo.toml")) return ["cargo test"];
-	if (has("go.mod")) return ["go vet ./...", "go test ./..."];
-	if (safeList(cwd).some((f) => f.endsWith(".sln") || f.endsWith(".csproj"))) return ["dotnet test"];
-	if (has("pyproject.toml") || has("pytest.ini")) return ["pytest"];
-	if (has("Makefile") && /^test:/m.test(readFileSync(join(cwd, "Makefile"), "utf8"))) return ["make test"];
-	return [];
-}
-
-function safeList(dir: string): string[] {
-	try {
-		return readdirSync(dir);
-	} catch {
-		return [];
-	}
+	return manifestCommands(cwd);
 }
 
 /** The test-hygiene script: offered, copied (or an older copy replaced) only on request, and reported when the project's copy is older. */
