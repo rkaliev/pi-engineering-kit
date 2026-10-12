@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { shellText, stripRedirects } from "./shell.ts";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
@@ -65,19 +64,11 @@ export function isSecretPath(path: string): boolean {
 
 /** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
 export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
-	// What the shell will run: heredoc bodies fed to a non-shell command are data (lib/shell.ts). User rules below
-	// still read the whole command.
-	const text = shellText(command);
-	const segments = splitSegments(tokenize(text));
+	const segments = splitSegments(tokenize(command));
 
 	for (const segment of segments) {
 		const hard = checkSegment(segment, cwd);
 		if (hard) return hard;
-	}
-	// A redirection's target (`2>/dev/null`, `> ../log`) is written, not deleted.
-	for (const segment of splitSegments(tokenize(stripRedirects(text)))) {
-		const deletes = checkRecursiveDelete(segment, cwd);
-		if (deletes) return deletes;
 	}
 	for (const source of config.block ?? []) {
 		if (new RegExp(source).test(command)) {
@@ -86,10 +77,10 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env);
+	const push = checkPushSetup(segments, command) ?? checkPushes(command, segments, cwd, dir, env);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
-		if (re.test(text)) return { action: "confirm", reason: `This command ${what}.` };
+		if (re.test(command)) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
 		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/.` };
@@ -161,11 +152,6 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 		}
 	}
 
-	return undefined;
-}
-
-function checkRecursiveDelete(tokens: string[], cwd: string): GuardDecision | undefined {
-	const words = tokens.map(unwrapToken).filter((t) => t !== "" && (!t.includes("=") || t.startsWith("-")));
 	const rmAt = words.indexOf("rm");
 	if (rmAt !== -1) {
 		const args = words.slice(rmAt + 1);
