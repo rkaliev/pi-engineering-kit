@@ -10,8 +10,6 @@ import { splitSegments, tokenize } from "./patterns.ts";
 import { blankQuoted, heredocs, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
-/** A fingerprint slower than this is too costly to take around every shell call. */
-const SLOW_MS = 1000;
 /** More listed paths than this and the session falls back to the command text. */
 export const MAX_ENTRIES = 5000;
 
@@ -39,11 +37,10 @@ function git(projectDir: string, args: string[]): string {
  * The files `git status` lists under `projectDir` (changed, new or deleted), by content identity only, so staging or
  * committing them is not a change; gitignored files and paths matching `ignore` are left out. `undefined` outside git,
  * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
- * `why.slow` says the repository is too big or slow to fingerprint (a timeout, the cap, over a second), as opposed
- * to not being a repository (yet).
+ * `why.slow` says the repository is too big or slow to fingerprint (a timeout or the cap), as opposed to not being a
+ * repository (yet).
  */
 export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean } = {}): Tree | undefined {
-	const started = Date.now();
 	try {
 		const prefix = git(projectDir, ["rev-parse", "--show-prefix"]).trim();
 		const records = git(projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
@@ -70,7 +67,6 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 		} catch {
 			// no commit yet
 		}
-		if (Date.now() - started > SLOW_MS) why.slow = true;
 		return { head, files };
 	} catch (err) {
 		if ((err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM") why.slow = true;
