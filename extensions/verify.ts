@@ -43,7 +43,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let tree: Tree | undefined;
 	/** The fingerprint taken before each running shell call, by tool call id. */
 	let pending = new Map<string, Tree>();
-	/** git failed, timed out or listed too many files once: the command text decides for the rest of the session. */
+	/** git timed out or listed too many files once: the command text decides for the rest of the session. */
 	let gitOff = false;
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];
