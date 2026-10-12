@@ -494,3 +494,58 @@ export function quotedSubstitutions(command: string): string[] {
 	}
 	return found;
 }
+
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish", "ash", "busybox", "ssh"]);
+
+/**
+ * The command as the guard should judge it: a heredoc body stays commands only when its line names a shell (`bash`,
+ * `sh`, `ssh` and the like, anywhere on the line, so `cat <<EOF | bash` counts); for any other command the body is
+ * data, and only its `$(…)` and backtick substitutions stay (an unquoted body runs them even for `cat`). A `<<` counts
+ * only outside quotes, tracked across lines; a line that ends inside a quote keeps everything after it, so any doubt
+ * leaves more for the guard to read, never less.
+ */
+export function shellText(command: string): string {
+	const lines = command.split("\n");
+	const out: string[] = [];
+	let quote: string | null = null;
+	for (let n = 0; n < lines.length; n++) {
+		const line = lines[n]!;
+		out.push(line);
+		const ops: Array<{ word: string; tabs: boolean; quoted: boolean }> = [];
+		for (let i = 0; i < line.length; i++) {
+			const ch = line[i]!;
+			if (quote) {
+				if (ch === "\\" && quote !== "'") i++;
+				else if (ch === (quote === "$'" ? "'" : quote)) quote = null;
+				continue;
+			}
+			if (ch === "\\") i++;
+			else if (ch === "$" && line[i + 1] === "'") {
+				quote = "$'";
+				i++;
+			} else if (ch === "'" || ch === '"') quote = ch;
+			else if (line.startsWith("<<", i) && line[i + 2] !== "<") {
+				const m = /^<<(-?)[ \t]*(\\?)(['"]?)([\w.-]+)\3/.exec(line.slice(i));
+				if (m) {
+					ops.push({ word: m[4]!, tabs: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
+					i += m[0].length - 1;
+				} else i++;
+			}
+		}
+		if (ops.length === 0 || quote !== null) continue;
+		const shell = tokenize(line).some((t) => SHELLS.has(t.split("/").pop() ?? ""));
+		for (const op of ops) {
+			const body: string[] = [];
+			let end = n + 1;
+			for (; end < lines.length; end++) {
+				const candidate = op.tabs ? lines[end]!.replace(/^\t+/, "") : lines[end]!;
+				if (candidate === op.word) break;
+				body.push(lines[end]!);
+			}
+			if (shell) out.push(...lines.slice(n + 1, Math.min(end + 1, lines.length)));
+			else if (!op.quoted) out.push(...quotedSubstitutions(`"${body.join("\n").replace(/\\./g, "").replace(/"/g, "")}"`));
+			n = end;
+		}
+	}
+	return out.join("\n");
+}
