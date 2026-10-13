@@ -127,14 +127,14 @@ test("shellWriteTargets: home, environment and assigned variables are expanded",
 	t.after(() => [project, home].forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 	const env = { HOME: home, TMPDIR: "/tmp/t" };
 	const targets = (command: string) => shellWriteTargets(command, project, project, env);
-	for (const none of ["echo x > ~/notes.txt", "echo x > ~", "echo x > $HOME/n", "echo x > ${HOME}/n", "echo x > $TMPDIR/n", 'echo x > "$HOME/n"']) {
+	for (const none of ["echo x > ~/notes.txt", "echo x > ~", "echo x > $HOME/n", "echo x > ${HOME}/n", "echo x > $TMPDIR/n"]) {
 		assert.deepEqual(targets(none), [], none);
 	}
 	assert.deepEqual(targets("OUT=src && echo x > $OUT/a.ts"), ["src/a.ts"]);
 	assert.deepEqual(targets("export OUT=src; echo x > ${OUT}/a.ts"), ["src/a.ts"]);
 	assert.deepEqual(targets(`P=${project}; echo x > $P/src/a.ts`), ["src/a.ts"], "a value inside the project still counts");
 	assert.deepEqual(targets("OUT=/tmp/x echo y > $OUT/a.ts"), ["$OUT/a.ts"], "a prefix assignment isn't expanded for its own command");
-	assert.deepEqual(targets(`export HOME=${project}/.home && echo x > ~/cfg`), [".home/cfg"], "~ follows HOME set in the command");
+	assert.deepEqual(targets(`export HOME=${project}/.home && echo x > ~/cfg`), ["~/cfg"], "HOME the command sets is unknown");
 });
 
 test("shellWriteTargets: a target that can't be expanded is judged by its literal start", (t) => {
@@ -168,9 +168,28 @@ test("shellWriteTargets: a write the hook can't place still counts as written", 
 	assert.deepEqual(targets("echo x > '$HOME/n'", { HOME: "/tmp/h" }), ["$HOME/n"], "single quotes keep $ literal");
 	assert.deepEqual(targets('echo x > "~/n"', { HOME: "/tmp/h" }), ["~/n"], "quotes keep ~ literal");
 	assert.deepEqual(targets("echo x > $constructor/a.ts"), ["$constructor/a.ts"], "names aren't looked up on the object prototype");
+	assert.deepEqual(targets("echo x > ~/n"), [], "~ falls back to the user's home folder");
 	const link = join(parent, "link");
 	symlinkSync(project, link);
 	assert.deepEqual(targets(`P=${project}; echo x > $P/src/a.ts`, {}, false, link), ["$P/src/a.ts"], "the project's real path");
 	const windows = "C:\\w\\p";
 	assert.deepEqual(targets("P=/c/w/p; echo x > $P/src/a.ts", {}, false, windows), ["$P/src/a.ts"], "a path rooted differently from the project");
+});
+
+test("shellWriteTargets: only a plain word with names bound once is expanded", (t) => {
+	const parent = mkdtempSync(join(tmpdir(), "parent-"));
+	t.after(() => rmSync(parent, { recursive: true, force: true }));
+	const project = join(parent, "app");
+	mkdirSync(project);
+	const targets = (command: string, env: NodeJS.ProcessEnv = {}) => shellWriteTargets(command, project, project, env);
+	assert.deepEqual(targets("d=/tmp/logs; npm test > $d/t.log; for d in src lib; do echo x > $d/index.ts; done"), ["$d/t.log", "$d/index.ts"], "for binds it again");
+	assert.deepEqual(targets('OUT=/tmp/x; if [ -n "$CI" ]; then OUT=src/gen; fi; echo x > $OUT/a.ts'), ["$OUT/a.ts"], "an assignment after then");
+	assert.deepEqual(targets("X=/tmp/x; read X; echo y > $X/a.ts"), ["$X/a.ts"], "read binds it");
+	assert.deepEqual(targets('[ -n "$CI" ] && export HOME=/tmp/ci; echo x > ~/app/src/a.ts', { HOME: parent }), ["~/app/src/a.ts"], "HOME the command mentions");
+	assert.deepEqual(targets("cd src && OUT=/tmp/x && echo x > $OUT/a.ts"), ["$OUT/a.ts"], "a command that moves");
+	assert.deepEqual(targets(`P=${project}; echo x > "$P"/src/a.ts`).length, 1, "a quoted part");
+	assert.deepEqual(targets(`P=${project}; echo x > $P"/src/a.ts"`).length, 1, "a quote later in the word");
+	assert.deepEqual(targets("echo x > ~/My\\ Projects/app/src/a.ts", { HOME: parent }).length, 1, "an escaped space");
+	assert.deepEqual(targets("echo x > $HOME/*.log", { HOME: "/tmp/h" }), ["$HOME/*.log"], "a glob");
+	assert.deepEqual(targets("echo x | tee ~/log $TMPDIR/b", { HOME: "/tmp/h", TMPDIR: "/tmp/t" }), ["~/log", "$TMPDIR/b"], "tee operands aren't expanded");
 });
