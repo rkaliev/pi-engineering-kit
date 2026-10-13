@@ -755,3 +755,90 @@ test("one trailing 2>&1 does not stop the own-branch push from passing; other re
 	assert.equal(ask("git push -u origin feat/x >/dev/null 2>&1", repo), "confirm");
 	assert.equal(ask("git push -u origin feat/x 2>&1 | tail", repo), "confirm");
 });
+
+test("guard: /dev/null isn't a delete target", () => {
+	for (const command of ["rm -rf build 2>/dev/null", "rm -rf build >/dev/null 2>&1", "rm -rf build &>/dev/null", "git rm -rq x 2>/dev/null"]) {
+		assert.equal(action(command), "allow", command);
+	}
+	for (const command of ["rm -rf ~/x 2>/dev/null", "rm -rf ../x >/dev/null", "rm -rf /etc 2>&1"]) {
+		assert.equal(action(command), "block", command);
+	}
+});
+
+test("guard: a command that only writes a file through a quoted heredoc is judged by its first line", () => {
+	const risky = ["rm -r ~/x", "git push --force origin main", "npm publish"];
+	const writes = [
+		["cat > a.py <<'EOF'", "EOF"],
+		['cat >> notes.md <<"EOF"', "EOF"],
+		["cat <<'EOF' > s.sh", "EOF"],
+		["tee -a log.txt <<'EOF'", "EOF"],
+		["cat > a <<-'EOF'", "\tEOF"],
+	];
+	for (const body of risky) {
+		for (const [head, end] of writes) assert.equal(action(`${head}\n${body}\n${end}`), "allow", `${head} / ${body}`);
+	}
+	assert.equal(action("cat > a.py <<'EOF'\nrm -r ~/x\nEOF\n"), "allow", "a trailing newline after the delimiter");
+	assert.equal(action("cat > a.py <<'EOF'\nEOF \nrm -r ~/x\nEOF"), "allow", "a body line with trailing spaces isn't the delimiter");
+	assert.equal(action("cat>a.py<<'EOF'\nrm -r ~/x\nEOF"), "block", "without spaces it is judged as before");
+});
+
+test("guard: every other heredoc and <<-like shape is judged as before", () => {
+	const del = "rm -rf ~/x";
+	const before = [
+		`cat > a.py <<EOF\n${del}\nEOF`,
+		`cat > $HOME/a.py <<'EOF'\n${del}\nEOF`,
+		`cat > "a b.py" <<'EOF'\n${del}\nEOF`,
+		`cat > a.py <<'EOF' | bash\n${del}\nEOF`,
+		`cat > a.py <<'EOF'; ls\n${del}\nEOF`,
+		`cat > s.sh <<'EOF'\necho hi\nEOF\nbash s.sh; ${del}`,
+		`cat > a.py <<'EOF'\nx\nEOF\n${del}\nEOF`,
+		`cat > a.py <<'EOF'\n${del}`,
+		`python3 - <<'EOF'\n${del}\nEOF`,
+		`bash <<'EOF'\n${del}\nEOF`,
+		`out=$(ssh h <<'EOF'\n${del}\nEOF\n)`,
+		`cat <<'EOF' | bash\n${del}\nEOF`,
+		`cat <<< x\n${del}`,
+		`echo $((1<<4))\n${del}`,
+		`# write it with cat <<EOF later\n${del}`,
+	];
+	for (const command of before) assert.equal(action(command), "block", command);
+	assert.equal(action("psql \"$DATABASE_URL\" <<'SQL'\nDROP TABLE payments;\nSQL"), "confirm", "a DROP sent to a database client still asks");
+});
+
+test("guard: a file write's first line still counts", () => {
+	assert.equal(action("cat > .env <<'EOF'\nKEY=1\nEOF"), "confirm", "writing a secret file asks");
+	assert.equal(action("cat > ../x <<'EOF'\nhi\nEOF"), action("cat > ../x"), "as for the line alone");
+});
+
+test("guard: a heredoc file write is judged by its target as a Write would be", () => {
+	const write = (target: string, body = "echo hi") => `cat > ${target} <<'EOF'\n${body}\nEOF`;
+	assert.equal(action(write(".git/hooks/pre-commit")), "block", "git internals");
+	assert.equal(action(write(".git/hooks/pre-commit", "rm -rf ~/x")), "block", "git internals with a delete");
+	assert.equal(action(write(".github/workflows/x.yml", "      - run: echo hi")), "confirm", "a CI pipeline asks");
+	assert.equal(action(write(".pi/guard.json", "{}")), "confirm", "the guard config asks");
+	assert.equal(action(write("migrations/001.sql", "SELECT 1;"), { protectedPaths: ["migrations/"] }), "block", "a protected path");
+	assert.equal(action(write("src/a.ts", "rm -rf ~/x")), "allow", "an ordinary project file");
+	assert.equal(checkCommand(write("../a.sh", "rm -rf ~/x"), cwd, none, `${cwd}/sub`).action, "allow", "relative to where it runs");
+});
+
+test("guard: a heredoc file write outside the project is judged whole", () => {
+	for (const target of ["~/.zshrc", "../x.sh", "/etc/profile.d/x.sh", "a/../../x.sh"]) {
+		assert.equal(action(`cat >> ${target} <<'EOF'\nrm -rf ~/x\nEOF`), "block", target);
+	}
+	assert.equal(checkCommand("cat > ../../a.sh <<'EOF'\nrm -rf ~/x\nEOF", cwd, none, `${cwd}/sub`).action, "block", "from a subfolder");
+});
+
+test("guard: a heredoc file write with a carriage return or a control character is judged whole", () => {
+	for (const command of [
+		"cat > a <<'EOF'\nx\nEOF\r\nrm -rf ~/x\nEOF",
+		"cat > a <<'EOF'\nx\nEOF\0\nrm -rf ~/x\nEOF",
+		"cat > a <<'EOF'\nrm -rf ~/x\r\nEOF",
+	]) {
+		assert.equal(action(command), "block", JSON.stringify(command));
+	}
+});
+
+test("guard: a file write chained or followed by a run is judged whole", () => {
+	assert.equal(action("cat > a.py <<'EOF' && ls\nrm -rf ~/x\nEOF"), "block", "&& on the first line");
+	assert.equal(action("cat > s.sh <<'EOF'\nrm -rf ~/x\nEOF\nbash s.sh"), "block", "the body run after the delimiter");
+});
