@@ -2,7 +2,7 @@
 
 ## 0.25.3
 
-- **Outside git, a shell write outside the project no longer counts as an edit.** Where the verify gate reads a command's write targets from its text (outside git, past 5,000 files, or once git timed out), `~` and `$NAME`/`${NAME}` are now expanded from plain assignments in the same command (`S=…`, `export S=…`) and from the environment, so `> ~/notes.txt`, `> $TMPDIR/log` or `S=/tmp/x && … > $S/t-$e.log` no longer leave the workspace unverified. A part that stays unknown (another variable, `$(…)`) is read as written, so a write that may land in the project still counts.
+- **Outside git, a shell write outside the project no longer counts as an edit.** Where the verify gate reads a command's write targets from its text (outside git, past 5,000 files, or once git timed out), a bash target now has `~`, `$HOME`, `$TMPDIR`, `$TMP`, `$TEMP` and the variables the command assigns a single value (`S=…`, `export S=…`) expanded, so `> ~/notes.txt`, `> $TMPDIR/log` or `S=/tmp/x && … > $S/t-$e.log` no longer leave the workspace unverified. A write the text can't place still counts: another variable (the shell's own `$_`, `$PWD`, `$OLDPWD`, or one assigned two values), `$(…)`, an unknown part after a folder that holds the project or lies in it (by its real path too), a quoted `'$…'` or `"~"`, a path rooted differently from the project (`/c/…` from Git Bash), and every PowerShell target.
 
 ## 0.25.2
 
