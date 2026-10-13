@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.3
+
+- **Outside git, a shell write outside the project no longer counts as an edit.** Where the verify gate reads a command's write targets from its text (outside git, past 5,000 files, or once git timed out), `~` and `$NAME`/`${NAME}` are now expanded from plain assignments in the same command (`S=…`, `export S=…`) and from the environment, so `> ~/notes.txt`, `> $TMPDIR/log` or `S=/tmp/x && … > $S/t-$e.log` no longer leave the workspace unverified. A part that stays unknown (another variable, `$(…)`) is read as written, so a write that may land in the project still counts.
+
 ## 0.25.2
 
 - **Two harmless shapes no longer trip the guard.** A recursive `rm` silenced with `2>/dev/null` (or `>/dev/null`, `&>/dev/null`) no longer counts `/dev/null` as a path outside the project, so `rm -rf build 2>/dev/null` and `git rm -rq x 2>/dev/null` pass while `rm -rf ~/x 2>/dev/null` stays blocked. A command that, as a whole, only writes a file through a quoted heredoc (`cat > file <<'EOF'`, `cat >> file`, `tee [-a] file`, then the body and the delimiter as the last line) into a file inside the project is judged by its first line, so writing a script that mentions `rm -r`, `git push --force` or `npm publish` is no longer refused or asked. Its target is judged as a Write to it would be: a write into `.git/` (such as `.git/hooks`) is blocked, and a CI pipeline, the guard config or a secret file asks. A write anywhere else, such as a shell startup file, and every other heredoc and command are judged exactly as before. Your own guard.json patterns still match the whole command.
