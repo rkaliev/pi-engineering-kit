@@ -64,8 +64,11 @@ export function isSecretPath(path: string): boolean {
 
 /** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
 export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
-	// A command that only writes a file through a quoted heredoc runs nothing from its body: judge its first line.
-	const text = fileWriteHeredoc(command) ?? command;
+	// A command that only writes a project file through a quoted heredoc runs nothing from its body: judge its first
+	// line, and its target as a Write would be. A target outside the project (a shell rc file) leaves it judged whole.
+	const write = fileWriteHeredoc(command);
+	const target = write && !isOutside(write.target.startsWith("~") ? write.target : resolve(dir, write.target), cwd) ? resolve(dir, write.target) : undefined;
+	const text = target ? write!.head : command;
 	const segments = splitSegments(tokenize(text));
 
 	for (const segment of segments) {
@@ -77,6 +80,8 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in .pi/guard.json.` };
 		}
 	}
+	const written = target ? checkPath("write", target, cwd, config) : ALLOW;
+	if (written.action !== "allow") return written;
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
 	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env);
@@ -131,8 +136,8 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	return ALLOW;
 }
 
-const WRITE_PATH = String.raw`[A-Za-z0-9_./~@+-]+`;
-const QUOTED_DELIMITER = String.raw`<<(-?)(['"])([\w.-]+)\2`;
+const WRITE_PATH = String.raw`(?<target>[A-Za-z0-9_./~@+-]+)`;
+const QUOTED_DELIMITER = String.raw`<<(?<tabs>-?)(?<quote>['"])(?<word>[\w.-]+)\k<quote>`;
 /** `cat > f`, `cat >> f`, `tee [-a] f` with a quoted heredoc delimiter, and nothing else on the line. */
 const FILE_WRITE_HEADS = [
 	new RegExp(String.raw`^cat[ \t]+>>?[ \t]*${WRITE_PATH}[ \t]+${QUOTED_DELIMITER}[ \t]*$`),
@@ -143,16 +148,18 @@ const FILE_WRITE_HEADS = [
 /**
  * The first line of a command that, as a whole, only writes a file through a quoted heredoc: the head above, the body,
  * and the delimiter as the last line, appearing nowhere earlier. Anything else (an unquoted delimiter, a `$` in the
- * path, a second command on any line, a missing delimiter) returns undefined, and the command is judged whole.
+ * path, a second command on any line, a missing delimiter) returns undefined, and the command is judged whole. So does
+ * a carriage return or another control character: some shells (Cygwin's `igncr`) end a heredoc where this wouldn't.
  */
-export function fileWriteHeredoc(command: string): string | undefined {
+function fileWriteHeredoc(command: string): { head: string; target: string } | undefined {
+	if (/[\0-\x08\x0b-\x1f\x7f]/.test(command)) return undefined;
 	const lines = command.split("\n");
 	if (lines.length > 2 && lines[lines.length - 1] === "") lines.pop();
 	const head = FILE_WRITE_HEADS.map((re) => re.exec(lines[0]!)).find(Boolean);
 	if (!head || lines.length < 2) return undefined;
-	const [, tabs, , word] = head;
+	const { target, tabs, word } = head.groups!;
 	const end = lines.findIndex((line, i) => i > 0 && (tabs === "-" ? line.replace(/^\t+/, "") : line) === word);
-	return end === lines.length - 1 ? lines[0] : undefined;
+	return end === lines.length - 1 ? { head: lines[0]!, target: target! } : undefined;
 }
 
 function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined {

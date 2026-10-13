@@ -809,3 +809,36 @@ test("guard: a file write's first line still counts", () => {
 	assert.equal(action("cat > .env <<'EOF'\nKEY=1\nEOF"), "confirm", "writing a secret file asks");
 	assert.equal(action("cat > ../x <<'EOF'\nhi\nEOF"), action("cat > ../x"), "as for the line alone");
 });
+
+test("guard: a heredoc file write is judged by its target as a Write would be", () => {
+	const write = (target: string, body = "echo hi") => `cat > ${target} <<'EOF'\n${body}\nEOF`;
+	assert.equal(action(write(".git/hooks/pre-commit")), "block", "git internals");
+	assert.equal(action(write(".git/hooks/pre-commit", "rm -rf ~/x")), "block", "git internals with a delete");
+	assert.equal(action(write(".github/workflows/x.yml", "      - run: echo hi")), "confirm", "a CI pipeline asks");
+	assert.equal(action(write(".pi/guard.json", "{}")), "confirm", "the guard config asks");
+	assert.equal(action(write("migrations/001.sql", "SELECT 1;"), { protectedPaths: ["migrations/"] }), "block", "a protected path");
+	assert.equal(action(write("src/a.ts", "rm -rf ~/x")), "allow", "an ordinary project file");
+	assert.equal(checkCommand(write("../a.sh", "rm -rf ~/x"), cwd, none, `${cwd}/sub`).action, "allow", "relative to where it runs");
+});
+
+test("guard: a heredoc file write outside the project is judged whole", () => {
+	for (const target of ["~/.zshrc", "../x.sh", "/etc/profile.d/x.sh", "a/../../x.sh"]) {
+		assert.equal(action(`cat >> ${target} <<'EOF'\nrm -rf ~/x\nEOF`), "block", target);
+	}
+	assert.equal(checkCommand("cat > ../../a.sh <<'EOF'\nrm -rf ~/x\nEOF", cwd, none, `${cwd}/sub`).action, "block", "from a subfolder");
+});
+
+test("guard: a heredoc file write with a carriage return or a control character is judged whole", () => {
+	for (const command of [
+		"cat > a <<'EOF'\nx\nEOF\r\nrm -rf ~/x\nEOF",
+		"cat > a <<'EOF'\nx\nEOF\0\nrm -rf ~/x\nEOF",
+		"cat > a <<'EOF'\nrm -rf ~/x\r\nEOF",
+	]) {
+		assert.equal(action(command), "block", JSON.stringify(command));
+	}
+});
+
+test("guard: a file write chained or followed by a run is judged whole", () => {
+	assert.equal(action("cat > a.py <<'EOF' && ls\nrm -rf ~/x\nEOF"), "block", "&& on the first line");
+	assert.equal(action("cat > s.sh <<'EOF'\nrm -rf ~/x\nEOF\nbash s.sh"), "block", "the body run after the delimiter");
+});
