@@ -194,6 +194,18 @@ test("shellWriteTargets: only a plain word with names bound once is expanded", (
 	for (const command of ["OUT=/tmp/logs; . ./env.sh; echo x > $OUT/gen.ts", "OUT=/tmp/logs; source env.sh; echo x > $OUT/gen.ts", 'OUT=/tmp/logs; eval "$c"; echo x > $OUT/gen.ts']) {
 		assert.deepEqual(targets(command), ["$OUT/gen.ts"], command);
 	}
+	for (const command of [
+		"OUT=/tmp/logs; if [ -f .env ]; then . ./.env; fi; echo x > $OUT/gen.ts",
+		"OUT=/tmp/logs; { source env.sh; }; echo x > $OUT/gen.ts",
+		"OUT=/tmp/logs; (. ./env.sh); echo x > $OUT/gen.ts",
+		"OUT=/tmp/logs; builtin source env.sh; echo x > $OUT/gen.ts",
+		"OUT=/tmp/logs; export $(grep -v '^#' .env | xargs); echo x > $OUT/gen.ts",
+		"OUT=/tmp/logs; (cd src && make); echo x > $OUT/gen.ts",
+	]) {
+		assert.deepEqual(targets(command), ["$OUT/gen.ts"], command);
+	}
+	assert.deepEqual(targets('[ -n "$CI" ] && OUT=/tmp/build; npm test > $OUT.log'), ["$OUT.log"], "an empty value would land here");
+	assert.deepEqual(targets("P=/tmp/p; echo x > ${P}out.log"), ["${P}out.log"], "a name not followed by /");
 	assert.deepEqual(targets(". ./ci-env.sh && npm test > $TMPDIR/test.log", { TMPDIR: "/tmp/t" }), ["$TMPDIR/test.log"], "a sourced file may set the environment");
 	assert.deepEqual(targets('[ -n "$CI" ] && BUILD_DIR=/tmp/ci; make > $BUILD_DIR/build.log', { BUILD_DIR: "build" }), ["$BUILD_DIR/build.log"], "the environment has another value");
 	assert.deepEqual(targets("BUILD_DIR=/tmp/ci; make > $BUILD_DIR/build.log", { BUILD_DIR: "/tmp/ci" }), [], "the same value as the environment's");

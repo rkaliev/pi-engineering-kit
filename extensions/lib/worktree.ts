@@ -117,7 +117,7 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that neither
 	// moves nor runs code the text doesn't show (a sourced file or `eval` may bind any name).
 	const found: Array<[string, boolean]> = [];
-	const moves = segments.some((seg) => seg.some((t) => t === "cd" || t === "pushd" || t === "popd") || [".", "source", "eval"].includes(seg[0]!));
+	const moves = segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
 	// Operators are found where quotes are blanked out; the target is read from the same place in the real text.
 	for (const m of blankQuoted(text).matchAll(/(&>>?|\d*>[>|&]?)[ \t]*/g)) {
 		const rest = text.slice(m.index + m[0].length);
@@ -138,6 +138,15 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 		.filter((rel) => rel !== "" && !rel.startsWith("..") && !isAbsolute(rel))
 		.map((rel) => rel.replaceAll("\\", "/"));
 	return [...new Set(inside)];
+}
+
+/**
+ * A word after which the text no longer shows where the shell is or what its names hold, wherever it stands: a move,
+ * a sourced file, `eval`, or a declaration of anything but plain `NAME=v` words (`export $(…)`, `local X`).
+ */
+function hidesBinding(word: string, rest: string[]): boolean {
+	if (["cd", "pushd", "popd", "source", ".", "eval"].includes(word)) return true;
+	return ["export", "declare", "typeset", "local", "readonly"].includes(word) && !rest.every((w) => /^[A-Za-z_]\w*=/.test(w));
 }
 
 const NAME_REF = String.raw`\$(?:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})`;
@@ -189,7 +198,9 @@ function placed(target: string, vars: Map<string, string>, cwd: string, projectD
 	const home = vars.get("HOME");
 	const known = (home === undefined ? target : target.replace(/^~(?=\/|$)/, home)).replace(
 		/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g,
-		(whole, braced?: string, bare?: string) => vars.get(braced ?? bare!) ?? whole,
+		// Only before `/` or the end: a name the assignment didn't set is empty, and `$OUT.log` would then be `.log` here.
+		(whole, braced: string | undefined, bare: string | undefined, at: number, word: string) =>
+			/^(\/|$)/.test(word.slice(at + whole.length)) ? (vars.get(braced ?? bare!) ?? whole) : whole,
 	);
 	if (known === target) return target;
 	const cut = known.search(/[$`]/);
