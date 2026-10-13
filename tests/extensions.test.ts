@@ -270,6 +270,20 @@ test("verify: outside git the command's text decides", async () => {
 	assert.equal(sent.length, 1);
 });
 
+test("verify: outside git, $HOME is the shell's in bash and PowerShell's own variable in powershell", async () => {
+	const dir = project(COMMANDS);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "bash", input: { command: "echo x > $HOME/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "a write into the home folder");
+	await emit("tool_result", { toolName: "powershell", input: { command: "echo x > $HOME/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "a write the hook can't place");
+});
+
 test("verify: without commands the user gets one notice and the agent no follow-up", async () => {
 	const dir = project({});
 	const { pi, emit, sent } = fakePi();

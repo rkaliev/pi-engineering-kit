@@ -78,7 +78,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
 	 * its siblings' writes aren't its own.
 	 */
-	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean }): string[] => {
+	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): string[] => {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
 		const why: { slow?: boolean } = {};
@@ -89,7 +89,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const before = own ?? tree;
 		let paths: string[] = [];
 		if (now && before) paths = changedPaths(before, now, cwd, ignore);
-		else if (after) paths = shellWriteTargets(after.command, cwd, cwd).filter((p) => !isIgnored(p, ignore));
+		else if (after) paths = shellWriteTargets(after.command, cwd, cwd, process.env, after.powershell).filter((p) => !isIgnored(p, ignore));
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
 		const counts = after ? !(after.exempt && own) : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];
@@ -192,7 +192,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			const ran = commands.filter((c) => commandMatches(shell, c));
 			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
 			// passed and did nothing else keeps its own changes off the count.
-			const marked = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands) });
+			const marked = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands), powershell: event.toolName === "powershell" });
 			// A call that changed files proves nothing about them, whatever checks it also ran.
 			if (!unverified || marked.length > 0) return undefined;
 			if (ran.length === 0) return undefined;
