@@ -168,7 +168,7 @@ test("shellWriteTargets: a write the hook can't place still counts as written", 
 	assert.deepEqual(targets("echo x > '$HOME/n'", { HOME: "/tmp/h" }), ["$HOME/n"], "single quotes keep $ literal");
 	assert.deepEqual(targets('echo x > "~/n"', { HOME: "/tmp/h" }), ["~/n"], "quotes keep ~ literal");
 	assert.deepEqual(targets("echo x > $constructor/a.ts"), ["$constructor/a.ts"], "names aren't looked up on the object prototype");
-	assert.deepEqual(targets("echo x > ~/n"), [], "~ falls back to the user's home folder");
+	assert.deepEqual(targets("echo x > ~/n"), ["~/n"], "without HOME, ~ is unknown");
 	const link = join(parent, "link");
 	symlinkSync(project, link);
 	assert.deepEqual(targets(`P=${project}; echo x > $P/src/a.ts`, {}, false, link), ["$P/src/a.ts"], "the project's real path");
@@ -191,5 +191,11 @@ test("shellWriteTargets: only a plain word with names bound once is expanded", (
 	assert.deepEqual(targets(`P=${project}; echo x > $P"/src/a.ts"`).length, 1, "a quote later in the word");
 	assert.deepEqual(targets("echo x > ~/My\\ Projects/app/src/a.ts", { HOME: parent }).length, 1, "an escaped space");
 	assert.deepEqual(targets("echo x > $HOME/*.log", { HOME: "/tmp/h" }), ["$HOME/*.log"], "a glob");
+	for (const command of ["OUT=/tmp/logs; . ./env.sh; echo x > $OUT/gen.ts", "OUT=/tmp/logs; source env.sh; echo x > $OUT/gen.ts", 'OUT=/tmp/logs; eval "$c"; echo x > $OUT/gen.ts']) {
+		assert.deepEqual(targets(command), ["$OUT/gen.ts"], command);
+	}
+	assert.deepEqual(targets(". ./ci-env.sh && npm test > $TMPDIR/test.log", { TMPDIR: "/tmp/t" }), ["$TMPDIR/test.log"], "a sourced file may set the environment");
+	assert.deepEqual(targets('[ -n "$CI" ] && BUILD_DIR=/tmp/ci; make > $BUILD_DIR/build.log', { BUILD_DIR: "build" }), ["$BUILD_DIR/build.log"], "the environment has another value");
+	assert.deepEqual(targets("BUILD_DIR=/tmp/ci; make > $BUILD_DIR/build.log", { BUILD_DIR: "/tmp/ci" }), [], "the same value as the environment's");
 	assert.deepEqual(targets("echo x | tee ~/log $TMPDIR/b", { HOME: "/tmp/h", TMPDIR: "/tmp/t" }), ["~/log", "$TMPDIR/b"], "tee operands aren't expanded");
 });

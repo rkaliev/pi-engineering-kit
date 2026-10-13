@@ -4,7 +4,6 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored } from "./commands.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -115,9 +114,10 @@ function identity(file: string): string {
 export function shellWriteTargets(command: string, cwd: string, projectDir: string, env: NodeJS.ProcessEnv = process.env, powershell = false): string[] {
 	const text = heredocs(command).text;
 	const segments = splitSegments(tokenize(text));
-	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that doesn't move.
+	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that neither
+	// moves nor runs code the text doesn't show (a sourced file or `eval` may bind any name).
 	const found: Array<[string, boolean]> = [];
-	const moves = segments.some((seg) => seg.some((t) => t === "cd" || t === "pushd" || t === "popd"));
+	const moves = segments.some((seg) => seg.some((t) => t === "cd" || t === "pushd" || t === "popd") || [".", "source", "eval"].includes(seg[0]!));
 	// Operators are found where quotes are blanked out; the target is read from the same place in the real text.
 	for (const m of blankQuoted(text).matchAll(/(&>>?|\d*>[>|&]?)[ \t]*/g)) {
 		const rest = text.slice(m.index + m[0].length);
@@ -149,8 +149,9 @@ const ENV_NAMES = ["HOME", "TMPDIR", "TMP", "TEMP"];
 
 /**
  * Variables with one known value. A name the command writes bare anywhere but in a plain assignment (`for d`,
- * `read X`, `then X=…`, `local X=…`) is unknown; so is one assigned two values. `ENV_NAMES` keep the environment's
- * value (HOME the user's home folder) unless the command names them bare at all. A plain assignment is a segment of
+ * `read X`, `then X=…`, `local X=…`) is unknown; so is one assigned two values, or a value other than the environment's
+ * (where the assignment doesn't run, that one does). `ENV_NAMES` keep the environment's value unless the command names
+ * them bare at all; without HOME, `~` is unknown. A plain assignment is a segment of
  * `NAME=v` words, optionally after `export`; `NAME=v cmd` isn't one.
  */
 function knownVars(text: string, segments: string[][], env: NodeJS.ProcessEnv): Map<string, string> {
@@ -168,11 +169,12 @@ function knownVars(text: string, segments: string[][], env: NodeJS.ProcessEnv): 
 	const bare = (name: string) => text.match(new RegExp(String.raw`(?<![\w$])(?<!\$\{)${name}(?!\w)`, "g"))?.length ?? 0;
 	const vars = new Map<string, string>();
 	for (const name of ENV_NAMES) {
-		const value = name === "HOME" ? env.HOME || homedir() : env[name];
+		const value = env[name];
 		if (value && bare(name) === 0) vars.set(name, value);
 	}
 	for (const [name, values] of assigned) {
-		if (values.size === 1 && bare(name) === count.get(name) && !ENV_NAMES.includes(name)) vars.set(name, [...values][0]!);
+		const [value] = [...values];
+		if (values.size === 1 && bare(name) === count.get(name) && !ENV_NAMES.includes(name) && (env[name] ?? value) === value) vars.set(name, value!);
 	}
 	return vars;
 }
