@@ -120,3 +120,26 @@ test("shellWriteTargets: files a command writes inside the project", () => {
 		assert.deepEqual(targets(none), [], none);
 	}
 });
+
+test("shellWriteTargets: home, environment and assigned variables are expanded", () => {
+	const project = mkdtempSync(join(tmpdir(), "no-git-"));
+	const env = { HOME: mkdtempSync(join(tmpdir(), "home-")), TMPDIR: "/tmp/t" };
+	const targets = (command: string) => shellWriteTargets(command, project, project, env);
+	for (const none of ["echo x > ~/notes.txt", "echo x > ~", "echo x > $HOME/n", "echo x > ${HOME}/n", "echo x > $TMPDIR/n"]) {
+		assert.deepEqual(targets(none), [], none);
+	}
+	assert.deepEqual(targets("OUT=src && echo x > $OUT/a.ts"), ["src/a.ts"]);
+	assert.deepEqual(targets("export OUT=src; echo x > ${OUT}/a.ts"), ["src/a.ts"]);
+	assert.deepEqual(targets(`P=${project}; echo x > $P/src/a.ts`), ["src/a.ts"], "a value inside the project still counts");
+	assert.deepEqual(targets("OUT=/tmp/x echo y > $OUT/a.ts"), ["$OUT/a.ts"], "a prefix assignment isn't expanded for its own command");
+});
+
+test("shellWriteTargets: a target that can't be expanded is judged by its literal start", () => {
+	const project = mkdtempSync(join(tmpdir(), "no-git-"));
+	const targets = (command: string) => shellWriteTargets(command, project, project, {});
+	assert.deepEqual(targets("S=/tmp/x && for e in a b; do npm test > $S/t-$e.log 2>&1; done"), []);
+	assert.deepEqual(targets("echo x > $UNKNOWN/a.ts"), ["$UNKNOWN/a.ts"]);
+	assert.deepEqual(targets("echo x > src/$name.ts"), ["src/$name.ts"]);
+	assert.deepEqual(targets('echo x > "$(mktemp)"'), ["$(mktemp)"]);
+	assert.deepEqual(targets(`echo x > ${project}/src/$name.ts`), ["src/$name.ts"], "an unknown part inside the project counts");
+});
