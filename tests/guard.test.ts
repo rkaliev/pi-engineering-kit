@@ -793,7 +793,6 @@ test("guard: every other heredoc and <<-like shape is judged as before", () => {
 		`cat > s.sh <<'EOF'\necho hi\nEOF\nbash s.sh; ${del}`,
 		`cat > a.py <<'EOF'\nx\nEOF\n${del}\nEOF`,
 		`cat > a.py <<'EOF'\n${del}`,
-		`python3 - <<'EOF'\n${del}\nEOF`,
 		`bash <<'EOF'\n${del}\nEOF`,
 		`out=$(ssh h <<'EOF'\n${del}\nEOF\n)`,
 		`cat <<'EOF' | bash\n${del}\nEOF`,
@@ -841,4 +840,53 @@ test("guard: a heredoc file write with a carriage return or a control character 
 test("guard: a file write chained or followed by a run is judged whole", () => {
 	assert.equal(action("cat > a.py <<'EOF' && ls\nrm -rf ~/x\nEOF"), "block", "&& on the first line");
 	assert.equal(action("cat > s.sh <<'EOF'\nrm -rf ~/x\nEOF\nbash s.sh"), "block", "the body run after the delimiter");
+});
+
+test("guard: an interpreter heredoc's body isn't read as shell for the block rules", () => {
+	for (const command of [
+		"python3 - <<'EOF'\n# old: rm -rf ~/cache\nprint(1)\nEOF",
+		"python3 - <<'EOF'\ns = '''Don't run rm -r ~/x here'''\nprint(s)\nEOF",
+		"node - <<'EOF'\n// rm -rf ../shared later\nconsole.log(1)\nEOF",
+		"python <<'EOF'\nrm -rf ~/x\nEOF",
+		"node <<'EOF'\n// git commit --no-verify later\nEOF",
+		"python3 - <<'EOF'\nrm -rf ~/x\nEOF",
+		"python3 - <<-'EOF'\n\t# rm -rf ~/x\n\tEOF",
+		"python3 - <<'EOF'\n# rm -rf ~/x\nEOF\n",
+	]) {
+		assert.equal(action(command), "allow", command);
+	}
+});
+
+test("guard: an interpreter heredoc still asks about what its code may do", () => {
+	assert.equal(action("python3 - <<'EOF'\ncur.execute(\"DROP TABLE payments\")\nEOF"), "confirm");
+	assert.equal(action("python3 - <<'EOF'\nimport subprocess\nsubprocess.run('npm publish', shell=True)\nEOF"), "confirm");
+	assert.equal(action("python3 - <<'EOF'\nprint(\"git push --force origin main\")\nEOF"), "confirm");
+	assert.equal(action("python3 - <<'EOF'\n# git push --force origin main\nEOF"), "confirm", "a push the block rule no longer reads still asks");
+	assert.equal(action("node - <<'EOF'\n// rm -rf ~/x\nEOF", { confirm: ["rm -rf"] }), "confirm", "a user confirm rule reads the body");
+	assert.equal(action("node - <<'EOF'\n// rm -rf ~/x\nEOF", { block: ["rm -rf"] }), "block", "a user block rule reads the body");
+});
+
+test("guard: other interpreter forms are judged as before", () => {
+	const del = "rm -rf ~/x";
+	for (const command of [
+		`bash <<'EOF'\n${del}\nEOF`,
+		`sh <<'EOF'\n${del}\nEOF`,
+		`python3 <<EOF\n${del}\nEOF`,
+		`python3 - x <<'EOF'\n${del}\nEOF`,
+		`python3 -c <<'EOF'\n${del}\nEOF`,
+		`python3 - <<-'EOF'\n\tEOF\n${del}\nEOF`,
+		`cat > a <<-'EOF'\n\tEOF\n${del}\nEOF`,
+		"node - <<'EOF'\nexecSync(`git commit --no-verify -m wip`)\nEOF",
+		"node - <<'EOF'\nexecSync(`cd /tmp && rm -rf ~/old-cache`)\nEOF",
+		`python3 - <<'EOF' | sh\n${del}\nEOF`,
+		`python3 - <<'EOF'\nprint(1)\nEOF\n${del}`,
+		`python3 - <<'EOF'\nx\nEOF\n${del}\nEOF`,
+		`node --input-type=module - <<'EOF'\n${del}\nEOF`,
+		`node --input-type=module <<'EOF'\n${del}\nEOF`,
+		`python3 -i <<'EOF'\n${del}\nEOF`,
+		`python3 - <<'EOF'\nx\nEOF\r\n${del}\nEOF`,
+		`sudo python3 - <<'EOF'\n${del}\nEOF`,
+	]) {
+		assert.equal(action(command), "block", JSON.stringify(command));
+	}
 });
