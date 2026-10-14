@@ -73,8 +73,10 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	const segments = splitSegments(tokenize(text));
 
 	// An interpreter heredoc's body is code, not shell: the block rules, which read shell words, read its first line;
-	// every ask below still reads the whole command.
-	for (const segment of heredoc && write === undefined ? splitSegments(tokenize(heredoc.head)) : segments) {
+	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
+	// `execSync`), so a body with one is read whole, as before.
+	const code = heredoc !== undefined && write === undefined && !command.includes("`");
+	for (const segment of code ? splitSegments(tokenize(heredoc.head)) : segments) {
 		const hard = checkSegment(segment, cwd);
 		if (hard) return hard;
 	}

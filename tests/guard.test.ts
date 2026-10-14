@@ -848,7 +848,8 @@ test("guard: an interpreter heredoc's body isn't read as shell for the block rul
 		"python3 - <<'EOF'\ns = '''Don't run rm -r ~/x here'''\nprint(s)\nEOF",
 		"node - <<'EOF'\n// rm -rf ../shared later\nconsole.log(1)\nEOF",
 		"python <<'EOF'\nrm -rf ~/x\nEOF",
-		'node <<"EOF"\nconst s = "git commit --no-verify";\nEOF',
+		"node <<'EOF'\n// git commit --no-verify later\nEOF",
+		"python3 - <<'EOF'\nrm -rf ~/x\nEOF",
 		"python3 - <<-'EOF'\n\t# rm -rf ~/x\n\tEOF",
 		"python3 - <<'EOF'\n# rm -rf ~/x\nEOF\n",
 	]) {
@@ -860,6 +861,7 @@ test("guard: an interpreter heredoc still asks about what its code may do", () =
 	assert.equal(action("python3 - <<'EOF'\ncur.execute(\"DROP TABLE payments\")\nEOF"), "confirm");
 	assert.equal(action("python3 - <<'EOF'\nimport subprocess\nsubprocess.run('npm publish', shell=True)\nEOF"), "confirm");
 	assert.equal(action("python3 - <<'EOF'\nprint(\"git push --force origin main\")\nEOF"), "confirm");
+	assert.equal(action("python3 - <<'EOF'\n# git push --force origin main\nEOF"), "confirm", "a push the block rule no longer reads still asks");
 	assert.equal(action("node - <<'EOF'\n// rm -rf ~/x\nEOF", { confirm: ["rm -rf"] }), "confirm", "a user confirm rule reads the body");
 	assert.equal(action("node - <<'EOF'\n// rm -rf ~/x\nEOF", { block: ["rm -rf"] }), "block", "a user block rule reads the body");
 });
@@ -871,7 +873,11 @@ test("guard: other interpreter forms are judged as before", () => {
 		`sh <<'EOF'\n${del}\nEOF`,
 		`python3 <<EOF\n${del}\nEOF`,
 		`python3 - x <<'EOF'\n${del}\nEOF`,
-		`python3 -c 'print(1)'\n${del}`,
+		`python3 -c <<'EOF'\n${del}\nEOF`,
+		`python3 - <<-'EOF'\n\tEOF\n${del}\nEOF`,
+		`cat > a <<-'EOF'\n\tEOF\n${del}\nEOF`,
+		"node - <<'EOF'\nexecSync(`git commit --no-verify -m wip`)\nEOF",
+		"node - <<'EOF'\nexecSync(`cd /tmp && rm -rf ~/old-cache`)\nEOF",
 		`python3 - <<'EOF' | sh\n${del}\nEOF`,
 		`python3 - <<'EOF'\nprint(1)\nEOF\n${del}`,
 		`python3 - <<'EOF'\nx\nEOF\n${del}\nEOF`,
