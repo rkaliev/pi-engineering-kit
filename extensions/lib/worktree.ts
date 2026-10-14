@@ -3,11 +3,11 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored } from "./commands.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, heredocs, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -108,26 +108,133 @@ function identity(file: string): string {
 /**
  * The project-relative files a command writes, read from its text: targets of `>`, `>>`, `>|`, `&>` and `&>>`
  * (not `/dev/null` or an fd), `tee` operands and the file of `sed -i`. Heredoc bodies and quoted text are not
- * commands. Only for when the working tree can't be compared: a script in another language is not seen.
+ * commands. A plain redirection target has `~` and known variables expanded where that places the write (see `placed`). Only for when the working tree can't be compared: a script
+ * in another language is not seen.
  */
-export function shellWriteTargets(command: string, cwd: string, projectDir: string): string[] {
+export function shellWriteTargets(command: string, cwd: string, projectDir: string, env: NodeJS.ProcessEnv = process.env, powershell = false): string[] {
 	const text = heredocs(command).text;
-	const found: string[] = [];
+	const segments = splitSegments(tokenize(text));
+	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that neither
+	// moves nor runs code the text doesn't show (a sourced file or `eval` may bind any name).
+	const found: Array<[string, boolean]> = [];
+	const moves = segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
 	// Operators are found where quotes are blanked out; the target is read from the same place in the real text.
 	for (const m of blankQuoted(text).matchAll(/(&>>?|\d*>[>|&]?)[ \t]*/g)) {
-		const target = /^("[^"]*"|'[^']*'|[^\s;&|()<>]+)/.exec(text.slice(m.index + m[0].length))?.[1]?.replace(/^(["'])(.*)\1$/, "$2");
+		const rest = text.slice(m.index + m[0].length);
+		const target = /^("[^"]*"|'[^']*'|[^\s;&|()<>]+)/.exec(rest)?.[1]?.replace(/^(["'])(.*)\1$/, "$2");
 		if (!target || target === "/dev/null" || (m[1]!.endsWith("&") && /^(\d+|-)$/.test(target))) continue;
-		found.push(target);
+		const word = /^[^\s;&|()<>]*/.exec(rest)![0];
+		found.push([target, !powershell && !moves && PLAIN_WORD.test(word)]);
 	}
-	for (const seg of splitSegments(tokenize(text))) {
-		if (seg[0] === "tee") found.push(...seg.slice(1).filter((t) => !t.startsWith("-")));
-		if (seg[0] === "sed" && seg.some((t) => /^-i|^--in-place/.test(t)) && seg.length > 2) found.push(seg[seg.length - 1]!);
+	for (const seg of segments) {
+		if (seg[0] === "tee") found.push(...seg.slice(1).filter((t) => !t.startsWith("-")).map((t): [string, boolean] => [t, false]));
+		if (seg[0] === "sed" && seg.some((t) => /^-i|^--in-place/.test(t)) && seg.length > 2) found.push([seg[seg.length - 1]!, false]);
 	}
+	const vars = knownVars(text, segments, env);
 	const inside = found
+		.map(([t, plain]) => (plain ? placed(t, vars, cwd, projectDir) : t))
+		.filter((t): t is string => t !== undefined)
 		.map((t) => relative(projectDir, resolve(cwd, t)))
 		.filter((rel) => rel !== "" && !rel.startsWith("..") && !isAbsolute(rel))
 		.map((rel) => rel.replaceAll("\\", "/"));
 	return [...new Set(inside)];
+}
+
+/**
+ * A word after which the text no longer shows where the shell is or what its names hold, wherever it stands: a move,
+ * a sourced file, `eval`, or a declaration of anything but plain `NAME=v` words (`export $(…)`, `local X`).
+ */
+function hidesBinding(word: string, rest: string[]): boolean {
+	if (["cd", "pushd", "popd", "source", ".", "eval"].includes(word)) return true;
+	return ["export", "declare", "typeset", "local", "readonly"].includes(word) && !rest.every((w) => /^[A-Za-z_]\w*=/.test(w));
+}
+
+const NAME_REF = String.raw`\$(?:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})`;
+/** A word the shell expands only as read here: `~` first, then plain path characters and `$NAME`/`${NAME}`. */
+const PLAIN_WORD = new RegExp(String.raw`^(?:~(?=/|$))?(?:[\w./@+,:%=-]|${NAME_REF})+$|^~$`);
+
+/** Environment variables a target may name. The shell sets others itself (`$_`, `$PWD`, `$OLDPWD`), or earlier calls may. */
+const ENV_NAMES = ["HOME", "TMPDIR", "TMP", "TEMP"];
+
+/**
+ * Variables with one known value. A name the command writes bare anywhere but in a plain assignment (`for d`,
+ * `read X`, `then X=…`, `local X=…`) is unknown; so is one assigned two values, or a value other than the environment's
+ * (where the assignment doesn't run, that one does). `ENV_NAMES` keep the environment's value unless the command names
+ * them bare at all; without HOME, `~` is unknown. A plain assignment is a segment of
+ * `NAME=v` words, optionally after `export`; `NAME=v cmd` isn't one.
+ */
+function knownVars(text: string, segments: string[][], env: NodeJS.ProcessEnv): Map<string, string> {
+	const assigned = new Map<string, Set<string>>();
+	const count = new Map<string, number>();
+	for (const seg of segments) {
+		const words = seg[0] === "export" ? seg.slice(1) : seg;
+		if (words.length === 0 || !words.every((w) => /^[A-Za-z_]\w*=/.test(w))) continue;
+		for (const w of words) {
+			const name = w.slice(0, w.indexOf("="));
+			assigned.set(name, (assigned.get(name) ?? new Set()).add(w.slice(w.indexOf("=") + 1)));
+			count.set(name, (count.get(name) ?? 0) + 1);
+		}
+	}
+	const bare = (name: string) => text.match(new RegExp(String.raw`(?<![\w$])(?<!\$\{)${name}(?!\w)`, "g"))?.length ?? 0;
+	const vars = new Map<string, string>();
+	for (const name of ENV_NAMES) {
+		const value = env[name];
+		if (value && bare(name) === 0) vars.set(name, value);
+	}
+	for (const [name, values] of assigned) {
+		const [value] = [...values];
+		if (values.size === 1 && bare(name) === count.get(name) && !ENV_NAMES.includes(name) && (env[name] ?? value) === value) vars.set(name, value!);
+	}
+	return vars;
+}
+
+/**
+ * Where a plain target lands: with `~` and known variables expanded (once: a value's own `$` stays), the expanded
+ * path when it is inside the project; otherwise, unchanged, or with a part still unknown, the target as written,
+ * which counts as before. It is dropped (undefined) only when the expanded path, or the folder written before its
+ * unknown part, is neither inside the project nor above it, by its literal and its real path.
+ */
+function placed(target: string, vars: Map<string, string>, cwd: string, projectDir: string): string | undefined {
+	const home = vars.get("HOME");
+	const known = (home === undefined ? target : target.replace(/^~(?=\/|$)/, home)).replace(
+		/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g,
+		// Only before `/` or the end: a name the assignment didn't set is empty, and `$OUT.log` would then be `.log` here.
+		(whole, braced: string | undefined, bare: string | undefined, at: number, word: string) =>
+			/^(\/|$)/.test(word.slice(at + whole.length)) ? (vars.get(braced ?? bare!) ?? whole) : whole,
+	);
+	if (known === target) return target;
+	const cut = known.search(/[$`]/);
+	const path = cut === -1 ? known : known.slice(0, known.lastIndexOf("/", cut) + 1);
+	// A path rooted another way than the project (`/c/…` from Git Bash for `C:\…`) can't be placed.
+	if (!isAbsolute(path) || DRIVE.test(path) !== DRIVE.test(projectDir)) return within(resolve(projectDir), resolve(cwd, known)) ? known : target;
+	const literal = resolve(cwd, path);
+	const project = resolve(projectDir);
+	if (cut === -1 && within(project, literal)) return known;
+	return apart(literal, project) && apart(realPath(literal), realPath(project)) ? undefined : target;
+}
+
+const DRIVE = /^[A-Za-z]:[\\/]/;
+
+/** Whether `path` is `dir` or inside it. */
+function within(dir: string, path: string): boolean {
+	const rel = relative(dir, path);
+	return !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/** Neither inside the other. */
+function apart(a: string, b: string): boolean {
+	return !within(a, b) && !within(b, a);
+}
+
+/** The real path of the longest part that exists, with the rest appended. */
+function realPath(path: string): string {
+	let head = path;
+	let tail = "";
+	while (!existsSync(head) && dirname(head) !== head) {
+		tail = tail ? join(basename(head), tail) : basename(head);
+		head = dirname(head);
+	}
+	return tail ? join(safeRealpath(head), tail) : safeRealpath(head);
 }
 
 const SEPARATORS = new Set(["&&", "||", ";", "|", "|&", "&", "\n"]);
