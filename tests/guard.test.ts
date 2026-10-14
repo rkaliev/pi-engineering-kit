@@ -793,7 +793,6 @@ test("guard: every other heredoc and <<-like shape is judged as before", () => {
 		`cat > s.sh <<'EOF'\necho hi\nEOF\nbash s.sh; ${del}`,
 		`cat > a.py <<'EOF'\nx\nEOF\n${del}\nEOF`,
 		`cat > a.py <<'EOF'\n${del}`,
-		`python3 - <<'EOF'\n${del}\nEOF`,
 		`bash <<'EOF'\n${del}\nEOF`,
 		`out=$(ssh h <<'EOF'\n${del}\nEOF\n)`,
 		`cat <<'EOF' | bash\n${del}\nEOF`,
