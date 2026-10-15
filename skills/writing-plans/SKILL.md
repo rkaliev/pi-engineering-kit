@@ -69,5 +69,6 @@ Lines that decide nothing ("handle edge cases", "add validation", "TBD") are gap
 4. **Review focus:** each line has a test in its owning task.
 5. **Proportion:** if code blocks dominate, replace them with signatures and assertions. Every step ends in something checkable: a command with its expected output, or an observable behavior.
 6. **Docs:** Post-implementation names every doc the change affects (writing-documentation).
+7. **Defect:** Task 1 is the red reproduction, and the fix removes the cause named in Context.
 
 Then link the task file and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost. On approval, set the file's `Status: plan approved (YYYY-MM-DD)` and commit it.

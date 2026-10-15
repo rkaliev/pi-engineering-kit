@@ -19,7 +19,7 @@ Links: <issue · decision records · legacy map · or None>
 
 ## Context
 
-<At most three sentences: what exists today and what is wrong or missing. Link, don't restate.>
+<At most three sentences: what exists today and what is wrong or missing. Link, don't restate. For a defect: the reproduction, and the cause with its evidence, or the competing hypotheses and the observation that tells them apart.>
 
 ## Success criteria
 
