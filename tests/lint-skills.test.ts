@@ -62,16 +62,47 @@ for (const name of skills) {
 	});
 }
 
-test("skill names mentioned in bold or as REQUIRED exist", () => {
-	const known = new Set(skills);
-	const suspicious: string[] = [];
-	for (const name of skills) {
-		const text = readFileSync(join(skillsDir, name, "SKILL.md"), "utf8");
-		for (const m of text.matchAll(/\*\*([a-z]+(?:-[a-z]+){1,5})\*\*/g)) {
-			if (!known.has(m[1]!) && /(ing|ment|review|workflow|code|money|systems|stack|agents|plans)$/.test(m[1]!)) suspicious.push(`${name}: ${m[1]}`);
+const KEBAB = "[a-z0-9]+(?:-[a-z0-9]+)+";
+/** The forms the kit uses to name a skill: "(name)", "(name, …)", "**name**", "REQUIRED: name", "name skill". */
+const NAMED_FORMS = [`\\((${KEBAB})[,)]`, `\\*\\*(${KEBAB})\\*\\*`, `REQUIRED:\\s*\\**(${KEBAB})`, `\\b(${KEBAB})(?:'s)? skill\\b`].map((p) => new RegExp(p, "g"));
+/** Words that take those forms without naming a skill: prose and outside tools. */
+const ALLOWED_NAMES = ["gh-ost", "non-closing", "outside-in", "pi-subagents", "playwright-bdd", "server-rendered"];
+/** Agents that pi-subagents provides. */
+const BUILTIN_AGENTS = ["oracle", "reviewer", "scout", "worker"];
+
+function editDistance(a: string, b: string): number {
+	let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+	for (let i = 1; i <= a.length; i++) {
+		const next = [i];
+		for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+		row = next;
+	}
+	return row[b.length]!;
+}
+
+test("named skills and agents exist", () => {
+	const md = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => join(dir, f)) : []);
+	const stem = (file: string) => file.split(/[\\/]/).pop()!.replace(/\.\w+$/, "");
+	const references = skills.flatMap((s) => md(join(skillsDir, s, "references")));
+	const prompts = md(promptsDir);
+	const known = new Set([...skills, ...prompts.map(stem), ...references.map(stem), ...ALLOWED_NAMES]);
+	const files = [...skills.map((s) => join(skillsDir, s, "SKILL.md")), ...references, ...prompts, join(root, "README.md")];
+
+	const problems: string[] = [];
+	for (const file of files) {
+		const text = readFileSync(file, "utf8");
+		const at = file.slice(root.length + 1);
+		for (const form of NAMED_FORMS) for (const m of text.matchAll(form)) if (!known.has(m[1]!)) problems.push(`${at}: no skill, prompt or reference "${m[1]}"`);
+		for (const m of text.matchAll(/`([A-Za-z][\w-]*)`(?: and `([\w-]+)`)? (?:sub)?agents?\b/g)) {
+			for (const name of [m[1], m[2]]) if (name && !BUILTIN_AGENTS.includes(name) && !ALLOWED_NAMES.includes(name)) problems.push(`${at}: no agent "${name}"`);
+		}
+		// Anywhere in the text, a name one or two edits from a skill is a typo or a stale name.
+		for (const m of text.matchAll(new RegExp(`\\b${KEBAB}\\b`, "g"))) {
+			const near = known.has(m[0]) ? undefined : skills.find((s) => editDistance(m[0], s) <= 2);
+			if (near) problems.push(`${at}: "${m[0]}" looks like the skill ${near}`);
 		}
 	}
-	assert.deepEqual(suspicious, []);
+	assert.deepEqual(problems, []);
 });
 
 for (const file of readdirSync(promptsDir).filter((f) => f.endsWith(".md"))) {
