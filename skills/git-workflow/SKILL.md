@@ -11,7 +11,7 @@ description: Use when starting work that needs an isolated branch or worktree, w
    - Isolation: `git rev-parse --git-dir` differs from `--git-common-dir` means you are already in a worktree.
    - Branch: `git branch --show-current`.
    - Uncommitted changes: `git status --porcelain`.
-2. **On `main`/`master`**, on a branch that is already merged into the base, or with someone else's uncommitted changes: create a branch from the fresh base, or ask first. Never stash or reset work you didn't create.
+2. **On `main`/`master`**, on a branch already merged into the base, or with someone else's uncommitted changes: create a branch from the fresh base, or ask first. Never stash or reset work you didn't create.
 3. **Parallel work** needs a worktree. Use the project's convention, else `.worktrees/<branch>`, and confirm the path is ignored first (`git check-ignore -q .worktrees`; if it isn't, add it to `.gitignore` in its own commit).
    ```bash
    git worktree add .worktrees/<branch> -b <branch>
@@ -47,7 +47,7 @@ Push the work branch and open the PR yourself once the review covers HEAD; mergi
 
 When the user wants CI followed:
 - Watch with the host's own tool (`gh pr checks --watch`, `gh run watch`, `glab ci status --live`), in the background, rather than a hand-written polling loop.
-- Every check in the required gate counts, not only the ones you ran locally; read the result once all have reported on the current head.
+- Every check in the required gate counts, not only the ones you ran locally; judge once all have reported on the current head.
 - A failing check gets a root cause first (systematic-debugging), then a fix, commit and push. At most two attempts per check; then stop and ask. Each fix pushed to an open PR moves its head past the reviewed commit: run requesting-code-review on the new head before you call the PR ready.
 - A "changes requested" review goes through receiving-code-review; don't keep pushing around it.
 - Never merge yourself, and never re-run a red check hoping it passes.

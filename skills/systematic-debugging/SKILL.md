@@ -15,7 +15,7 @@ A fix for a symptom is a failure. The pressure to guess is highest under time pr
 
 1. **Read the whole error**: the stack trace, codes, file and line numbers, and warnings above the error.
 2. **Reproduce it reliably.** Write down the exact steps. If you can't reproduce it, gather more data; don't guess. A failure that no longer reproduces is not evidence that it's gone.
-3. **Check what changed**: `git log`/`git diff`, dependency bumps, config, environment, data, OS or device version. That is the trigger. Keep it apart from the cause, the mechanism that makes the trigger fail.
+3. **Check what changed**: `git log`/`git diff`, dependency bumps, config, environment, data, OS or device version. That is the trigger. Keep it apart from the cause: why that change makes it fail.
 4. **Read the telemetry first** when it happens outside your machine: a bounded, read-only query of logs and traces by request or trace id (observability).
 5. **Instrument the boundaries.** In multi-component systems (UI → API → service → DB; CI → build → signing; POS → fiscal device), log what enters and leaves each boundary once. That shows where it breaks.
 6. **Trace backwards** from the bad value to where it first appears (`references/root-cause-tracing.md`). Fix at the source.
@@ -35,7 +35,7 @@ State one hypothesis: "X is the cause because Y." Test it with the smallest chan
 3. Verify: the new test passes, the full suite passes, and the original symptom is gone (verification-before-completion).
 4. **If three fixes have failed, stop.** When each fix reveals a new problem somewhere else, the architecture is wrong, not the hypothesis. Present what you learned and discuss with the user before a fourth attempt.
 
-If the cause really is external (network, vendor, timing), document what you investigated and handle it at the boundary in the product code, on the current version: a timeout, a retry with idempotency or a clear error, with a test for it. Keep a workaround narrow and easy to remove, link the upstream report, and add logging for next time. Tests themselves never retry (test-standard, "Retries"). Most "no root cause" conclusions are incomplete investigations.
+If the cause really is external (network, vendor, timing), document what you investigated and handle it at the boundary in the product code, on the current version: a timeout, a retry with idempotency or a clear error, with a test for it. Keep a workaround narrow and easy to remove (a pin to the last good release counts when the upstream report proves the regression), link that report, and add logging for next time. Tests themselves never retry (test-standard, "Retries"). Most "no root cause" conclusions are incomplete investigations.
 
 ## Symptom remedies are not fixes
 

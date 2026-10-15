@@ -63,12 +63,43 @@ for (const name of skills) {
 }
 
 const KEBAB = "[a-z0-9]+(?:-[a-z0-9]+)+";
-/** The forms the kit uses to name a skill: "(name)", "(name, …)", "**name**", "REQUIRED: name", "name skill". */
-const NAMED_FORMS = [`\\((${KEBAB})[,)]`, `\\*\\*(${KEBAB})\\*\\*`, `REQUIRED:\\s*\\**(${KEBAB})`, `\\b(${KEBAB})(?:'s)? skill\\b`].map((p) => new RegExp(p, "g"));
-/** Words that take those forms without naming a skill: prose and outside tools. */
-const ALLOWED_NAMES = ["gh-ost", "non-closing", "outside-in", "pi-subagents", "playwright-bdd", "server-rendered"];
+const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Words that take a naming form without naming a skill: prose, tools, packages and lint rules. */
+const ALLOWED_NAMES = [
+	"copy-pasted", "e-mail", "expect-expect", "gh-ost", "no-conditional-expect", "no-disabled-tests", "no-focused-tests", "node-version-file",
+	"non-closing", "osv-scanner", "outside-in", "pi-subagents", "pip-audit", "playwright-bdd", "pt-online-schema-change", "server-rendered",
+];
 /** Agents that pi-subagents provides. */
 const BUILTIN_AGENTS = ["oracle", "reviewer", "scout", "worker"];
+
+/** The bare names in a span that may list several ("a, b and c", "a → b", "see a or b"). */
+function listed(span: string): string[] {
+	return span
+		.split(/,|;|→|\s(?:and|or|then)\s/)
+		.map((s) => s.trim().replace(/^(?:see|the)\s+/i, "").replace(/\s+skills?$/, "").replace(/^`|`$/g, "").trim())
+		.filter((s) => NAME.test(s));
+}
+
+/**
+ * Names in the forms the kit uses for a skill, agent or reference: "(a, b)", "(see a)", "**a**", "REQUIRED: a and b",
+ * "see a or b", "the `a` skill", "a's", and (with `tables`) table cells such as "x → a → b".
+ */
+function namedIn(text: string, tables: boolean): string[] {
+	const names: string[] = [];
+	for (const m of text.matchAll(/\(([^()]{0,300})\)/g)) names.push(...listed(m[1]!));
+	for (const m of text.matchAll(/\*\*`?([a-z0-9-]+)`?\*\*/g)) names.push(...listed(m[1]!));
+	for (const m of text.matchAll(/REQUIRED:\s*([^.\n]*)/g)) names.push(...listed(m[1]!));
+	for (const m of text.matchAll(/\b[Ss]ee ([^.;:()\n]*)/g)) names.push(...listed(m[1]!));
+	for (const m of text.matchAll(new RegExp(`\`?\\b(${KEBAB})\`?(?:'s)? skills?\\b`, "g"))) names.push(m[1]!);
+	for (const m of text.matchAll(new RegExp(`\\b(${KEBAB})'s\\b`, "g"))) names.push(m[1]!);
+	if (tables) for (const line of text.split("\n")) if (line.startsWith("|") && !/^[|\s:-]+$/.test(line)) for (const cell of line.split("|")) names.push(...listed(cell));
+	return [...new Set(names)];
+}
+
+/** Backticked names before "agent(s)": "`a` agent", "`a`, `b` and `c` agents". */
+function agentsIn(text: string): string[] {
+	return [...text.matchAll(/((?:`[\w-]+`(?:,\s*|\s+and\s+|\s+or\s+)?)+)\s+(?:sub)?agents?\b/g)].flatMap((m) => [...m[1]!.matchAll(/`([\w-]+)`/g)].map((n) => n[1]!));
+}
 
 function editDistance(a: string, b: string): number {
 	let row = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -80,26 +111,43 @@ function editDistance(a: string, b: string): number {
 	return row[b.length]!;
 }
 
+test("name extraction finds every form", () => {
+	const rows: [string, string[]][] = [
+		["(see mobile-development)", ["mobile-development"]],
+		["(outside-in, test-driven-development)", ["outside-in", "test-driven-development"]],
+		["**writing-plans**", ["writing-plans"]],
+		["REQUIRED: brainstorming and writing-plans.", ["brainstorming", "writing-plans"]],
+		["(web-frontend,\n  payments-and-money or pos-systems)", ["web-frontend", "payments-and-money", "pos-systems"]],
+		["See mobile-development and pos-systems.", ["mobile-development", "pos-systems"]],
+		["the `writing-skills` skill", ["writing-skills"]],
+		["by test-standard's rules", ["test-standard"]],
+		["| Bounded | short design → test-driven-development → verify |", ["test-driven-development", "verify"]],
+	];
+	for (const [text, want] of rows) assert.deepEqual(namedIn(text, true), want, text);
+	assert.deepEqual(agentsIn("a fresh `scout`, `worker` and `critic` agents"), ["scout", "worker", "critic"]);
+});
+
 test("named skills and agents exist", () => {
-	const md = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => join(dir, f)) : []);
+	const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
 	const stem = (file: string) => file.split(/[\\/]/).pop()!.replace(/\.\w+$/, "");
-	const references = skills.flatMap((s) => md(join(skillsDir, s, "references")));
-	const prompts = md(promptsDir);
-	const known = new Set([...skills, ...prompts.map(stem), ...references.map(stem), ...ALLOWED_NAMES]);
-	const files = [...skills.map((s) => join(skillsDir, s, "SKILL.md")), ...references, ...prompts, join(root, "README.md")];
+	const skillDocs = walk(skillsDir).filter((f) => f.endsWith(".md"));
+	const promptDocs = readdirSync(promptsDir).filter((f) => f.endsWith(".md")).map((f) => join(promptsDir, f));
+	const known = new Set([...skills, ...promptDocs.map(stem), ...skillDocs.map(stem), ...ALLOWED_NAMES]);
+	const near = (name: string) => (known.has(name) ? undefined : skills.find((s) => (s.includes("-") || s.length >= 8) && editDistance(name, s) <= 2));
 
 	const problems: string[] = [];
-	for (const file of files) {
+	for (const file of [...skillDocs, ...promptDocs, join(root, "README.md")]) {
 		const text = readFileSync(file, "utf8");
 		const at = file.slice(root.length + 1);
-		for (const form of NAMED_FORMS) for (const m of text.matchAll(form)) if (!known.has(m[1]!)) problems.push(`${at}: no skill, prompt or reference "${m[1]}"`);
-		for (const m of text.matchAll(/`([A-Za-z][\w-]*)`(?: and `([\w-]+)`)? (?:sub)?agents?\b/g)) {
-			for (const name of [m[1], m[2]]) if (name && !BUILTIN_AGENTS.includes(name) && !ALLOWED_NAMES.includes(name)) problems.push(`${at}: no agent "${name}"`);
+		for (const name of namedIn(text, file.endsWith("SKILL.md"))) {
+			// A hyphenated name must exist; a one-word one is usually prose, so only a near miss of a skill counts.
+			if (name.includes("-") ? !known.has(name) : near(name)) problems.push(`${at}: no skill, prompt or reference "${name}"`);
 		}
-		// Anywhere in the text, a name one or two edits from a skill is a typo or a stale name.
+		for (const name of agentsIn(text)) if (!BUILTIN_AGENTS.includes(name) && !ALLOWED_NAMES.includes(name)) problems.push(`${at}: no agent "${name}"`);
+		// Anywhere in the text, a hyphenated word one or two edits from a skill is a typo or a stale name.
 		for (const m of text.matchAll(new RegExp(`\\b${KEBAB}\\b`, "g"))) {
-			const near = known.has(m[0]) ? undefined : skills.find((s) => editDistance(m[0], s) <= 2);
-			if (near) problems.push(`${at}: "${m[0]}" looks like the skill ${near}`);
+			const skill = near(m[0]);
+			if (skill) problems.push(`${at}: "${m[0]}" looks like the skill ${skill}`);
 		}
 	}
 	assert.deepEqual(problems, []);
