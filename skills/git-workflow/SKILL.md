@@ -7,7 +7,7 @@ description: Use when starting work that needs an isolated branch or worktree, w
 
 ## Before starting: isolate
 
-1. **Detect the current state.** Fetch first (`git fetch`), so that the base is current.
+1. **Detect the current state.** Fetch first (`git fetch`) so the base is current.
    - Isolation: `git rev-parse --git-dir` differs from `--git-common-dir` means you are already in a worktree.
    - Branch: `git branch --show-current`.
    - Uncommitted changes: `git status --porcelain`.
@@ -26,7 +26,7 @@ Branch names follow the repo convention. Default: `<type>/<short-kebab-descripti
 - Stage specific paths (`git add path/…`), never secrets, build output or unrelated changes. Review `git diff --staged` before committing.
 - Respect hooks. **Never** use `--no-verify`, `-n`, or `commit --amend` on pushed commits. Never rewrite shared history: no `push --force`. On your own branch after the user agrees, use `--force-with-lease`.
 - Follow the project's rules on trailers (some forbid AI co-author lines) and on issue IDs in messages.
-- If the repo has a commit linter (commitlint, a `commit-msg` hook), follow its config and fix the message rather than bypass it. When one change becomes several commits, order them so each one is green: build and config, then code, then tests, then docs.
+- Follow the repo's commit linter (commitlint, a `commit-msg` hook): fix the message, don't bypass it. When one change becomes several commits, order them so each one is green: build and config, then code, then tests, then docs.
 - Resolve conflicts by rebasing onto the base branch, not by merging it into a PR branch, unless the repo prefers merging. A rebase, like any change, makes the last review stale: rebase before the final review, or review again after it. Rebasing your own pushed branch uses `--force-with-lease=<branch>:<sha before the rebase>`, after the user agrees.
 
 ## Finishing a branch
@@ -47,7 +47,7 @@ Push the work branch and open the PR yourself once the review covers HEAD; mergi
 
 When the user wants CI followed:
 - Watch with the host's own tool (`gh pr checks --watch`, `gh run watch`, `glab ci status --live`), in the background, rather than a hand-written polling loop.
-- Every check in the required gate counts, not only the ones you ran locally.
+- Every check in the required gate counts, not only the ones you ran locally; read the result once all have reported on the current head.
 - A failing check gets a root cause first (systematic-debugging), then a fix, commit and push. At most two attempts per check; then stop and ask. Each fix pushed to an open PR moves its head past the reviewed commit: run requesting-code-review on the new head before you call the PR ready.
 - A "changes requested" review goes through receiving-code-review; don't keep pushing around it.
 - Never merge yourself, and never re-run a red check hoping it passes.
