@@ -37,7 +37,7 @@ inheritProjectContext: true         # custom agents start without AGENTS.md unle
 - **Least privilege.** Grant only the tools the role needs. A reviewer gets no edit tools; a researcher gets no shell. A shell can write files, so a read-only role that needs one also needs a hook or guard rule that limits its commands. Nesting (an agent dispatching agents) stays off unless the role is an orchestrator: leave `subagent` out of `tools` and `allowNestedSubagents` unset.
 - **Model by stakes:** the most capable model for review, security and design judgment; a fast one for search and mechanical work.
 - **Self-contained input.** The agent never sees the conversation. Its prompt says what it receives (task text, paths, ranges, commands) and what to do when something is missing: report `NEEDS_CONTEXT`, don't guess.
-- **A fixed report.** End with machine-readable lines the caller or a hook can parse (a status word, a verdict, the SHAs reviewed) and a short human summary. Say what counts as evidence (commands run with their output, `file:line`).
+- **A fixed report.** End with machine-readable lines the caller or a hook can parse (a status word, a verdict, the SHAs reviewed) and a short human summary. Say what counts as evidence (commands run with their output, `file:line`). Bound the report (at most N items, M words), say how many items were left out, and report a source it could not read instead of inventing one.
 - **Boundaries.** What it must never do (push, edit outside the task, weaken tests) and when it stops and returns.
 
 ## Test it

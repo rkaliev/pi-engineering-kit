@@ -15,6 +15,8 @@ skills/<name>/references/*.md optional heavy reference, loaded only when needed
 skills/<name>/scripts/*       optional tools; invoke as `bash scripts/x.sh` (the exec bit can be lost)
 ```
 
+A script is code: a test that the project's test command runs covers it, it prints machine-readable output, it refuses unclear input instead of guessing, and it writes only where its usage says.
+
 ```yaml
 ---
 name: <name>            # = folder name; lowercase, digits, hyphens; ≤ 64 chars
