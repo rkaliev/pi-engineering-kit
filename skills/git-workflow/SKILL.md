@@ -47,7 +47,7 @@ Push the work branch and open the PR yourself once the review covers HEAD; mergi
 
 When the user wants CI followed:
 - Watch with the host's own tool (`gh pr checks --watch`, `gh run watch`, `glab ci status --live`), in the background, rather than a hand-written polling loop.
-- Every check in the required gate counts, not only the ones you ran locally; judge once all have reported on the current head.
+- Every required check counts, not only the ones you ran locally; an empty or partial list on the current head is no result yet.
 - A failing check gets a root cause first (systematic-debugging), then a fix, commit and push. At most two attempts per check; then stop and ask. Each fix pushed to an open PR moves its head past the reviewed commit: run requesting-code-review on the new head before you call the PR ready.
 - A "changes requested" review goes through receiving-code-review; don't keep pushing around it.
 - Never merge yourself, and never re-run a red check hoping it passes.
