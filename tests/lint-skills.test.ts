@@ -63,7 +63,7 @@ for (const name of skills) {
 }
 
 const KEBAB = "[a-z0-9]+(?:-[a-z0-9]+)+";
-const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const WORD = "[a-z0-9]+(?:-[a-z0-9]+)*";
 /** Words that take a naming form without naming a skill: prose, tools, packages and lint rules. */
 const ALLOWED_NAMES = [
 	"append-only", "auto-detect", "cache-level", "content-heavy", "copy-pasted", "e-mail", "expect-expect", "feel-breaking",
@@ -94,8 +94,8 @@ function namedIn(text: string, tables: boolean): string[] {
 	for (const m of text.matchAll(/\*\*`?([a-z0-9-]+)`?\*\*/g)) names.push(...listed(m[1]!));
 	for (const m of text.matchAll(/REQUIRED:\s*([^.\n]*)/g)) names.push(...listed(m[1]!));
 	for (const m of text.matchAll(/\b[Ss]ee ([^.;:()\n]*)/g)) names.push(...listed(m[1]!));
-	for (const m of text.matchAll(new RegExp(`\`?\\b(${KEBAB})\`?(?:'s)? skills?\\b`, "g"))) names.push(m[1]!);
-	for (const m of text.matchAll(new RegExp(`\\b(${KEBAB})'s\\b`, "g"))) names.push(m[1]!);
+	for (const m of text.matchAll(new RegExp(`\`?\\b(${WORD})\`?(?:'s)? skills?\\b`, "g"))) names.push(m[1]!);
+	for (const m of text.matchAll(new RegExp(`\\b(${WORD})'s\\b`, "g"))) names.push(m[1]!);
 	if (tables) for (const line of text.split("\n")) if (line.startsWith("|") && !/^[|\s:-]+$/.test(line)) for (const cell of line.split("|")) names.push(...listed(cell));
 	return [...new Set(names)];
 }
@@ -126,7 +126,7 @@ test("name extraction finds every form", () => {
 		["the `writing-skills` skill", ["writing-skills"]],
 		["by test-standard's rules", ["test-standard"]],
 		["| Bounded | Short design → test-driven-development → verify |", ["test-driven-development", "verify"]],
-		["| Web code | the platform skill: web-frontend, mobile-development |", ["web-frontend", "mobile-development"]],
+		["| Web code | the platform skill: web-frontend, mobile-development |", ["platform", "web-frontend", "mobile-development"]],
 		['(\"REQUIRED: test-driven-development\")', ["test-driven-development"]],
 		["(then web-frontend)", ["web-frontend"]],
 		["(ui-motion for animation; the web-frontend references)", ["ui-motion", "web-frontend"]],
@@ -156,6 +156,7 @@ test("a wrong name is reported", () => {
 	const known = new Set([...skills, ...ALLOWED_NAMES]);
 	const found = (text: string) => problemsIn(text, "x.md", true, known, AGENT_NAMES);
 	assert.deepEqual(found("(see writing-plan)"), ['x.md: no skill, prompt or reference "writing-plan"', 'x.md: "writing-plan" looks like the skill writing-plans']);
+	assert.deepEqual(found("the brainstormng skill"), ['x.md: no skill, prompt or reference "brainstormng"']);
 	assert.deepEqual(found("(see observabilty)"), ['x.md: no skill, prompt or reference "observabilty"']);
 	assert.deepEqual(found("the `critic` agent"), ['x.md: no agent "critic"']);
 	assert.deepEqual(found("(read-only, see writing-plans)"), []);

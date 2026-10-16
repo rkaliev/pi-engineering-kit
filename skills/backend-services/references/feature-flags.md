@@ -37,7 +37,7 @@ A flag decouples deploy from release: code ships dark and is turned on, ramped o
 
 - Every change records who, when, what and why (the provider's audit log or your own). Changing a flag in production is an outward-facing action: the agent proposes it; the user does it.
 - Separate who may operate a flag (toggle, ramp) from who may change its definition or targeting.
-- When the user lets the agent change a flag through a tool: write against the revision just read, with an idempotency key; on a conflict, read again and decide again; after an unclear outcome, retry with the same key. Saved is not applied: read the value back, and report what the read-back shows. Ramp only through the steps the user approved.
+- When the user lets the agent change a flag through a tool: write against the revision just read, with an idempotency key where the API takes one; on a conflict, read again and decide again; after an unclear outcome, retry with the same key, or read again first when there is none. Saved is not applied: read the value back, and report what the read-back shows. Ramp only through the steps the user approved.
 
 ## Experiments
 

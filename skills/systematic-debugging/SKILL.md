@@ -46,7 +46,7 @@ Without a proven cause, these make the symptom go away and leave the defect in p
 - an error caught and dropped, or filtered out of logs and alerts;
 - a looser validation, type or lint rule.
 
-Use one only when the user asks for it, or when a rollback mitigates a live incident; the defect is then still fixed on the current version. A timeout or limit set by the requirements is a requirement, not a remedy. When the evidence shows one of these is the real fix (a timeout below the measured normal latency), say so and show the measurement.
+Use one only when the user asks for it (report it as a remedy, with the unproven cause in Follow-ups), or when a rollback, confirmed by whoever owns the release, mitigates a live incident and the defect is still fixed on the current version. A timeout or limit set by the requirements is a requirement, not a remedy. When the evidence shows one of these is the real fix (a timeout below the measured normal latency), say so and show the measurement.
 
 ## Signals you're off track
 
