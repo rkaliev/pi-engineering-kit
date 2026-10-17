@@ -7,7 +7,7 @@ description: Use when you have an approved design in a task file, or clear requi
 
 A plan is the set of decisions the implementer cannot make alone: which files, which names and signatures, which values from the description, which tests prove each task. Write for a capable engineer who has never seen this codebase or conversation. **A plan longer than the code it describes has written the code instead.**
 
-Write the plan into the `## Plan` section of the task file (`docs/tasks/YYYY-MM-DD-<topic>.md`, from brainstorming), replacing "None yet", and set its `Base:` to `git rev-parse HEAD`. The file must say `Status: design approved`; if it is still a draft, ask the user to approve the description first, never approve it yourself. With clear requirements and no task file, create one from `../../templates/task.md` and get its description approved. The task file lives only on the work branch: it is deleted when the work is finished, and the guard blocks a PR or merge while it exists.
+Write the plan into the `## Plan` section of the task file (`docs/tasks/YYYY-MM-DD-<topic>.md`, from brainstorming), replacing "None yet", and set its `Base:` to `git rev-parse HEAD`. The file must say `Status: design approved`; for a draft, ask the user to approve the description first, never approve it yourself. With clear requirements and no task file, create one from `../../templates/task.md` and get its description approved. It lives only on the work branch and is deleted when the work is finished.
 
 ## Header
 
@@ -71,4 +71,4 @@ Lines that decide nothing ("handle edge cases", "add validation", "TBD") are gap
 6. **Docs:** Post-implementation names every doc the change affects (writing-documentation).
 7. **Defect:** Task 1 is the red reproduction, and the fix removes the cause named in Context.
 
-Then link the task file and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one, in one sentence: how coupled the tasks are, how many there are, and what a mistake would cost. On approval, set the file's `Status: plan approved (YYYY-MM-DD)` and commit it.
+Then link the task file and ask the user to review it and choose how to execute it: **inline** (cheapest; one review at the end) or **subagent per task** (a fresh implementer and reviewer per task; costs more; needs a `subagent` tool). Recommend one in one sentence, weighing coupling, task count and the cost of a mistake. On approval, set the file's `Status: plan approved (YYYY-MM-DD)` and commit it.

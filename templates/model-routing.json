@@ -25,7 +25,7 @@
     "review": "deep",
     "debug": "deep",
     "skill:security-review": "deep",
-    "implement": "fast",
+    "implement": "deep",
     "onboard": "fast",
     "finish": "fast",
     "new-task": "cheap",

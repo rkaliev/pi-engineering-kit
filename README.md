@@ -21,7 +21,7 @@ It contains:
   - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry a task file to the base branch, and asks you before outward-facing ones and before landing a commit without a passing review.
   - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
-  - **models** routes each command to its own model and thinking level (`/review` on the strongest model, `/implement` on a mid-tier one), and adds `/mode` for manual switching.
+  - **models** routes each command to its own model and thinking level (`/review` and `/implement` on the strongest model, `/onboard` and `/finish` on a mid-tier one), and adds `/mode` for manual switching.
 - **A test-hygiene script** for the project's CI on any stack (`scripts/test-hygiene.ts`, Node only, no dependencies): focused tests, skips without a linked issue, fixed sleeps, retries in runner configs and test code, JUnit test counts. In an existing project it checks only the lines a change adds, so old debt doesn't block.
 
 How it works and why: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A step-by-step guide with a demo project is in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). Both are also available in Russian: [ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md), [GETTING-STARTED.ru.md](docs/GETTING-STARTED.ru.md). The demo project itself is [examples/demo](examples/demo): a dependency-free cart library with one task, so you can try the whole loop in a minute.
@@ -43,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -133,7 +133,7 @@ Configure it in `~/.pi/agent/model-routing.json` (global) and/or `.pi/model-rout
     "deep": { "model": ["anthropic/claude-opus-5-5"], "thinking": "xhigh" },
     "fast": { "model": ["anthropic/claude-sonnet-5"], "thinking": "medium" }
   },
-  "commands": { "review": "deep", "plan": "deep", "implement": "fast", "skill:security-review": "deep" }
+  "commands": { "review": "deep", "plan": "deep", "implement": "deep", "onboard": "fast", "skill:security-review": "deep" }
 }
 ```
 
@@ -145,7 +145,7 @@ Configure it in `~/.pi/agent/model-routing.json` (global) and/or `.pi/model-rout
 
 Built into pi without this extension: `defaultModel`, `enabledModels` (`Ctrl+P` cycling) and `modelThinkingLevels` in settings, `/model`, and `--model provider/id:high`.
 
-**Subagents:** give `pi-subagents` agents their own models. Use a cheap or mid-tier model for `scout` and `worker`, and the most capable one for `reviewer` and `oracle`: the final review is the judgment call worth paying for. See its [models docs](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) for the configuration keys.
+**Subagents:** give `pi-subagents` agents their own models. Use a cheap or mid-tier model for `scout`, and the most capable one for `worker`, `reviewer` and `oracle`: writing the code and judging it are where quality is worth paying for. See its [models docs](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) for the configuration keys.
 
 ## Develop
 

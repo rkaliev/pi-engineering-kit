@@ -187,13 +187,13 @@ pi install <kit>      # for all your projects (~/.pi/agent/settings.json)
 
 For yourself, for all projects:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 ```
 
 For a team, one line in the project:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 
@@ -242,7 +242,7 @@ From here on, commands are typed inside pi.
 | 1 | confirm trust | Pi loads the project's `.pi/` |
 | 2 | `/kit-init` | Questions about the files. `npm test` ends up in `verify.json`: pi took it from AGENTS.md |
 | 3 | `/mode` | The current model, modes and routes. If you don't have the models from `model-routing.json`, fix the IDs |
-| 4 | `/implement tasks/01-percent-discount.md` | The model switches to `fast`. The agent shows a plan of up to 7 lines and follows TDD: a failing test for each criterion first. The task is about money, so `payments-and-money` kicks in: integer arithmetic only and half-up rounding. After the first edit, `verify: unverified edits` appears in the status |
+| 4 | `/implement tasks/01-percent-discount.md` | The model switches to `deep`. The agent shows a plan of up to 7 lines and follows TDD: a failing test for each criterion first. The task is about money, so `payments-and-money` kicks in: integer arithmetic only and half-up rounding. After the first edit, `verify: unverified edits` appears in the status |
 | 5 | (the agent says "done") | If there were no checks after the edits, the verify gate sends the agent back: "Verify gate: files changed…". The agent calls `run_verification` and gives a report: files, commands with results, criteria 1–5, what was not verified |
 | 6 | `/review tasks/01-percent-discount.md` | The `deep` model. The review is read-only: Criteria / Confirmed / Assumptions / Questions / Verdict |
 | 7 | `/verify` | A manual run of the checks; the agent sees the result too |

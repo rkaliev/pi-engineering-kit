@@ -187,13 +187,13 @@ pi install <kit>      # для всех твоих проектов (~/.pi/agent
 
 Себе, для всех проектов:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 ```
 
 Для команды — одна строка в проекте:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.26.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.27.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 
@@ -242,7 +242,7 @@ pi
 | 1 | подтвердить trust | Pi загрузит `.pi/` проекта |
 | 2 | `/kit-init` | Вопросы по файлам. В `verify.json` попадёт `npm test`: pi взял его из AGENTS.md |
 | 3 | `/mode` | Текущая модель, режимы и маршруты. Если модели из `model-routing.json` у тебя нет, поправь ID |
-| 4 | `/implement tasks/01-percent-discount.md` | Модель переключится на `fast`. Агент покажет план до 7 строк и пойдёт по TDD: сначала падающий тест на каждый критерий. Задача про деньги, поэтому подключится `payments-and-money`: только целочисленная арифметика и округление half-up. После первой правки в статусе появится `verify: unverified edits` |
+| 4 | `/implement tasks/01-percent-discount.md` | Модель переключится на `deep`. Агент покажет план до 7 строк и пойдёт по TDD: сначала падающий тест на каждый критерий. Задача про деньги, поэтому подключится `payments-and-money`: только целочисленная арифметика и округление half-up. После первой правки в статусе появится `verify: unverified edits` |
 | 5 | (агент говорит «готово») | Если проверок после правок не было, verify-гейт вернёт агента: «Verify gate: files changed…». Агент вызовет `run_verification` и выдаст отчёт: файлы, команды с результатами, критерии 1–5, что не проверено |
 | 6 | `/review tasks/01-percent-discount.md` | Модель `deep`. Ревью только на чтение: Criteria / Confirmed / Assumptions / Questions / Verdict |
 | 7 | `/verify` | Ручной прогон проверок, результат увидит и агент |
