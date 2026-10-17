@@ -36,3 +36,18 @@ test("checkRelease: the package version has notes, and the plugin manifest agree
 		/\.claude-plugin\/plugin\.json has version 0\.1\.0, package\.json has 0\.2\.0/,
 	);
 });
+
+test("checkRelease: install commands in README and docs pin the package version", () => {
+	const files = (pin: string) => ({
+		"package.json": JSON.stringify({ name: "kit", version: "0.2.0" }),
+		"CHANGELOG.md": CHANGELOG,
+		"README.md": `pi install git:github.com/me/kit@v${pin}\nuses actions/checkout@v4 and other-kit@v9.9.9\n`,
+		"docs/GUIDE.md": "pi install -l git:github.com/me/kit@v0.2.0\n",
+	});
+	assert.equal(checkRelease(repo(files("0.2.0"))), "0.2.0");
+	assert.throws(() => checkRelease(repo(files("0.1.0"))), /README\.md pins kit@v0\.1\.0, package\.json has 0\.2\.0/);
+	assert.throws(
+		() => checkRelease(repo({ ...files("0.2.0"), "docs/GUIDE.md": "kit@v0.0.1" })),
+		/docs\/GUIDE\.md pins kit@v0\.0\.1, package\.json has 0\.2\.0/,
+	);
+});
