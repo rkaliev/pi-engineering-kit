@@ -133,7 +133,7 @@ Configure it in `~/.pi/agent/model-routing.json` (global) and/or `.pi/model-rout
     "deep": { "model": ["anthropic/claude-opus-5-5"], "thinking": "xhigh" },
     "fast": { "model": ["anthropic/claude-sonnet-5"], "thinking": "medium" }
   },
-  "commands": { "review": "deep", "plan": "deep", "implement": "deep", "skill:security-review": "deep" }
+  "commands": { "review": "deep", "plan": "deep", "implement": "deep", "onboard": "fast", "skill:security-review": "deep" }
 }
 ```
 

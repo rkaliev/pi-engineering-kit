@@ -2,7 +2,7 @@
 
 ## 0.27.0
 
-- **`/implement` runs on the strongest model.** The routing template sends `implement` to the `deep` mode (was `fast`), with brainstorm, plan, debug and review; onboard, finish and docs stay on `fast`, new-task on `cheap`. The README's pi-subagents advice puts `worker`, which writes the code, on the most capable model with `reviewer` and `oracle`.
+- **`/implement` runs on the strongest model.** The routing template sends `implement` to the `deep` mode (was `fast`), with brainstorm, plan, debug and review; onboard, finish and docs stay on `fast`, new-task on `cheap`. The README's pi-subagents advice puts `worker`, which writes the code, on the most capable model with `reviewer` and `oracle`. `/implement` sessions cost more. `/kit-init` doesn't overwrite an existing `.pi/model-routing.json`: set `"implement": "deep"` there (and in `~/.pi/agent/model-routing.json`) yourself to get it.
 - **writing-plans has room under its word budget** (778 words, was 799); no rule removed.
 
 ## 0.26.0

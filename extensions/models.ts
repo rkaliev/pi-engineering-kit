@@ -1,7 +1,7 @@
 /**
  * Model routing: kit commands pick their own model and thinking level.
  *
- * `/review` → strongest model, `/implement` → mid-tier, and so on, configured in
+ * `/review` and `/implement` → strongest model, `/onboard` → mid-tier, and so on, configured in
  * `~/.pi/agent/model-routing.json` (global) and `.pi/model-routing.json` (project, trusted
  * projects only; it could otherwise route you to an unexpected paid model). Plain messages keep
  * the current model; follow-ups sent by extensions (the verify gate) never switch it.
