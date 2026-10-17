@@ -47,7 +47,13 @@ test("checkRelease: install commands in README and docs pin the package version"
 	assert.equal(checkRelease(repo(files("0.2.0"))), "0.2.0");
 	assert.throws(() => checkRelease(repo(files("0.1.0"))), /README\.md pins kit@v0\.1\.0, package\.json has 0\.2\.0/);
 	assert.throws(
-		() => checkRelease(repo({ ...files("0.2.0"), "docs/GUIDE.md": "kit@v0.0.1" })),
+		() => checkRelease(repo({ ...files("0.2.0"), "docs/GUIDE.md": "pi install git:github.com/me/kit@v0.0.1" })),
 		/docs\/GUIDE\.md pins kit@v0\.0\.1, package\.json has 0\.2\.0/,
 	);
+	assert.throws(
+		() => checkRelease(repo({ ...files("0.2.0"), "templates/settings.json": '{ "packages": ["git:github.com/me/kit@v0.0.1"] }' })),
+		/templates\/settings\.json pins kit@v0\.0\.1/,
+	);
+	const prose = { ...files("0.2.0"), "docs/GUIDE.md": "Install git:github.com/me/kit@v0.2.0. Upgrading from kit@v0.1.0 needs nothing.\n" };
+	assert.equal(checkRelease(repo(prose)), "0.2.0", "a sentence's full stop is not part of the version, and prose mentions are not pins");
 });

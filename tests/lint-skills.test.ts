@@ -95,7 +95,7 @@ function namedIn(text: string, tables: boolean): string[] {
 	for (const m of text.matchAll(/REQUIRED:\s*([^.\n]*)/g)) names.push(...listed(m[1]!));
 	for (const m of text.matchAll(/\b[Ss]ee ([^.;:()\n]*)/g)) names.push(...listed(m[1]!));
 	for (const m of text.matchAll(new RegExp(`\`?\\b(${WORD})\`?(?:'s)? skills?\\b`, "g"))) names.push(m[1]!);
-	for (const m of text.matchAll(new RegExp(`\\b(${WORD})'s\\b`, "g"))) names.push(m[1]!);
+	for (const m of text.matchAll(new RegExp(`\`?\\b(${WORD})\`?'s\\b`, "g"))) names.push(m[1]!);
 	if (tables) for (const line of text.split("\n")) if (line.startsWith("|") && !/^[|\s:-]+$/.test(line)) for (const cell of line.split("|")) names.push(...listed(cell));
 	return [...new Set(names)];
 }
@@ -125,6 +125,7 @@ test("name extraction finds every form", () => {
 		["See mobile-development and pos-systems.", ["mobile-development", "pos-systems"]],
 		["the `writing-skills` skill", ["writing-skills"]],
 		["by test-standard's rules", ["test-standard"]],
+		["it quiets the `implementer`'s push", ["implementer"]],
 		["| Bounded | Short design → test-driven-development → verify |", ["test-driven-development", "verify"]],
 		["| Web code | the platform skill: web-frontend, mobile-development |", ["platform", "web-frontend", "mobile-development"]],
 		['(\"REQUIRED: test-driven-development\")', ["test-driven-development"]],

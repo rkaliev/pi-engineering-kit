@@ -157,7 +157,7 @@ npm run typecheck
 
 Edit skills with the `writing-skills` skill. Keep `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` in sync.
 
-**Releasing:** bump `version` in `package.json` and the `@vX.Y.Z` in the install commands of this README and the getting-started guides, add its `## X.Y.Z` section to `CHANGELOG.md`, and merge to `main`. CI checks the section and the pinned versions on every PR, and after a green run on `main` it creates the `vX.Y.Z` tag and GitHub Release with that section as the notes.
+**Releasing:** bump `version` in `package.json` and the `@vX.Y.Z` in the install sources of this README, the getting-started guides and `templates/settings.json`, add its `## X.Y.Z` section to `CHANGELOG.md`, and merge to `main`. CI checks the section and the pinned versions on every PR, and after a green run on `main` it creates the `vX.Y.Z` tag and GitHub Release with that section as the notes.
 
 **Name clashes:** pi silently keeps one prompt per name. With `pi install`, a project's own `.pi/prompts/implement.md` or `review.md` wins over this kit's; with `pi -e`, the kit wins. Rename one of them if you need both.
 
