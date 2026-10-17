@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.27.0
+
+- **`/implement` runs on the strongest model.** The routing template sends `implement` to the `deep` mode (was `fast`), with brainstorm, plan, debug and review; onboard, finish and docs stay on `fast`, new-task on `cheap`. The README's pi-subagents advice puts `worker`, which writes the code, on the most capable model with `reviewer` and `oracle`.
+- **writing-plans has room under its word budget** (778 words, was 799); no rule removed.
+
 ## 0.26.0
 
 - **Symptom remedies are not fixes.** systematic-debugging names what makes a defect's symptom go away without a proven cause: a raised timeout or an added retry, wait or sleep; a rollback, downgrade or pinned version; a skipped, quarantined or re-run test or a weaker assertion; an error caught and dropped or filtered out of logs; a looser validation, type or lint rule. Each is allowed only when the user asks for it (reported as a remedy, with the unproven cause in Follow-ups) or when a rollback, confirmed by whoever owns the release, mitigates a live incident and the defect is still fixed on the current version; a timeout the requirements set is a requirement, not a remedy. Phase 1 now keeps the trigger (what changed) apart from the cause, and says a failure that no longer reproduces is not evidence it's gone. An external cause is handled at the boundary on the current version, with a narrow, removable workaround that links the upstream report (a pin to the last good release counts when that report proves the regression).

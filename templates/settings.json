@@ -1,6 +1,6 @@
 {
   "packages": [
-    "git:github.com/rkaliev/pi-engineering-kit@v0.26.0",
+    "git:github.com/rkaliev/pi-engineering-kit@v0.27.0",
     "npm:pi-subagents"
   ],
   "defaultThinkingLevel": "medium"
