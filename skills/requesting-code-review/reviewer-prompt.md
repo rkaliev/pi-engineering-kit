@@ -45,6 +45,9 @@ Also read in full any new file the diff introduces.
   preferences are Minor at most. Wordy prose is at most one grouped Minor; only a wrong statement
   in docs is a real finding.
 - Pre-existing defects go under Out of scope, unless they stop the changed behavior from working.
+- Read the whole diff. If its output is cut short or saved to a file, read it in parts
+  (`git diff --stat`, then one file at a time). Never review a silently truncated patch: a range
+  you could not read is Inconclusive.
 - Judge the changed lines and what they break, not the whole file. The checklist's fixed
   severities apply as written: "the repo does this everywhere" is debt, not a licence, and a
   severity never drops because the author argues.

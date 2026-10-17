@@ -14,8 +14,8 @@ A fix for a symptom is a failure. The pressure to guess is highest under time pr
 ## Phase 1: Root cause
 
 1. **Read the whole error**: the stack trace, codes, file and line numbers, and warnings above the error.
-2. **Reproduce it reliably.** Write down the exact steps. If you can't reproduce it, gather more data; don't guess.
-3. **Check what changed**: `git log`/`git diff`, dependency bumps, config, environment, data, OS or device version.
+2. **Reproduce it reliably.** Write down the exact steps. If you can't reproduce it, gather more data; don't guess. A failure that no longer reproduces is not evidence that it's gone.
+3. **Check what changed**: `git log`/`git diff`, dependency bumps, config, environment, data, OS or device version. That is the trigger. Keep it apart from the cause: why that change makes it fail.
 4. **Read the telemetry first** when it happens outside your machine: a bounded, read-only query of logs and traces by request or trace id (observability).
 5. **Instrument the boundaries.** In multi-component systems (UI → API → service → DB; CI → build → signing; POS → fiscal device), log what enters and leaves each boundary once. That shows where it breaks.
 6. **Trace backwards** from the bad value to where it first appears (`references/root-cause-tracing.md`). Fix at the source.
@@ -35,7 +35,18 @@ State one hypothesis: "X is the cause because Y." Test it with the smallest chan
 3. Verify: the new test passes, the full suite passes, and the original symptom is gone (verification-before-completion).
 4. **If three fixes have failed, stop.** When each fix reveals a new problem somewhere else, the architecture is wrong, not the hypothesis. Present what you learned and discuss with the user before a fourth attempt.
 
-If the cause really is external (network, vendor, timing), document what you investigated, add appropriate handling in the product code (a timeout, a retry with idempotency, a clear error) with a test for it, and add logging for next time. Tests themselves never retry (test-standard, "Retries"). Most "no root cause" conclusions are incomplete investigations.
+If the cause really is external (network, vendor, timing), document what you investigated and handle it at the boundary in the product code, on the current version: a timeout, a retry with idempotency or a clear error, with a test for it. Keep a workaround narrow and easy to remove (a pin to the last good release counts when the upstream report proves the regression), link that report, and add logging for next time. Tests themselves never retry (test-standard, "Retries"). Most "no root cause" conclusions are incomplete investigations.
+
+## Symptom remedies are not fixes
+
+Without a proven cause, these make the symptom go away and leave the defect in place:
+- a raised timeout, or an added retry, wait or sleep;
+- a rollback, downgrade or pinned version;
+- a skipped, quarantined or re-run test, or a weaker assertion;
+- an error caught and dropped, or filtered out of logs and alerts;
+- a looser validation, type or lint rule.
+
+Use one only when the user asks for it (report it as a remedy, with the unproven cause in Follow-ups), or when a rollback, confirmed by whoever owns the release, mitigates a live incident and the defect is still fixed on the current version. A timeout or limit set by the requirements is a requirement, not a remedy. When the evidence shows one of these is the real fix (a timeout below the measured normal latency), say so and show the measurement.
 
 ## Signals you're off track
 

@@ -15,7 +15,8 @@ Review feedback is a set of technical claims to verify, not orders to obey or pr
 4. **Evaluate**: is it correct for *this* codebase? Does it break existing behavior? Is there a reason for the current implementation (compatibility, a legal requirement, a device quirk)? Does it contradict an earlier decision by the user?
 5. **Respond** with a technical acknowledgment or with reasoned pushback.
 6. **Implement** one item at a time, in this order: blocking issues (breakage, security, money), simple fixes, complex fixes. Test each one and check for regressions.
-7. **Account for every item.** Each comment ends either fixed (with where) or answered (with why not). None is skipped silently. Don't call the review resolved while a blocking item is open or before a re-review has closed it, and don't reply again to a thread whose latest message is already yours.
+7. **Account for every item.** Feedback comes in three places: inline threads, the review's own body (where reviewers and bots often put nitpicks and findings outside the diff) and top-level comments. Each item ends either fixed (with where) or answered (with why not). None is skipped silently. Answer an inline finding in its thread, and the items of a review body in one reply that numbers them in the review's order. "Will fix later" doesn't close an item: fix it now, or decline it here and add it to the task file's Follow-ups (once that file is gone, to the final report). Nitpicks on an approval still count. Don't call the review resolved while a blocking item is open or before a re-review has closed it, and don't reply again to a thread whose latest message is already yours.
+8. **Report coverage**, one line per item: `fixed (<sha>, file:line)`, `replied (<why>)` or `failed (<why>)`. A PR is ready only when every item is closed, no changes-requested verdict stands and the required checks have all passed on its current head. Green checks alone don't make it ready.
 
 ## Pushback is part of the job
 
@@ -44,5 +45,5 @@ Propose it with the evidence; the user decides. Don't add a rule for what a chec
 - No performative agreement: no "You're absolutely right!", "Great catch!" or thanks.
 - State the fix instead: "Fixed: `parseAmount` now rejects negative values (payment.ts:42), test added."
 - If your pushback turns out wrong: "Checked: you're correct, X does Y. Fixing." Then move on.
-- When replying on a PR, answer in the inline thread, not in a new top-level comment.
+- While a blocking point still stands, even in part, lead with it: "Not changed: <what stands and why>; accepted: <what you fix>." Open with agreement ("Agreed", "You're right", "Fair point") only in a reply that names the fix.
 - Fixes pushed to a reviewed PR are a new commit: re-review the new range (requesting-code-review) before you report the PR ready again.

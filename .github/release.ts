@@ -1,8 +1,9 @@
 /**
- * Release notes for CI. `check` fails a PR whose package.json version has no CHANGELOG section, or whose
- * .claude-plugin/plugin.json disagrees with it; `notes <version>` prints that section for the GitHub Release.
+ * Release notes for CI. `check` fails a PR whose package.json version has no CHANGELOG section, whose
+ * .claude-plugin/plugin.json disagrees with it, or whose README, docs or templates pin another version of the
+ * package in an install source (`git:…/<name>@vX.Y.Z`); `notes <version>` prints that section for the GitHub Release.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +27,15 @@ export function checkRelease(dir: string): string {
 	if (existsSync(plugin)) {
 		const pluginVersion = readVersion(plugin);
 		if (pluginVersion !== version) throw new Error(`.claude-plugin/plugin.json has version ${pluginVersion}, package.json has ${version}`);
+	}
+	const name = String((JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: unknown }).name);
+	const pin = new RegExp(`git:\\S*/${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}@v(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]*[0-9A-Za-z])?)`, "g");
+	const listed = (folder: string, ext: RegExp) =>
+		existsSync(join(dir, folder)) ? readdirSync(join(dir, folder)).filter((f) => ext.test(f)).map((f) => `${folder}/${f}`) : [];
+	for (const file of ["README.md", ...listed("docs", /\.md$/), ...listed("templates", /\.(md|json)$/)].filter((f) => existsSync(join(dir, f)))) {
+		for (const m of readFileSync(join(dir, file), "utf8").matchAll(pin)) {
+			if (m[1] !== version) throw new Error(`${file} pins ${name}@v${m[1]}, package.json has ${version}`);
+		}
 	}
 	return version;
 }

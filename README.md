@@ -43,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.13.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.26.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.13.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.26.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -151,13 +151,13 @@ Built into pi without this extension: `defaultModel`, `enabledModels` (`Ctrl+P` 
 
 ```bash
 npm install
-npm test          # extension unit tests, test-hygiene, skill linter (frontmatter, budgets, links)
+npm test          # extension unit tests, test-hygiene, release check, skill linter (frontmatter, budgets, links, named skills and agents)
 npm run typecheck
 ```
 
 Edit skills with the `writing-skills` skill. Keep `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` in sync.
 
-**Releasing:** bump `version` in `package.json`, add its `## X.Y.Z` section to `CHANGELOG.md`, and merge to `main`. CI checks the section on every PR, and after a green run on `main` it creates the `vX.Y.Z` tag and GitHub Release with that section as the notes.
+**Releasing:** bump `version` in `package.json` and the `@vX.Y.Z` in the install sources of this README, the getting-started guides and `templates/settings.json`, add its `## X.Y.Z` section to `CHANGELOG.md`, and merge to `main`. CI checks the section and the pinned versions on every PR, and after a green run on `main` it creates the `vX.Y.Z` tag and GitHub Release with that section as the notes.
 
 **Name clashes:** pi silently keeps one prompt per name. With `pi install`, a project's own `.pi/prompts/implement.md` or `review.md` wins over this kit's; with `pi -e`, the kit wins. Rename one of them if you need both.
 
