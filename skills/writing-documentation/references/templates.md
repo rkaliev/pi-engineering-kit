@@ -50,7 +50,7 @@ File: `docs/NN-topic.md`, numbered in reading order and listed in `docs/README.m
 
 ## How it works
 
-<The main flows, as a table when there are several: intent | what happens | result. Name the entry points in code. A diagram where a flow has calls, branches or states (`diagrams.md`).>
+<The main flows, as a table when there are several: intent | what happens | result. Name the entry points in code. A diagram where a flow has calls, branches or states (`./diagrams.md`).>
 
 ## Rules and invariants
 

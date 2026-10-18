@@ -18,13 +18,13 @@ A diagram earns its place when the prose for the same thing would be a paragraph
 
 ## Rules
 
-- **Show the real mechanism.** Name nodes and arrows as the code does, `startExport` and `ExportWorker` rather than "API" and "worker", so a reader can grep from the picture to the code. An external system or a part with no symbol gets the name the config or the module path uses (`reportsBucket`, `src/workers/retry.ts`). No invented layers.
+- **Show the real mechanism.** Name nodes and arrows as the code does, `startExport` and `ExportWorker` rather than "API" and "worker", so a reader can grep from the picture to the code. An external system or a part with no symbol gets the name the config or the module path uses (`reportsBucket`, `src/exports/retry-worker.ts`). No invented layers.
 - **One idea per diagram, at most about 12 nodes.** A bigger one splits by question: the happy path, then the failure paths.
 - **Label every arrow** with what moves along it (the call, the message, the status code), and every branch with its condition.
 - **Limits by name, not number.** A retry count, timeout or size is labelled with the constant or setting that holds it (`maxAttempts`); the prose links to where it is set. A copied number goes stale when the config changes.
 - **Show failure paths** the reader will be paged for: rejections, retries, dead ends, and who gets alerted.
 - **One sentence next to it states the takeaway.** The prose around it carries what the picture can't, and links to the code.
-- **Render it before you report the doc done:** `mmdc`, the docs build or the host's preview; say which. A Mermaid syntax error shows the reader an error box instead of the diagram.
+- **Render it before you report the doc done:** `mmdc`, the host's preview, or the docs build if it fails on a broken diagram (`./checks.md`); say which. A Mermaid syntax error shows the reader an error box instead of the diagram.
 - **Same change as the code.** A diagram that no longer matches the code is a wrong doc; update or delete it with the change that broke it.
 
 ## Example
