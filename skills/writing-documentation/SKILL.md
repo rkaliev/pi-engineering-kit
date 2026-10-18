@@ -5,11 +5,11 @@ description: Use when writing or updating a README, project docs, an architectur
 
 # Writing documentation
 
-Docs are part of the change. They ship in the same commit or PR as the code they describe, and they describe the system as it is now. A doc that is wrong is worse than no doc: readers and agents act on it.
+Docs are part of the change. They ship in the same commit or PR as the code they describe, and they describe the system as it is now. A wrong doc is worse than none: readers and agents act on it.
 
 ## Follow the project first
 
-Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend that structure; introduce the layout below only where nothing exists, and say so.
+Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend it; use the layout below only where nothing exists, and say so.
 
 ## Where each thing goes
 
@@ -25,7 +25,7 @@ Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING,
 
 **Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Personal notes go in the agent's memory, not the repo.
 
-Templates: `references/templates.md`.
+Templates: `references/templates.md`. A site from `docs/`: `references/docs-site.md`.
 
 ## Prose
 
@@ -66,7 +66,7 @@ Report which of these you did. To enforce these rules mechanically, propose chec
 
 | Thought | Reality |
 |---|---|
-| "I'll update the docs later" | Later means never; the next reader gets the stale version. Same change. |
+| "I'll update the docs later" | Later means never; the next reader acts on the stale version. |
 | "I'll copy that section here too" | Two copies drift. Link to one. |
 | "Describe how it will work" | Docs describe what exists. Plans go in the task file. |
 | "The comment explains the code" | If it restates the code, delete it. |
