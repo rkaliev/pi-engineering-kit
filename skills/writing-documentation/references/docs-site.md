@@ -7,7 +7,8 @@ A site is another way to read `docs/`, not a second copy of it. It is worth havi
 - **Every word lives in `docs/`.** The site config holds the theme, the menu and the base path, never text. A page rendered only on the site is a page the repo doesn't have.
 - **The chapters stay plain Markdown** with a `# Title` heading, readable on the repo host. A generator that needs frontmatter on every page, or its own content folder, is the wrong one for an existing `docs/`.
 - **The menu comes from the files**, in their `NN-` order, never from a list typed into the config. A typed list is a second index: a new chapter missing from it is a page nobody finds. `docs/README.md` stays the index readers see first.
-- **Links work in both places.** A link to a folder works on the repo host but is a missing page on the site: link the folder's `README.md`. A link out of `docs/` (to code) is a 404 on the site: rewrite it to the file's URL on the repo host in the config, or write the full URL.
+- **Links work in both places.** Link a folder through its `README.md`, and the site serves that file as the folder's index. A link out of `docs/` (to code) is a 404 on the site: the config rewrites it to the file's URL on the repo host. Check what the generator does with both; the example below handles them for VitePress.
+- **Working files stay off the site.** Task files (`docs/tasks/`) are excluded from the build and the search.
 
 ## Choosing the generator
 
@@ -19,52 +20,62 @@ Before adding one, check that it is maintained (recent releases, no end-of-life 
 
 ## The build is a check
 
-- **Strict:** a dead link or a missing page fails the build, in CI on every PR that touches `docs/`.
-- **After the build,** check the links in the output: `lychee --offline <output dir>` finds the links the generator lets through (code paths, rewritten URLs).
-- **Diagrams:** VitePress (through a plugin) and Zensical draw Mermaid in the browser, so a broken diagram builds fine; keep the `mmdc` check from `./checks.md`.
+- **Strict,** in CI on every PR that touches `docs/`, as a job the required `gate` job depends on (ci-quality-gates): a dead link or a missing page fails it.
+- **After the build,** check the links in the output offline: `lychee --offline --root-dir <absolute output dir> <output dir>` (output built with base `/`) finds local links the generator let through. Links to the repo host need an online run (lychee without `--offline`), for example on a schedule.
+- **Anchors** across pages are not checked by the build, and GitHub and VitePress slug some headings differently; link pages rather than headings where you can.
+- **Diagrams:** VitePress (through `vitepress-plugin-mermaid`) and Zensical draw Mermaid in the browser, so a broken diagram builds fine; keep the `mmdc` check from `./checks.md`.
 - **Index:** every chapter is in `docs/README.md` (the index check in `./checks.md`).
 
 ## Publishing
 
-Publishing is an outward action. Before setting up a deploy, agree with the user:
-- **who may read it.** A public site publishes all of `docs/`, decision records included, and a Pages site of a private repo can be public. Exclude what isn't for that audience, or choose access-controlled hosting.
+Publishing is an outward action. Before setting up a deploy or PR previews, agree with the user:
+- **who may read it.** A public site publishes all of `docs/`, decision records included; PR previews are usually public too, and a Pages site of a private repo can be public. Exclude what isn't for that audience, or choose access-controlled hosting.
 - **when it updates:** on merge to the base branch, from CI; never from a laptop.
-
-Build previews from the PR where the host offers them.
 
 ## Example: VitePress on an existing docs/
 
-`docs/.vitepress/config.mts`, with `npx vitepress build docs` as the build command:
+`docs/.vitepress/config.mts`, with `npx vitepress build docs` as the build command. It assumes `docs/` sits at the repo root; diagrams need `vitepress-plugin-mermaid` on top.
 
 ```ts
 import { readdirSync, readFileSync } from 'node:fs'
-import { posix } from 'node:path'
+import { dirname, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitepress'
 
-const docs = new URL('..', import.meta.url)
-const repoFiles = 'https://github.com/<org>/<repo>/blob/main/'
+const docsDir = fileURLToPath(new URL('..', import.meta.url))
+const repoDir = resolve(docsDir, '..')
+const repoFiles = '<repo URL>/blob/<base branch>/' // GitLab: <repo URL>/-/blob/<base branch>/
 
 // The menu is built from the chapter files, so no chapter can be missing from it.
-const chapters = readdirSync(docs)
+const chapters = readdirSync(docsDir)
   .filter((f) => /^\d+-.+\.md$/.test(f))
   .sort()
   .map((f) => ({
-    text: readFileSync(new URL(f, docs), 'utf8').match(/^# (.+)$/m)?.[1] ?? f,
+    text: readFileSync(resolve(docsDir, f), 'utf8').match(/^# (.+)$/m)?.[1] ?? f,
     link: `/${f.replace(/\.md$/, '')}`,
   }))
 
 export default defineConfig({
   title: '<project>',
   base: process.env.DOCS_BASE ?? '/',
+  srcExclude: ['tasks/**'],
   rewrites: { 'README.md': 'index.md', ':dir/README.md': ':dir/index.md' },
   markdown: {
     config(md) {
-      // Links that leave docs/ (to code) open on the repo host.
       const render = md.renderer.rules.link_open ?? ((t, i, o, _e, self) => self.renderToken(t, i, o))
       md.renderer.rules.link_open = (tokens, i, options, env, self) => {
         const href = tokens[i].attrGet('href') ?? ''
-        const path = posix.normalize(posix.join('docs', posix.dirname(env.relativePath), href))
-        if (!/^[a-z]+:|^#/.test(href) && !path.startsWith('docs/')) tokens[i].attrSet('href', repoFiles + path)
+        if (!/^[a-z]+:|^#/.test(href)) {
+          const page = env.realPath ?? resolve(docsDir, env.relativePath) // the search index sets no realPath
+          const target = resolve(dirname(page), href.replace(/#.*$/, ''))
+          if (relative(docsDir, target).startsWith('..')) {
+            // Code and other files outside docs/ open on the repo host.
+            tokens[i].attrSet('href', repoFiles + relative(repoDir, target).split('\\').join('/'))
+          } else {
+            // A folder's README.md is served as its index page.
+            tokens[i].attrSet('href', href.replace(/(^|\/)README\.md(?=#|$)/, '$1index.md'))
+          }
+        }
         return render(tokens, i, options, env, self)
       }
     },

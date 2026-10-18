@@ -1,6 +1,6 @@
 ---
 name: writing-documentation
-description: Use when writing or updating a README, project docs, an architecture decision record, a changelog, API docs or code comments, or when a change alters behavior, setup or commands that docs describe
+description: Use when writing or updating a README, project docs, an architecture decision record, a changelog, API docs or code comments, publishing docs as a site, or when a change alters behavior, setup or commands that docs describe
 ---
 
 # Writing documentation
@@ -9,7 +9,7 @@ Docs are part of the change. They ship in the same commit or PR as the code they
 
 ## Follow the project first
 
-Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend it; use the layout below only where nothing exists, and say so.
+Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend that structure; use the layout below only where nothing exists, and say so.
 
 ## Where each thing goes
 
@@ -23,7 +23,7 @@ Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING,
 | API reference | Exact contract of an interface | generated from the source of truth (OpenAPI from schemas or code, typedoc, KDoc, DocC); never hand-maintained in parallel |
 | Code comments | Why this code is the way it is | next to the code |
 
-**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Personal notes go in the agent's memory, not the repo.
+**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Personal notes go in agent memory, not the repo.
 
 Templates: `references/templates.md`. A site from `docs/`: `references/docs-site.md`.
 

@@ -10,6 +10,6 @@ Rules that a tool can check belong in the project's checks, not only in review. 
 | TODO/FIXME carry an issue or owner | a lint rule or a grep in CI |
 | API reference matches the code | regenerate in CI (OpenAPI from schemas, typedoc, Dokka, DocC) and fail on a diff |
 | Diagrams render | `@mermaid-js/mermaid-cli`: `mmdc -i <file>.md -o <temp dir>/out.md` per file (it writes SVGs next to its output, so point it outside the tree; it needs a headless Chromium). A docs site build counts only if it renders diagrams at build time and fails on a parse error; most render them in the browser and pass a broken one |
-| Docs site builds | the generator's strict build on every PR that touches `docs/` (`vitepress build docs` fails on a dead link by default; `zensical build --strict`), then `lychee --offline <output dir>` for the links it lets through (`./docs-site.md`) |
+| Docs site builds | the generator's strict build on every PR that touches `docs/` (`vitepress build docs` fails on a dead link by default; `zensical build --strict`), then `lychee --offline --root-dir <absolute output dir> <output dir>` for the local links it lets through (`./docs-site.md`) |
 | Docs index is complete | a small script: every file under `docs/` is linked from `docs/README.md` |
 | Task files don't reach the base branch | the `working-docs` job from the ci-quality-gates templates |
