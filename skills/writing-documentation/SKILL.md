@@ -23,7 +23,7 @@ Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING,
 | API reference | Exact contract of an interface | generated from the source of truth (OpenAPI from schemas or code, typedoc, KDoc, DocC); never hand-maintained in parallel |
 | Code comments | Why this code is the way it is | next to the code |
 
-**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Every document keeps only its current version, so context stays small and consistent. Personal notes go in the agent's memory, not the repo.
+**Working** documents (task files in `docs/tasks/`) live on the work branch and are deleted when the work is done; only the **system** documents above reach the base branch. First move what lasts: behavior into the topic chapter, decisions into decision records. Personal notes go in the agent's memory, not the repo.
 
 Templates: `references/templates.md`.
 
@@ -32,6 +32,7 @@ Templates: `references/templates.md`.
 - **Present tense, current state.** No history ("previously", "was changed to"), no ticket IDs, no "new" or "now". History lives in git and the changelog.
 - **Say it once.** Link to the single source instead of restating it. Versions, ports and limits are pointers to the file that sets them (`.nvmrc`, `libs.versions.toml`, config), not copied numbers.
 - **Write for the reader who will act.** Lead with the task. Short sentences, one idea per paragraph, one name per concept.
+- **Draw what prose can't show plainly** (calls, failure paths, states): Mermaid, named as in the code (`references/diagrams.md`).
 - **Real examples only.** Commands, paths and snippets are copied from something that ran. Mark placeholders clearly (`<project-dir>`).
 - **Links resolve.** In-repo links are relative Markdown links to files that exist; references to code name the file (and symbol), not a line number that will move.
 
