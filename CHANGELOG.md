@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.0
+
+- **Diagrams in documentation.** writing-documentation says to draw what prose can't show plainly (calls between components, failure paths, states) and points to `references/diagrams.md`: Mermaid in the Markdown by default (a plain-text drawing only where Mermaid doesn't render, images only generated from a committed source), which diagram type for which question, names as in the code, one idea and about 12 nodes per diagram, labelled arrows, failure paths, one sentence with the takeaway, updated in the same change as the code. `references/checks.md` adds a render check (`mmdc`). An agent documenting a webhook flow without the rule wrote steps and tables but no diagram; with it, a sequence diagram with every failure branch.
+
 ## 0.27.0
 
 - **`/implement` runs on the strongest model.** The routing template sends `implement` to the `deep` mode (was `fast`), with brainstorm, plan, debug and review; onboard, finish and docs stay on `fast`, new-task on `cheap`. The README's pi-subagents advice puts `worker`, which writes the code, on the most capable model with `reviewer` and `oracle`. `/implement` sessions cost more. `/kit-init` doesn't overwrite an existing `.pi/model-routing.json`: set `"implement": "deep"` there (and in `~/.pi/agent/model-routing.json`) yourself to get it.
