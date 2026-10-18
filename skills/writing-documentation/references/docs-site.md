@@ -21,7 +21,7 @@ Before adding one, check that it is maintained (recent releases, no end-of-life 
 ## The build is a check
 
 - **Strict,** in CI on every PR, as a job the required `gate` job depends on (ci-quality-gates): a dead link or a missing page fails it. Don't limit it to PRs that touch `docs/`: the gate fails on a skipped job, and a code change can break a link to code.
-- **Links to code** are checked on the Markdown source, before the rewrite: `lychee --offline docs` (the links row in `./checks.md`).
+- **Links to code** are checked on the Markdown source, before the rewrite: `lychee --offline --root-dir <absolute repo dir> --exclude-path docs/tasks docs` (the root makes `/src/…` links resolve as on the repo host; the links row in `./checks.md`).
 - **After the build,** check the links in the output offline: `lychee --offline --root-dir <absolute output dir> <output dir>` (output built with base `/`) finds local links the generator let through. The rewritten repo-host URLs it skips are the code links already checked on the source.
 - **Anchors** across pages are not checked by the build, and GitHub and VitePress slug some headings differently; link pages rather than headings where you can.
 - **Diagrams:** VitePress (through `vitepress-plugin-mermaid`) and Zensical draw Mermaid in the browser, so a broken diagram builds fine; keep the `mmdc` check from `./checks.md`.
@@ -77,8 +77,8 @@ export default defineConfig({
             tokens[i].attrSet('href', repoFiles + posixPath(relative(repoDir, target)) + rest)
           } else if (path.startsWith('/') || /(^|\/)README\.md$/.test(path)) {
             // Made relative so the dead-link check sees it; a folder's README.md is its index page.
-            const link = posixPath(relative(dirname(page), target)).replace(/(^|\/)README\.md$/, '$1index.md')
-            tokens[i].attrSet('href', link + rest)
+            const link = (posixPath(relative(dirname(page), target)) || '.') + (path.endsWith('/') ? '/' : '')
+            tokens[i].attrSet('href', link.replace(/(^|\/)README\.md$/, '$1index.md') + rest)
           }
         }
         return render(tokens, i, options, env, self)
