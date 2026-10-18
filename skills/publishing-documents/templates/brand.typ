@@ -1,4 +1,4 @@
-// PDF theme for publish.ts: pandoc's Typst template calls conf() with the document's metadata.
+// PDF theme for publish.mts: pandoc's Typst template calls conf() with the document's metadata.
 // Once copied into a project it belongs to that project: change the values below to its brand.
 #let accent = rgb("#1f4e79")
 #let body-font = ("Libertinus Serif",)
@@ -30,7 +30,7 @@
   show heading.where(level: 1): it => { v(0.6em); it; v(0.2em) }
   show outline: it => { it; pagebreak() }
 
-  // Cover. pandoc forwards only fixed fields to conf(), so publish.ts passes the audience and version as `thanks`.
+  // Cover. pandoc forwards only fixed fields to conf(), so publish.mts passes the audience and version as `thanks`.
   page(header: none, footer: none)[
     #v(25%)
     #line(length: 100%, stroke: 3pt + accent)

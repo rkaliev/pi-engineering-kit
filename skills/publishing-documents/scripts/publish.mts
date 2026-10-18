@@ -1,9 +1,9 @@
 /**
  * Builds a standalone HTML file and a PDF from the repo's Markdown, for readers outside the repo.
  *
- *   node publish.ts (<file.md>… | --docs [<dir>] | --changelog <version> [<file>]) --out <dir>
+ *   node publish.mts (<file.md>… | --docs [<dir>] | --changelog <version> [<file>]) --out <dir>
  *        [--theme <dir>] [--repo-url <url> | --drop-repo-links] [--title …] [--subtitle …] [--audience …] [--version …] [--date …] [--lang …] [--author …]
- *   node publish.ts --init-theme <dir>
+ *   node publish.mts --init-theme <dir>
  *
  * Sources are read as GitHub-style Markdown (pandoc's commonmark_x) into pandoc's JSON tree, where links, heading
  * ids and images are checked and rewritten; the combined tree is written to HTML and to PDF (Typst).
@@ -35,7 +35,14 @@ export function extractChangelog(text: string, version: string): string | null {
 	if (start < 0) return null;
 	const level = lines[start]!.match(heading)![1]!.length;
 	const rest = lines.slice(start + 1);
-	const end = rest.findIndex((l) => new RegExp(`^#{1,${level}} `).test(l));
+	// The section ends at a heading of the same or a higher level, or at any version heading
+	// (semantic-release writes minors as `#` and patches as `##`); `#` lines inside code fences don't count.
+	let fence: string | undefined;
+	const end = rest.findIndex((l) => {
+		const f = l.match(/^\s*(`{3,}|~{3,})/)?.[1];
+		if (f && (!fence || f[0] === fence[0])) fence = fence ? undefined : f;
+		return !fence && !f && (new RegExp(`^#{1,${level}} `).test(l) || /^#{1,6} \[?v?\d+\.\d+/.test(l));
+	});
 	return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
 }
 
@@ -55,7 +62,6 @@ function toPosix(p: string): string {
 // ---------------------------------------------------------------- pandoc's JSON tree
 
 /** A node of pandoc's JSON AST: `t` is the type, `c` its contents (shape depends on the type). */
-// biome-ignore lint/suspicious/noExplicitAny: pandoc's AST is untyped JSON
 export type Node = { t: string; c?: any };
 export type Doc = { "pandoc-api-version": number[]; meta: Record<string, Node>; blocks: Node[] };
 
@@ -113,6 +119,8 @@ export function indexChapters(doc: Doc): string[] {
 export type SourceOptions = {
 	from: string;
 	chapters: Map<string, string>;
+	/** Each chapter's own ids (by chapter anchor), to check `NN-x.md#frag` links; unchecked when absent. */
+	chapterIds?: Map<string, Set<string>>;
 	anchor?: string;
 	repoDir: string;
 	repoUrl?: string;
@@ -131,21 +139,18 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 	const findings: string[] = [];
 	const fromRel = toPosix(relative(o.repoDir, o.from));
 	const id = (local: string) => (o.anchor && local ? `${o.anchor}--${local}` : local);
-	const ids = new Set<string>();
-	walk(doc.blocks, (n) => {
-		const attr = attrOf(n);
-		if (attr?.[0]) ids.add(attr[0]);
-		return undefined;
-	});
+	const ids = idsOf(doc.blocks);
 	const resolveTarget = (path: string) => (path.startsWith("/") ? resolve(o.repoDir, `.${path}`) : resolve(dirname(o.from), path));
 
 	const blocks = walk(doc.blocks, (n) => {
 		const attr = attrOf(n);
 		if (attr?.[0]) attr[0] = id(attr[0]);
 		if (n.t === "RawInline" || n.t === "RawBlock") {
-			if (/^html/.test(n.c[0]))
-				for (const m of (n.c[1] as string).matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi))
-					if (!isExternal(m[1]!)) findings.push(`${fromRel}: raw HTML link ${m[1]}: write it as a Markdown link`);
+			if (!/^html/.test(n.c[0])) return undefined;
+			for (const m of (n.c[1] as string).matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi))
+				if (!isExternal(m[1]!)) findings.push(`${fromRel}: raw HTML link ${m[1]}: write it as a Markdown link`);
+			// Anchors written as raw HTML (`<a id>`, `<a name>`) move into the chapter's namespace too.
+			n.c[1] = (n.c[1] as string).replace(RAW_ID, (_, k: string, q: string, v: string) => `${k}=${q}${id(v)}${q}`);
 			return undefined;
 		}
 		if (n.t !== "Link" && n.t !== "Image") return undefined;
@@ -154,7 +159,8 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 		const [, rawPath, rest] = url.match(/^([^?#]*)(.*)$/)!;
 		if (!rawPath) {
 			const frag = decode(rest!.slice(1));
-			if (n.t === "Link" && frag) {
+			if (n.t === "Link" && frag === "top" && !ids.has(frag)) n.c[2][0] = o.anchor ? `#${o.anchor}` : "#top";
+			else if (n.t === "Link" && frag) {
 				if (!ids.has(frag)) findings.push(`${fromRel}: anchor #${frag} not found`);
 				n.c[2][0] = `#${id(frag)}`;
 			}
@@ -168,13 +174,29 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 		}
 		const chapter = o.chapters.get(target);
 		const frag = rest!.startsWith("#") ? decode(rest!.slice(1)) : "";
+		if (chapter && frag && o.chapterIds?.get(chapter) && !o.chapterIds.get(chapter)!.has(frag)) findings.push(`${fromRel}: ${url} not found`);
 		if (chapter) n.c[2][0] = frag ? `#${chapter}--${frag}` : `#${chapter}`;
 		else if (o.dropRepoLinks) return { t: "Span", c: [["", [], []], n.c[1]] };
 		else if (o.repoUrl) n.c[2][0] = `${o.repoUrl.replace(/\/$/, "")}/${toPosix(relative(o.repoDir, target))}${rest}`;
 		else outside.push(`${fromRel}: ${url}`);
 		return undefined;
 	}) as Node[];
-	return { blocks: o.anchor ? [{ t: "Div", c: [[o.anchor, [], []], blocks] }] : blocks, outside, images, findings };
+	// An empty marker, not a wrapper: pandoc's contents list doesn't look inside a Div that doesn't start with a heading.
+	return { blocks: o.anchor ? [{ t: "Div", c: [[o.anchor, [], []], []] }, ...blocks] : blocks, outside, images, findings };
+}
+
+const RAW_ID = /\b(id|name)\s*=\s*(["'])([^"']+)\2/gi;
+
+/** Every id a source defines: headings, divs, spans, code, and `id`/`name` in raw HTML. */
+export function idsOf(blocks: unknown): Set<string> {
+	const ids = new Set<string>();
+	walk(blocks, (n) => {
+		const attr = attrOf(n);
+		if (attr?.[0]) ids.add(attr[0]);
+		if ((n.t === "RawInline" || n.t === "RawBlock") && /^html/.test(n.c[0])) for (const m of (n.c[1] as string).matchAll(RAW_ID)) ids.add(m[3]!);
+		return undefined;
+	});
+	return ids;
 }
 
 /** A URL with a scheme, a protocol-relative URL, or data: — nothing to check locally. */
@@ -292,11 +314,11 @@ function tool(cmd: string, args: string[], o: { cwd?: string; input?: string } =
 
 /** Parses GitHub-style Markdown into pandoc's tree. */
 function parse(text: string): Doc | string {
-	const r = tool("pandoc", ["-f", "commonmark_x", "-t", "json"], { input: text });
+	const r = tool("pandoc", ["-f", "commonmark_x+autolink_bare_uris", "-t", "json"], { input: text });
 	return r.error ? r.error : (JSON.parse(r.stdout) as Doc);
 }
 
-/** Text from metadata in a source's frontmatter, for the keys publish.ts understands. */
+/** Text from metadata in a source's frontmatter, for the keys publish.mts understands. */
 function metaOf(doc: Doc): Meta {
 	const meta: Meta = {};
 	for (const k of META_KEYS) {
@@ -326,6 +348,12 @@ function collectSources(ctx: Ctx): { sources: Source[]; name: string; meta: Meta
 	if (a.files.length) {
 		const several = a.files.length > 1;
 		if (several && !a.meta.title) findings.push("several files make one document: pass --title");
+		const seen = new Map<string, string>();
+		for (const f of a.files) {
+			const other = seen.get(basename(f));
+			if (several && other) findings.push(`${other} and ${f} have the same file name: one document can't hold both chapters' anchors`);
+			seen.set(basename(f), f);
+		}
 		const sources = a.files.map((f) => read(f, several ? chapterAnchor(basename(f)) : undefined)).filter((s): s is Source => !!s);
 		return { sources, name: several ? slug(a.meta.title ?? "") : basename(a.files[0]!).replace(/\.md$/, ""), meta: {} };
 	}
@@ -365,13 +393,16 @@ function prepare(ctx: Ctx, collected: ReturnType<typeof collectSources>, build: 
 	let api: number[] = [];
 	let diagrams = 0;
 	let mmdc: { missing?: string } | undefined; // checked once, at the first diagram
+	// Parse everything first, so a link into another chapter can be checked against that chapter's ids.
+	const docs = sources.map((s) => parse(s.text));
+	const chapterIds = new Map(sources.flatMap((s, i) => (s.anchor && typeof docs[i] !== "string" ? [[s.anchor, idsOf((docs[i] as Doc).blocks)]] : [])));
 	sources.forEach((s, i) => {
-		const doc = parse(s.text);
+		const doc = docs[i]!;
 		if (typeof doc === "string") return void findings.push(`${rel(s.path)}: ${doc}`);
 		api = doc["pandoc-api-version"];
 		if (sources.length === 1 && !collected.index && !a.changelog) meta = { ...metaOf(doc), ...meta };
 		const assetsDir = `assets/${i + 1}`;
-		const r = prepareSource(doc, { from: s.path, chapters, anchor: s.anchor, repoDir, repoUrl: a.repoUrl, dropRepoLinks: a.dropRepoLinks, assetsDir });
+		const r = prepareSource(doc, { from: s.path, chapters, chapterIds, anchor: s.anchor, repoDir, repoUrl: a.repoUrl, dropRepoLinks: a.dropRepoLinks, assetsDir });
 		findings.push(...r.outside, ...r.findings);
 		r.images.forEach((img, n) => {
 			if (!existsSync(img)) return void findings.push(`${rel(s.path)}: image ${rel(img)} not found`);
@@ -394,7 +425,7 @@ function prepare(ctx: Ctx, collected: ReturnType<typeof collectSources>, build: 
 	return { blocks, meta, api };
 }
 
-/** Step 3: one tree, two outputs. Returns the built files' paths in `build`, or nothing when a build failed. */
+/** Step 3: one tree, two outputs, written to `out.html` and `out.pdf` in `build`; false when a build or the final check failed. */
 function build(ctx: Ctx, prepared: ReturnType<typeof prepare>, theme: string, build: string): boolean {
 	const { findings } = ctx;
 	const m = prepared.meta;

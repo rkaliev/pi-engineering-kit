@@ -18,7 +18,7 @@ A copy edited for one reader drifts from the docs. When a chapter must differ fo
 ## Build
 
 ```bash
-node "<this skill's directory>/scripts/publish.ts" docs/01-overview.md docs/02-integration.md \
+node "<this skill's directory>/scripts/publish.mts" docs/01-overview.md docs/02-integration.md \
   --title "Payouts integration" --audience "Acme" --version 1.4 --out <ignored dir>
 ```
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chapterAnchor, checkTools, extractChangelog, indexChapters, prepareSource, stringify, type Doc, type Node } from "../skills/publishing-documents/scripts/publish.ts";
+import { chapterAnchor, checkTools, extractChangelog, indexChapters, prepareSource, stringify, type Doc, type Node } from "../skills/publishing-documents/scripts/publish.mts";
 
 test("extractChangelog returns one version's section", () => {
 	const plain = "# Changelog\n\n## 0.2.0\n\n- b\n\n## 0.1.0\n\n- a\n";
@@ -63,14 +63,14 @@ test("checkTools: typst is required; mmdc only with diagrams", () => {
 
 // ---------------------------------------------------------------- the build (needs the real tools)
 
-const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "../skills/publishing-documents/scripts/publish.ts");
+const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "../skills/publishing-documents/scripts/publish.mts");
 const KIT_THEME = resolve(dirname(SCRIPT), "../templates");
 const NO_TOOLS = checkTools({ mermaid: true }).length > 0;
 const SKIP = "mode: needs pandoc, typst and mmdc";
 /** A 1×1 PNG. */
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 
-/** A throwaway project; `run` executes publish.ts in it. */
+/** A throwaway project; `run` executes publish.mts in it. */
 function project(t: TestContext, files: Record<string, string | Buffer>) {
 	const dir = mkdtempSync(join(tmpdir(), "publish-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -177,6 +177,7 @@ test("publish: a relative image and a Cyrillic chapter name reach both outputs",
 	const r = p.run("--docs", "--out", "out", "--lang", "ru");
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(p.read("out/documentation.html"), /src="data:image\/png;base64,/);
+	assert.doesNotMatch(p.read("out/documentation.html"), /<figcaption/);
 	assert.ok(statSync(join(p.dir, "out/documentation.pdf")).size > 1000);
 });
 
@@ -274,10 +275,9 @@ test("prepareSource: links to chapters become anchors; titled, angle-bracket and
 
 test("prepareSource: a chapter gets its own namespace and its fragments are checked", () => {
 	const r = prepareSource(doc(header(1, "setup", "Setup"), header(2, "overview", "Overview"), para(link("o", "#overview"), link("n", "#nope"))), { ...opts, anchor: "ch-01-setup" });
-	const div = r.blocks[0]!;
-	assert.equal(div.t, "Div");
-	assert.equal(div.c[0][0], "ch-01-setup");
-	assert.deepEqual(div.c[1].slice(0, 2).map((h: Node) => h.c[1][0]), ["ch-01-setup--setup", "ch-01-setup--overview"]);
+	const [marker, ...rest] = r.blocks;
+	assert.deepEqual(marker, { t: "Div", c: [["ch-01-setup", [], []], []] }, "an empty marker, so the contents list still sees the chapter's headings");
+	assert.deepEqual(rest.slice(0, 2).map((h: Node) => h.c[1][0]), ["ch-01-setup--setup", "ch-01-setup--overview"]);
 	assert.deepEqual(urls(r.blocks), ["#ch-01-setup--overview", "#ch-01-setup--nope"]);
 	assert.deepEqual(r.findings, ["docs/01-setup.md: anchor #nope not found"]);
 	const single = prepareSource(doc(header(2, "overview", "Overview"), para(link("o", "#overview"))), opts);
@@ -323,7 +323,7 @@ test("publish: Markdown as GitHub reads it — CRLF frontmatter, a list after a 
 	const p = project(t, {
 		"docs/publish/crlf.md": "---\r\ntitle: CRLF guide\r\nsubtitle: For partners\r\naudience: Acme\r\nversion: 2\r\ndate: 2026-10-01\r\nlang: en\r\nauthor: Team\r\n---\r\n\r\nIt contains:\r\n- one\r\n- two\r\n",
 		"docs/01-a.md": "# A\n\n## Overview\n\nSee [this](#overview).\n",
-		"docs/02-b.md": "# B\n\n## Overview\n\nSee [this](#overview).\n",
+		"docs/02-b.md": "Intro first.\n\n# B\n\n## Overview\n\nSee [this](#overview) and https://example.com/docs.\n",
 	});
 	const r = p.run("docs/publish/crlf.md", "--out", "out");
 	assert.equal(r.status, 0, r.stderr);
@@ -334,6 +334,10 @@ test("publish: Markdown as GitHub reads it — CRLF frontmatter, a list after a 
 	const two = p.run("docs/01-a.md", "docs/02-b.md", "--title", "Both", "--out", "out2");
 	assert.equal(two.status, 0, two.stderr);
 	const both = p.read("out2/both.html");
+	const toc = both.slice(both.indexOf('<nav id="TOC"'), both.indexOf("</nav>"));
+	assert.match(toc, /href="#ch-01-a--a"/);
+	assert.match(toc, /href="#ch-02-b--b"/, "a chapter that starts with a paragraph is still in the contents");
+	assert.match(both, /<a href="https:\/\/example\.com\/docs"/, "a bare URL is a link, as on GitHub");
 	for (const ch of ["ch-01-a", "ch-02-b"]) {
 		assert.match(both, new RegExp(`id="${ch}--overview"`));
 		assert.match(both, new RegExp(`href="#${ch}--overview"`));
@@ -365,4 +369,38 @@ test("extractChangelog: release-please and semantic-release headings", () => {
 	assert.equal(extractChangelog(rp, "1.2.0"), "### Features\n\n* a");
 	const sr = "# [1.3.0](https://x/compare) (2026-10-02)\n\n### Bug Fixes\n\n* c\n\n# [1.2.0](https://x) (2026-10-01)\n\n* d\n";
 	assert.equal(extractChangelog(sr, "1.3.0"), "### Bug Fixes\n\n* c");
+});
+
+test("prepareSource: an anchor in another chapter is checked when its ids are known", () => {
+	const chapterIds = new Map([["ch-02-flow", new Set(["overview"])]]);
+	const r = prepareSource(doc(para(link("o", "02-flow.md#overview"), link("n", "02-flow.md#nope"))), { ...opts, anchor: "ch-01-setup", chapterIds });
+	assert.deepEqual(urls(r.blocks), ["#ch-02-flow--overview", "#ch-02-flow--nope"]);
+	assert.deepEqual(r.findings, ["docs/01-setup.md: 02-flow.md#nope not found"]);
+});
+
+test("prepareSource: #top and anchors from raw HTML are not findings", () => {
+	const src = doc({ t: "RawBlock", c: ["html", '<a id="legacy"></a><a name="old"></a>'] }, para(link("t", "#top"), link("l", "#legacy"), link("o", "#old")));
+	const inChapter = prepareSource(src, { ...opts, anchor: "ch-01-setup" });
+	assert.deepEqual(inChapter.findings, []);
+	assert.deepEqual(urls(inChapter.blocks), ["#ch-01-setup", "#ch-01-setup--legacy", "#ch-01-setup--old"]);
+	assert.match(JSON.stringify(inChapter.blocks), /id=\\"ch-01-setup--legacy\\".*name=\\"ch-01-setup--old\\"/);
+	const single = prepareSource(src, opts);
+	assert.deepEqual(single.findings, []);
+	assert.deepEqual(urls(single.blocks), ["#top", "#legacy", "#old"]);
+});
+
+test("extractChangelog: a # line in code doesn't end a section; a patch section after a minor is its own", () => {
+	const fenced = "## 1.2.0\n\n- renamed\n\n```sh\n# rename the variable\nmv a b\n```\n\n## 1.1.0\n\n- old\n";
+	assert.equal(extractChangelog(fenced, "1.2.0"), "- renamed\n\n```sh\n# rename the variable\nmv a b\n```");
+	const sr = "# [1.3.0](https://x) (2026-10-03)\n\n* feature\n\n## [1.2.1](https://x) (2026-10-02)\n\n* fix\n\n# [1.2.0](https://x) (2026-10-01)\n\n* older\n";
+	assert.equal(extractChangelog(sr, "1.3.0"), "* feature");
+	assert.equal(extractChangelog(sr, "1.2.1"), "* fix");
+});
+
+test("publish: two sources with the same file name fail before the tools are needed", (t) => {
+	const p = project(t, { "docs/01-setup.md": "# A\n", "docs/publish/01-setup.md": "# B\n" });
+	const r = p.run("docs/01-setup.md", "docs/publish/01-setup.md", "--title", "T", "--out", "out");
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /docs\/01-setup\.md and docs\/publish\/01-setup\.md have the same file name/);
+	assert.ok(!existsSync(join(p.dir, "out")));
 });
