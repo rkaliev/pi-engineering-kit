@@ -383,7 +383,9 @@ test("prepareSource: #top and anchors from raw HTML are not findings", () => {
 	const inChapter = prepareSource(src, { ...opts, anchor: "ch-01-setup" });
 	assert.deepEqual(inChapter.findings, []);
 	assert.deepEqual(urls(inChapter.blocks), ["#ch-01-setup", "#ch-01-setup--legacy", "#ch-01-setup--old"]);
-	assert.match(JSON.stringify(inChapter.blocks), /id=\\"ch-01-setup--legacy\\".*name=\\"ch-01-setup--old\\"/);
+	assert.doesNotMatch(JSON.stringify(inChapter.blocks), /(id|name)=\\"/, "the ids move from the raw HTML to the markers, so they aren't duplicated");
+	const markers = JSON.stringify(inChapter.blocks).match(/\["ch-01-setup--(legacy|old)",\[\],\[\]\],\[\]/g);
+	assert.equal(markers?.length, 2, "each raw-HTML anchor gets an empty marker, so the PDF has the target too");
 	const single = prepareSource(src, opts);
 	assert.deepEqual(single.findings, []);
 	assert.deepEqual(urls(single.blocks), ["#top", "#legacy", "#old"]);
@@ -395,6 +397,7 @@ test("extractChangelog: a # line in code doesn't end a section; a patch section 
 	const sr = "# [1.3.0](https://x) (2026-10-03)\n\n* feature\n\n## [1.2.1](https://x) (2026-10-02)\n\n* fix\n\n# [1.2.0](https://x) (2026-10-01)\n\n* older\n";
 	assert.equal(extractChangelog(sr, "1.3.0"), "* feature");
 	assert.equal(extractChangelog(sr, "1.2.1"), "* fix");
+	assert.equal(extractChangelog("## 3.0.0\n\n### 2.0 migration\n\n- steps\n\n## 2.9.0\n", "3.0.0"), "### 2.0 migration\n\n- steps");
 });
 
 test("publish: two sources with the same file name fail before the tools are needed", (t) => {
@@ -403,4 +406,14 @@ test("publish: two sources with the same file name fail before the tools are nee
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /docs\/01-setup\.md and docs\/publish\/01-setup\.md have the same file name/);
 	assert.ok(!existsSync(join(p.dir, "out")));
+});
+
+test("publish: #top and a raw-HTML anchor build into the PDF too", (t) => {
+	if (NO_TOOLS) return t.skip(SKIP);
+	const page = '# Intro\n\n<a id="legacy"></a>\n\nText. [Back to top](#top) and [legacy](#legacy).\n';
+	const p = project(t, { "docs/one.md": `---\ntitle: One\n---\n\n${page}`, "docs/01-a.md": page, "docs/02-b.md": "# B\n" });
+	const one = p.run("docs/one.md", "--out", "out");
+	assert.equal(one.status, 0, one.stderr);
+	const chapters = p.run("docs/01-a.md", "docs/02-b.md", "--title", "Two", "--out", "out2");
+	assert.equal(chapters.status, 0, chapters.stderr);
 });

@@ -41,7 +41,7 @@ export function extractChangelog(text: string, version: string): string | null {
 	const end = rest.findIndex((l) => {
 		const f = l.match(/^\s*(`{3,}|~{3,})/)?.[1];
 		if (f && (!fence || f[0] === fence[0])) fence = fence ? undefined : f;
-		return !fence && !f && (new RegExp(`^#{1,${level}} `).test(l) || /^#{1,6} \[?v?\d+\.\d+/.test(l));
+		return !fence && !f && (new RegExp(`^#{1,${level}} `).test(l) || /^#{1,2} \[?v?\d+\.\d+/.test(l));
 	});
 	return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
 }
@@ -130,7 +130,7 @@ export type SourceOptions = {
 
 /**
  * Makes one source stand alone: inside a chapter (`anchor`) its ids get the chapter's prefix and its blocks a
- * wrapping Div; chapter links become anchors, links into the repo are reported (or dropped, or rewritten to
+ * marker before them; chapter links become anchors, links into the repo are reported (or dropped, or rewritten to
  * `repoUrl`), local images move to `assetsDir`, and raw HTML pointing at local files is a finding.
  */
 export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; outside: string[]; images: string[]; findings: string[] } {
@@ -149,9 +149,13 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 			if (!/^html/.test(n.c[0])) return undefined;
 			for (const m of (n.c[1] as string).matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi))
 				if (!isExternal(m[1]!)) findings.push(`${fromRel}: raw HTML link ${m[1]}: write it as a Markdown link`);
-			// Anchors written as raw HTML (`<a id>`, `<a name>`) move into the chapter's namespace too.
-			n.c[1] = (n.c[1] as string).replace(RAW_ID, (_, k: string, q: string, v: string) => `${k}=${q}${id(v)}${q}`);
-			return undefined;
+			// An anchor written as raw HTML (`<a id>`, `<a name>`) becomes an empty marker next to it: the PDF drops
+			// raw HTML, so only a node in the tree gives both outputs the target. The attribute leaves the HTML.
+			const anchors: string[] = [];
+			n.c[1] = (n.c[1] as string).replace(RAW_ID, (_, _k: string, _q: string, v: string) => (anchors.push(id(v)), ""));
+			if (!anchors.length) return undefined;
+			const kind = n.t === "RawBlock" ? "Div" : "Span";
+			return { t: kind, c: [["", [], []], [n, ...anchors.map((a) => ({ t: kind, c: [[a, [], []], []] }))]] };
 		}
 		if (n.t !== "Link" && n.t !== "Image") return undefined;
 		const url: string = n.c[2][0];
@@ -185,10 +189,10 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 	return { blocks: o.anchor ? [{ t: "Div", c: [[o.anchor, [], []], []] }, ...blocks] : blocks, outside, images, findings };
 }
 
-const RAW_ID = /\b(id|name)\s*=\s*(["'])([^"']+)\2/gi;
+const RAW_ID = /\s(id|name)\s*=\s*(["'])([^"']+)\2/gi;
 
 /** Every id a source defines: headings, divs, spans, code, and `id`/`name` in raw HTML. */
-export function idsOf(blocks: unknown): Set<string> {
+function idsOf(blocks: unknown): Set<string> {
 	const ids = new Set<string>();
 	walk(blocks, (n) => {
 		const attr = attrOf(n);
@@ -436,8 +440,10 @@ function build(ctx: Ctx, prepared: ReturnType<typeof prepare>, theme: string, bu
 	meta.lang = { t: "MetaString", c: m.lang ?? "en" };
 	// The PDF cover shows audience and version through `thanks` (pandoc forwards no custom fields to Typst);
 	// pandoc's HTML template doesn't show `thanks`, so the HTML gets them as a block at the top.
-	const pdf: Doc = { "pandoc-api-version": prepared.api, meta: about ? { ...meta, thanks: { t: "MetaInlines", c: inlines(about) } } : meta, blocks: prepared.blocks };
-	const htmlBlocks = about ? [{ t: "Div", c: [["", ["doc-meta"], []], [{ t: "Para", c: inlines(about) }]] }, ...prepared.blocks] : prepared.blocks;
+	// `#top` needs a target in the PDF; a browser has one built in.
+	const blocks = idsOf(prepared.blocks).has("top") ? prepared.blocks : [{ t: "Div", c: [["top", [], []], []] }, ...prepared.blocks];
+	const pdf: Doc = { "pandoc-api-version": prepared.api, meta: about ? { ...meta, thanks: { t: "MetaInlines", c: inlines(about) } } : meta, blocks };
+	const htmlBlocks = about ? [{ t: "Div", c: [["", ["doc-meta"], []], [{ t: "Para", c: inlines(about) }]] }, ...blocks] : blocks;
 	writeFileSync(join(build, "pdf.json"), JSON.stringify(pdf));
 	writeFileSync(join(build, "html.json"), JSON.stringify({ ...pdf, meta, blocks: htmlBlocks }));
 	for (const f of THEME_FILES) copyFileSync(join(theme, f), join(build, f));
