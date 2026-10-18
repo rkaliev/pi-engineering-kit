@@ -18,16 +18,15 @@ A copy edited for one reader drifts from the docs. When a chapter must differ fo
 ## Build
 
 ```bash
-node "scripts/publish.ts" docs/01-overview.md docs/02-integration.md \
-  --title "Payouts integration" --audience "Acme" --version 1.4 --theme docs/publish/theme --out <ignored dir>
+node "<this skill's directory>/scripts/publish.ts" docs/01-overview.md docs/02-integration.md \
+  --title "Payouts integration" --audience "Acme" --version 1.4 --out <ignored dir>
 ```
 
-(`scripts/publish.ts` is in this skill's directory.)
-
-- **Tools:** pandoc ≥ 3.8, Typst, and mermaid-cli when there are diagrams. The script names what is missing; installing it needs the user's agreement.
-- **Theme:** once per project, `--init-theme docs/publish/theme` and commit it; colours and fonts are at the top of `brand.typ` and `brand.css`. Without `--theme` the kit's theme is used.
-- **Output:** a folder git ignores. The files are never committed; the Markdown is the record.
-- **A failed build lists every finding.** A link into the repo: `--drop-repo-links` keeps its text and drops the link in the output; `--repo-url` only when this reader can open the repo. A diagram's `accTitle` becomes its alt text.
+- **Tools:** pandoc ≥ 3.8, Typst, and mermaid-cli when there are diagrams; on Windows, run it in WSL. The script names what is missing; installing it needs the user's agreement.
+- **Markdown is read as the repo host reads it** (GitHub-style). Each chapter keeps its own heading anchors; a chapter's frontmatter is ignored.
+- **Theme:** once per project, `--init-theme docs/publish/theme` and commit it; colours and fonts are at the top of `brand.typ` and `brand.css`. The build uses that folder when it exists, else the kit's theme (`--theme` picks another).
+- **Output:** a folder git ignores; the Markdown is the record.
+- **A failed build lists every finding:** a link into the repo, an anchor that isn't there, a missing image, a raw HTML link or image pointing at a local file (write it as Markdown), a diagram that doesn't render. For links into the repo, `--drop-repo-links` keeps their text; `--repo-url` only when this reader can open the repo. A diagram's `accTitle` is its alt text.
 - **The team's docs stay written for the team.** Don't remove their links or rename code in them to suit an outside reader; the build options, leaving a chapter out, or a document of the reader's own in `docs/publish/` do that. Fix a source only where it is wrong for everyone.
 
 ## Before handing it over

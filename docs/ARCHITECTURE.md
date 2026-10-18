@@ -263,6 +263,7 @@ The plan names the test for each criterion, and the PR body says how each new te
   - the verify gate (one reminder, cleared after a green run), the approval and working-docs gates;
   - model routing;
   - `scripts/test-hygiene.ts` (rules in 7 languages, ratchet with renames, no merge base, JUnit reports only, config, CLI);
+  - `publish.ts` of publishing-documents (transforms on pandoc's tree, CHANGELOG sections, the tool check, and the failures that need no tools); its build tests run only where pandoc, Typst and mermaid-cli are installed, so they skip in the kit's CI;
   - `/kit-init` (including the test-hygiene item: offered, copied with `--test-hygiene`, an older copy reported and replaced with the flag, a CI that doesn't run it reported in the same run; completion of several flags; Turbo-aware CI coverage: a `turbo run` that includes the verify command's tasks in any order or with harmless flags covers it, `--filter`, `-F` and `--dry-run` don't, and a chain or a flagged verify command is matched as text);
   - the verify state shared with the guard across extensions loaded in separate module graphs;
   - the token ledger (each message once, increments per branch, a private folder that a planted link can't redirect, compaction, no record from a run without a UI);
