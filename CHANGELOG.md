@@ -2,7 +2,7 @@
 
 ## 0.28.0
 
-- **Diagrams in documentation.** writing-documentation says to draw what prose can't show plainly (calls between components, failure paths, states) and points to `references/diagrams.md`: Mermaid in the Markdown by default (a plain-text drawing only where Mermaid doesn't render, images only generated from a committed source), which diagram type for which question, names as in the code, one idea and about 12 nodes per diagram, labelled arrows, failure paths, one sentence with the takeaway, updated in the same change as the code. `references/checks.md` adds a render check (`mmdc`). An agent documenting a webhook flow without the rule wrote steps and tables but no diagram; with it, a sequence diagram with every failure branch.
+- **Diagrams in documentation.** writing-documentation says to draw what prose can't show plainly (calls between components, failure paths, states) and points to `references/diagrams.md`: Mermaid in the Markdown by default (a plain-text drawing only where Mermaid doesn't render, images only generated from a committed source), which diagram type for which question, names as in the code, one idea and about 12 nodes per diagram, labelled arrows, limits by the name of the setting rather than a copied number, failure paths, one sentence with the takeaway, rendered before the doc is called done, updated in the same change as the code. `references/checks.md` adds a render check (`mmdc`; a docs site build counts only if it fails on a broken diagram). An agent documenting a webhook flow without the rule wrote steps and tables but no diagram; with it, a sequence diagram with every failure branch.
 
 ## 0.27.0
 
