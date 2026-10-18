@@ -416,12 +416,26 @@ test("publish: #top and a raw-HTML anchor build into the PDF too", (t) => {
 	assert.equal(chapters.status, 0, chapters.stderr);
 });
 
-test("forPdf gives raw-HTML anchors and #top real targets, leaving the HTML tree alone", () => {
+test("forPdf gives raw-HTML anchors, chapter markers and #top their own targets, leaving the HTML tree alone", () => {
+	const mark = (id: string): Node => ({ t: "RawBlock", c: ["typst", `#metadata(none) <${id}>`] });
 	const raw = { t: "RawBlock", c: ["html", '<details id="faq"><summary>FAQ</summary>'] };
-	const blocks = [raw, para(link("t", "#top"))];
+	const blocks = [{ t: "Div", c: [["ch-01-a", [], []], []] }, raw, para(link("t", "#top"))];
 	const pdf = forPdf(blocks);
-	assert.deepEqual(pdf[0], { t: "Div", c: [["top", [], []], []] });
-	assert.deepEqual(pdf[1]!.c[1], [{ t: "Div", c: [["faq", [], []], []] }, raw], "the marker comes before the element");
-	assert.deepEqual(blocks[0], raw, "the HTML's raw element is untouched");
+	assert.deepEqual(pdf[0], mark("top"));
+	assert.deepEqual(pdf[1], mark("ch-01-a"), "an empty marker becomes an element of its own, so it doesn't take the next heading's label");
+	assert.deepEqual(pdf[2]!.c[1], [mark("faq"), raw], "the marker comes before the element");
+	assert.deepEqual(blocks[1], raw, "the HTML's raw element is untouched");
 	assert.equal(forPdf([header(1, "top", "Top")])[0]!.t, "Header", "a source's own #top wins");
+	const legacy = forPdf([header(2, "setup", "Setup"), { t: "RawBlock", c: ["html", '<a id="setup"></a><a id="x" name="x"></a>'] }]);
+	assert.deepEqual(JSON.stringify(legacy).match(/<(setup|x)>/g), ["<x>"], "one target per id: no marker repeats a heading's id or another marker");
+});
+
+test("publish: a heading right after a marker keeps its own anchor in the PDF", (t) => {
+	if (NO_TOOLS) return t.skip(SKIP);
+	const page = '## Setup\n\n<a id="setup"></a><a id="x" name="x"></a>\n\nSee [setup](#setup), [x](#x) and [top](#top).\n';
+	const p = project(t, { "docs/one.md": `---\ntitle: One\n---\n\n${page}`, "docs/01-a.md": `# A\n\nTo [A](#a).\n\n${page}`, "docs/02-b.md": "# B\n\nBack to [A](01-a.md#a).\n" });
+	const one = p.run("docs/one.md", "--out", "out");
+	assert.equal(one.status, 0, one.stderr);
+	const chapters = p.run("docs/01-a.md", "docs/02-b.md", "--title", "Two", "--out", "out2");
+	assert.equal(chapters.status, 0, chapters.stderr);
 });

@@ -185,17 +185,30 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 	return { blocks: o.anchor ? [{ t: "Div", c: [[o.anchor, [], []], []] }, ...blocks] : blocks, outside, images, findings };
 }
 
-/** The PDF's tree: Typst drops raw HTML, so its anchors and `#top` get empty markers; the HTML tree stays as it is. */
+/**
+ * The PDF's tree. Typst drops raw HTML and attaches an empty element's label to whatever follows it, so every
+ * anchor without content of its own (chapter markers, raw-HTML anchors, `#top`) becomes an invisible
+ * `#metadata` element carrying its label. The HTML tree is left as it is.
+ */
 export function forPdf(blocks: Node[]): Node[] {
+	const mark = (id: string, block: boolean): Node => ({ t: block ? "RawBlock" : "RawInline", c: ["typst", `#metadata(none) <${id}>`] });
+	// One target per id: Typst fails on a label that occurs twice (`<a id="x" name="x">`, or an id a heading has).
+	const taken = new Set<string>();
+	walk(blocks, (n) => {
+		const id = attrOf(n)?.[0];
+		if (id) taken.add(id);
+		return undefined;
+	});
 	const marked = walk(blocks, (n) => {
+		if ((n.t === "Div" || n.t === "Span") && n.c[0][0] && !n.c[1].length) return mark(n.c[0][0], n.t === "Div");
 		if ((n.t !== "RawInline" && n.t !== "RawBlock") || !/^html/.test(n.c[0])) return undefined;
-		const anchors = [...(n.c[1] as string).matchAll(RAW_ID)].map((m) => m[3]!);
+		const anchors = [...(n.c[1] as string).matchAll(RAW_ID)].map((m) => m[3]!).filter((a) => !taken.has(a) && taken.add(a));
 		if (!anchors.length) return undefined;
-		const kind = n.t === "RawBlock" ? "Div" : "Span";
-		return { t: kind, c: [["", [], []], [...anchors.map((a) => ({ t: kind, c: [[a, [], []], []] })), n]] };
+		const block = n.t === "RawBlock";
+		return { t: block ? "Div" : "Span", c: [["", [], []], [...anchors.map((a) => mark(a, block)), n]] };
 	}) as Node[];
 	// A browser has a built-in top; the PDF needs one.
-	return idsOf(blocks).has("top") ? marked : [{ t: "Div", c: [["top", [], []], []] }, ...marked];
+	return taken.has("top") ? marked : [mark("top", true), ...marked];
 }
 
 const RAW_ID = /\s(id|name)\s*=\s*(["'])([^"']+)\2/gi;
