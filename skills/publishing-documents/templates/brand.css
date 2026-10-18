@@ -1,0 +1,44 @@
+/* HTML theme for publish.mts. Passing it with --css replaces pandoc's default styles, so it styles everything.
+   Once copied into a project it belongs to that project: change the values below to its brand. */
+:root {
+  --accent: #1f4e79;
+  --text: #1a1a1a;
+  --muted: #555;
+  --body-font: "Libertinus Serif", Georgia, "Times New Roman", serif;
+  --code-font: "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+
+body {
+  max-width: 46em;
+  margin: 0 auto;
+  padding: 3em 1.5em;
+  color: var(--text);
+  font-family: var(--body-font);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+header#title-block-header {
+  border-top: 6px solid var(--accent);
+  padding-top: 1.5em;
+  margin-bottom: 2.5em;
+}
+
+h1, h2, h3, h4 { color: var(--accent); line-height: 1.25; }
+h1.title { font-size: 2.4em; margin-bottom: 0.2em; }
+p.subtitle { font-size: 1.3em; margin-top: 0; }
+p.author, p.date { color: var(--muted); margin: 0.2em 0; }
+.doc-meta { color: var(--muted); border-left: 3px solid var(--accent); padding-left: 1em; margin: 0 0 2em; }
+
+a { color: var(--accent); }
+code, pre { font-family: var(--code-font); font-size: 0.9em; }
+pre { background: #f5f7fa; padding: 0.8em 1em; overflow-x: auto; }
+img { max-width: 100%; height: auto; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border-bottom: 1px solid #d0d7de; padding: 0.35em 0.7em; text-align: left; }
+nav#TOC { border-left: 3px solid var(--accent); padding-left: 1em; margin-bottom: 2em; }
+
+@media print {
+  body { max-width: none; padding: 0; }
+  a { color: inherit; }
+}
