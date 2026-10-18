@@ -149,13 +149,9 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 			if (!/^html/.test(n.c[0])) return undefined;
 			for (const m of (n.c[1] as string).matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi))
 				if (!isExternal(m[1]!)) findings.push(`${fromRel}: raw HTML link ${m[1]}: write it as a Markdown link`);
-			// An anchor written as raw HTML (`<a id>`, `<a name>`) becomes an empty marker next to it: the PDF drops
-			// raw HTML, so only a node in the tree gives both outputs the target. The attribute leaves the HTML.
-			const anchors: string[] = [];
-			n.c[1] = (n.c[1] as string).replace(RAW_ID, (_, _k: string, _q: string, v: string) => (anchors.push(id(v)), ""));
-			if (!anchors.length) return undefined;
-			const kind = n.t === "RawBlock" ? "Div" : "Span";
-			return { t: kind, c: [["", [], []], [n, ...anchors.map((a) => ({ t: kind, c: [[a, [], []], []] }))]] };
+			// Anchors written as raw HTML (`<a id>`, `<a name>`) move into the chapter's namespace too; forPdf gives them a target.
+			n.c[1] = (n.c[1] as string).replace(RAW_ID, (_, k: string, q: string, v: string) => ` ${k}=${q}${id(v)}${q}`);
+			return undefined;
 		}
 		if (n.t !== "Link" && n.t !== "Image") return undefined;
 		const url: string = n.c[2][0];
@@ -187,6 +183,19 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
 	}) as Node[];
 	// An empty marker, not a wrapper: pandoc's contents list doesn't look inside a Div that doesn't start with a heading.
 	return { blocks: o.anchor ? [{ t: "Div", c: [[o.anchor, [], []], []] }, ...blocks] : blocks, outside, images, findings };
+}
+
+/** The PDF's tree: Typst drops raw HTML, so its anchors and `#top` get empty markers; the HTML tree stays as it is. */
+export function forPdf(blocks: Node[]): Node[] {
+	const marked = walk(blocks, (n) => {
+		if ((n.t !== "RawInline" && n.t !== "RawBlock") || !/^html/.test(n.c[0])) return undefined;
+		const anchors = [...(n.c[1] as string).matchAll(RAW_ID)].map((m) => m[3]!);
+		if (!anchors.length) return undefined;
+		const kind = n.t === "RawBlock" ? "Div" : "Span";
+		return { t: kind, c: [["", [], []], [...anchors.map((a) => ({ t: kind, c: [[a, [], []], []] })), n]] };
+	}) as Node[];
+	// A browser has a built-in top; the PDF needs one.
+	return idsOf(blocks).has("top") ? marked : [{ t: "Div", c: [["top", [], []], []] }, ...marked];
 }
 
 const RAW_ID = /\s(id|name)\s*=\s*(["'])([^"']+)\2/gi;
@@ -440,10 +449,8 @@ function build(ctx: Ctx, prepared: ReturnType<typeof prepare>, theme: string, bu
 	meta.lang = { t: "MetaString", c: m.lang ?? "en" };
 	// The PDF cover shows audience and version through `thanks` (pandoc forwards no custom fields to Typst);
 	// pandoc's HTML template doesn't show `thanks`, so the HTML gets them as a block at the top.
-	// `#top` needs a target in the PDF; a browser has one built in.
-	const blocks = idsOf(prepared.blocks).has("top") ? prepared.blocks : [{ t: "Div", c: [["top", [], []], []] }, ...prepared.blocks];
-	const pdf: Doc = { "pandoc-api-version": prepared.api, meta: about ? { ...meta, thanks: { t: "MetaInlines", c: inlines(about) } } : meta, blocks };
-	const htmlBlocks = about ? [{ t: "Div", c: [["", ["doc-meta"], []], [{ t: "Para", c: inlines(about) }]] }, ...blocks] : blocks;
+	const pdf: Doc = { "pandoc-api-version": prepared.api, meta: about ? { ...meta, thanks: { t: "MetaInlines", c: inlines(about) } } : meta, blocks: forPdf(prepared.blocks) };
+	const htmlBlocks = about ? [{ t: "Div", c: [["", ["doc-meta"], []], [{ t: "Para", c: inlines(about) }]] }, ...prepared.blocks] : prepared.blocks;
 	writeFileSync(join(build, "pdf.json"), JSON.stringify(pdf));
 	writeFileSync(join(build, "html.json"), JSON.stringify({ ...pdf, meta, blocks: htmlBlocks }));
 	for (const f of THEME_FILES) copyFileSync(join(theme, f), join(build, f));

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chapterAnchor, checkTools, extractChangelog, indexChapters, prepareSource, stringify, type Doc, type Node } from "../skills/publishing-documents/scripts/publish.mts";
+import { chapterAnchor, checkTools, extractChangelog, forPdf, indexChapters, prepareSource, stringify, type Doc, type Node } from "../skills/publishing-documents/scripts/publish.mts";
 
 test("extractChangelog returns one version's section", () => {
 	const plain = "# Changelog\n\n## 0.2.0\n\n- b\n\n## 0.1.0\n\n- a\n";
@@ -383,9 +383,7 @@ test("prepareSource: #top and anchors from raw HTML are not findings", () => {
 	const inChapter = prepareSource(src, { ...opts, anchor: "ch-01-setup" });
 	assert.deepEqual(inChapter.findings, []);
 	assert.deepEqual(urls(inChapter.blocks), ["#ch-01-setup", "#ch-01-setup--legacy", "#ch-01-setup--old"]);
-	assert.doesNotMatch(JSON.stringify(inChapter.blocks), /(id|name)=\\"/, "the ids move from the raw HTML to the markers, so they aren't duplicated");
-	const markers = JSON.stringify(inChapter.blocks).match(/\["ch-01-setup--(legacy|old)",\[\],\[\]\],\[\]/g);
-	assert.equal(markers?.length, 2, "each raw-HTML anchor gets an empty marker, so the PDF has the target too");
+	assert.match(JSON.stringify(inChapter.blocks), /id=\\"ch-01-setup--legacy\\".*name=\\"ch-01-setup--old\\"/, "the HTML keeps its raw anchors, in the chapter's namespace");
 	const single = prepareSource(src, opts);
 	assert.deepEqual(single.findings, []);
 	assert.deepEqual(urls(single.blocks), ["#top", "#legacy", "#old"]);
@@ -416,4 +414,14 @@ test("publish: #top and a raw-HTML anchor build into the PDF too", (t) => {
 	assert.equal(one.status, 0, one.stderr);
 	const chapters = p.run("docs/01-a.md", "docs/02-b.md", "--title", "Two", "--out", "out2");
 	assert.equal(chapters.status, 0, chapters.stderr);
+});
+
+test("forPdf gives raw-HTML anchors and #top real targets, leaving the HTML tree alone", () => {
+	const raw = { t: "RawBlock", c: ["html", '<details id="faq"><summary>FAQ</summary>'] };
+	const blocks = [raw, para(link("t", "#top"))];
+	const pdf = forPdf(blocks);
+	assert.deepEqual(pdf[0], { t: "Div", c: [["top", [], []], []] });
+	assert.deepEqual(pdf[1]!.c[1], [{ t: "Div", c: [["faq", [], []], []] }, raw], "the marker comes before the element");
+	assert.deepEqual(blocks[0], raw, "the HTML's raw element is untouched");
+	assert.equal(forPdf([header(1, "top", "Top")])[0]!.t, "Header", "a source's own #top wins");
 });
