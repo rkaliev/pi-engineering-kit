@@ -191,7 +191,9 @@ export function prepareSource(doc: Doc, o: SourceOptions): { blocks: Node[]; out
  * `#metadata` element carrying its label. The HTML tree is left as it is.
  */
 export function forPdf(blocks: Node[]): Node[] {
-	const mark = (id: string, block: boolean): Node => ({ t: block ? "RawBlock" : "RawInline", c: ["typst", `#metadata(none) <${id}>`] });
+	// `#label("…")` takes any id, as pandoc's own links to it do; `<id>` would print an id with a space as text.
+	const typstString = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	const mark = (id: string, block: boolean): Node => ({ t: block ? "RawBlock" : "RawInline", c: ["typst", `#metadata(none) #label(${typstString(id)})`] });
 	// One target per id: Typst fails on a label that occurs twice (`<a id="x" name="x">`, or an id a heading has).
 	const taken = new Set<string>();
 	walk(blocks, (n) => {

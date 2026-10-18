@@ -417,7 +417,7 @@ test("publish: #top and a raw-HTML anchor build into the PDF too", (t) => {
 });
 
 test("forPdf gives raw-HTML anchors, chapter markers and #top their own targets, leaving the HTML tree alone", () => {
-	const mark = (id: string): Node => ({ t: "RawBlock", c: ["typst", `#metadata(none) <${id}>`] });
+	const mark = (id: string): Node => ({ t: "RawBlock", c: ["typst", `#metadata(none) #label(${JSON.stringify(id)})`] });
 	const raw = { t: "RawBlock", c: ["html", '<details id="faq"><summary>FAQ</summary>'] };
 	const blocks = [{ t: "Div", c: [["ch-01-a", [], []], []] }, raw, para(link("t", "#top"))];
 	const pdf = forPdf(blocks);
@@ -427,7 +427,9 @@ test("forPdf gives raw-HTML anchors, chapter markers and #top their own targets,
 	assert.deepEqual(blocks[1], raw, "the HTML's raw element is untouched");
 	assert.equal(forPdf([header(1, "top", "Top")])[0]!.t, "Header", "a source's own #top wins");
 	const legacy = forPdf([header(2, "setup", "Setup"), { t: "RawBlock", c: ["html", '<a id="setup"></a><a id="x" name="x"></a>'] }]);
-	assert.deepEqual(JSON.stringify(legacy).match(/<(setup|x)>/g), ["<x>"], "one target per id: no marker repeats a heading's id or another marker");
+	assert.deepEqual(JSON.stringify(legacy).match(/label\(\\"(setup|x)\\"\)/g), ['label(\\"x\\")'], "one target per id: no marker repeats a heading's id or another marker");
+	const odd = forPdf([{ t: "RawBlock", c: ["html", '<a name="Old Section"></a><a id="a\\b"></a>'] }]);
+	assert.deepEqual(odd[1]!.c[1].slice(0, 2), [mark("Old Section"), { t: "RawBlock", c: ["typst", '#metadata(none) #label("a\\\\b")'] }], "any id is a valid label, escaped as a Typst string");
 });
 
 test("publish: a heading right after a marker keeps its own anchor in the PDF", (t) => {
