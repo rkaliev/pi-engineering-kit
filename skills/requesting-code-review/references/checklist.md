@@ -88,3 +88,4 @@ Check the diff against `../../test-driven-development/references/test-standard.m
 - HYG-03 Docs, AGENTS.md commands, and config examples are updated in the same change when behavior or setup changed; stale docs are Important, not Minor (see writing-documentation).
 - HYG-04 User-facing text follows the product's language and i18n conventions.
 - HYG-05 Web UI (accessibility, interaction states, async races, frontend performance): use the web-frontend skill's review points.
+- HYG-06 Files the agent wrote (docs, plans, commits, PR text, comments, test names, logs) are in English, except docs for people the user asked for in another language (using-skills).
