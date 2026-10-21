@@ -9,7 +9,7 @@ Docs are part of the change. They ship in the same commit or PR as the code they
 
 ## Follow the project first
 
-Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the changelog style. Extend that structure: new files in English even where older docs use another language, edits keep the file's language; use the layout below only where nothing exists, and say so.
+Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the changelog style. Extend that structure, in the language using-skills sets, even where older docs use another; use the layout below only where nothing exists, and say so.
 
 ## Where each thing goes
 
