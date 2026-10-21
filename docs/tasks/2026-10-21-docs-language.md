@@ -1,6 +1,6 @@
 # Files the agent writes are in English
 
-Status: plan approved (2026-10-21)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: d1f39ff35c259dd9ab9da0a1f3139561f47daa87 (pi edition: 5c57e17093fc8013e67619c62238bfe643422b50)
 Links: the Claude edition (eng-kit) carries the same file on its `feat/docs-language` branch; the eval tasks run there
@@ -83,7 +83,7 @@ Release 0.31.0 in both editions. Existing projects pick it up on plugin update; 
 
 ## Follow-ups
 
-None.
+- Verify gate: a shell redirect to an unexpanded variable path (`> $S/red.log`, where `S` is set earlier in the same command) is recorded as an in-project change `<repo>/$S/red.log` and re-fires the gate; resolve or ignore paths that start with an unexpanded `$`, with a test on the observed command.
 
 ## Plan
 
@@ -126,47 +126,55 @@ None.
 
 **Files:** Create `evals/docs-language/…` · Modify `tests/eval-graders.test.ts`
 
-- [ ] Write tests `adr-english: Cyrillic fails, English passes` (pattern of `docs-language/graders/adr-english.md` matches "Выбрали RabbitMQ", not "We chose RabbitMQ") and `client-doc-russian: needs Russian words` (matches "Ничего не теряется", not "Nothing is lost"); add stub graders with `pattern: 'x'`
-- [ ] Run `npm test -- tests/eval-graders.test.ts` → expect FAIL: assertion on the "Выбрали RabbitMQ" match
-- [ ] Write the case: `case.yaml` and `scaffold.sh` as in `secrets-stay-out`; `prompt.md` (max_turns 40, timeout 900, same `allowed_tools`) in Russian: record the RabbitMQ-over-Redis-Streams decision (delivery acks and dead-letter needed; Redis is a cache without persistence) in `docs/decisions/0002-message-queue.md` and commit it; write a short Russian note for the client in `docs/client/queue.md` on what changes for them; end with the Russian form of "I'm away, so don't ask me questions…"
-- [ ] Fixture: Russian `README.md`; `docs/decisions/0001-database.md` in Russian containing `Выбрали PostgreSQL`; `package.json` with no scripts; `dot-gitignore` with `node_modules/`
-- [ ] Graders: `adr-written` regex file `docs/decisions/0002-message-queue.md` `'RabbitMQ'`; `adr-english` same file `'[А-Яа-яЁё]'` not_contains; `client-doc-russian` regex file `docs/client/queue.md` `'[А-Яа-яЁё]{4,}'`; `old-adr-kept` regex file `docs/decisions/0001-database.md` `'Выбрали PostgreSQL'`; `commit-made` tool_used Bash `'git commit'` min 1; `commit-english` tool_used Bash `'git commit[\s\S]*[А-Яа-яЁё]|[А-Яа-яЁё][\s\S]*git commit'` max 0; `skill-loaded` as in other cases
-- [ ] Run `npm test` → expect PASS
-- [ ] With the user's go: `npm run eval -- --case docs-language` on the current skills → expect the kit arm to fail `adr-english` or `commit-english` in at least one run (red baseline); record the scores in Progress
-- [ ] Commit `test(evals): docs-language case`
+- [x] Write tests `adr-english: Cyrillic fails, English passes` (pattern of `docs-language/graders/adr-english.md` matches "Выбрали RabbitMQ", not "We chose RabbitMQ") and `client-doc-russian: needs Russian words` (matches "Ничего не теряется", not "Nothing is lost"); add stub graders with `pattern: 'x'`
+- [x] Run `npm test -- tests/eval-graders.test.ts` → expect FAIL: assertion on the "Выбрали RabbitMQ" match
+- [x] Write the case: `case.yaml` and `scaffold.sh` as in `secrets-stay-out`; `prompt.md` (max_turns 40, timeout 900, same `allowed_tools`) in Russian: record the RabbitMQ-over-Redis-Streams decision (delivery acks and dead-letter needed; Redis is a cache without persistence) in `docs/decisions/0002-message-queue.md` and commit it; write a short Russian note for the client in `docs/client/queue.md` on what changes for them; end with the Russian form of "I'm away, so don't ask me questions…"
+- [x] Fixture: Russian `README.md`; `docs/decisions/0001-database.md` in Russian containing `Выбрали PostgreSQL`; `package.json` with no scripts; `dot-gitignore` with `node_modules/`
+- [x] Graders: `adr-written` regex file `docs/decisions/0002-message-queue.md` `'RabbitMQ'`; `adr-english` same file `'[А-Яа-яЁё]'` not_contains; `client-doc-russian` regex file `docs/client/queue.md` `'[А-Яа-яЁё]{4,}'`; `old-adr-kept` regex file `docs/decisions/0001-database.md` `'Выбрали PostgreSQL'`; `commit-made` tool_used Bash `'git commit'` min 1; `commit-english` tool_used Bash `'git commit[\s\S]*[А-Яа-яЁё]|[А-Яа-яЁё][\s\S]*git commit'` max 0; `skill-loaded` as in other cases
+- [x] Run `npm test` → expect PASS
+- [x] With the user's go: `npm run eval -- --case docs-language` on the current skills → expect the kit arm to fail `adr-english` or `commit-english` in at least one run (red baseline); record the scores in Progress
+- [x] Commit `test(evals): docs-language case`
 
 ### Task 2: the rule in using-skills (both editions)
 
 **Files:** Modify `skills/using-skills/SKILL.md` in `src_claude/` and `src/`
 
-- [ ] Apply the Design's bullet and its four trims per edition, word for word
-- [ ] Run `npm test` in each repo → expect PASS, lint-skills body ≤ 800 (798 Claude, 800 pi); `tests/hooks.test.ts` SessionStart still injects the body
-- [ ] Commit `feat(using-skills): files the agent writes are in English` in each repo
+- [x] Apply the Design's bullet and its four trims per edition, word for word
+- [x] Run `npm test` in each repo → expect PASS, lint-skills body ≤ 800 (798 Claude, 800 pi); `tests/hooks.test.ts` SessionStart still injects the body
+- [x] Commit `feat(using-skills): files the agent writes are in English` in each repo
 
 ### Task 3: aligned lines (both editions)
 
 **Files:** Modify writing-documentation, `docs` skill / `prompts/docs.md`, template CLAUDE.md / AGENTS.md, review checklist
 
-- [ ] writing-documentation "Follow the project first": drop "the docs language, "; "Extend that structure;" becomes "Extend that structure, in English even where older docs use another language;"; drop the red flag row "The comment explains the code" (the Code comments section says it)
-- [ ] `docs` skill and `prompts/docs.md`: "structure and language where there is one" → "structure where there is one"
-- [ ] templates line 39 → `- UI text language: <ru | en | …>.`
-- [ ] checklist Hygiene, after the user-facing text line: `- Files the agent wrote (docs, plans, commits, PR text, comments, test names, logs) are in English, except docs for people the user asked for in another language (using-skills).`
-- [ ] Run criterion 6's grep → expect no output; `npm test && npm run typecheck` in each repo → expect PASS
-- [ ] Commit `feat(docs): agent-written docs in English` in each repo
+- [x] writing-documentation "Follow the project first": drop "the docs language, "; "Extend that structure;" becomes "Extend that structure, in English even where older docs use another language;"; drop the red flag row "The comment explains the code" (the Code comments section says it)
+- [x] `docs` skill and `prompts/docs.md`: "structure and language where there is one" → "structure where there is one"
+- [x] templates line 39 → `- UI text language: <ru | en | …>.`
+- [x] checklist Hygiene, after the user-facing text line: `- Files the agent wrote (docs, plans, commits, PR text, comments, test names, logs) are in English, except docs for people the user asked for in another language (using-skills).`
+- [x] Run criterion 6's grep → expect no output; `npm test && npm run typecheck` in each repo → expect PASS
+- [x] Commit `feat(docs): agent-written docs in English` in each repo
 
 ### Task 4: evidence
 
-- [ ] With the user's go: `npm run eval -- --case docs-language` → expect the kit arm to pass criteria 1–4 in every run
-- [ ] With the user's go: `npm run eval -- --runs 1` → expect the kit arm's `skill-loaded` count no lower than the last run in `docs/EVALS.md` (criterion 7)
-- [ ] Record both in Progress
+- [x] With the user's go: `npm run eval -- --case docs-language` → expect the kit arm to pass criteria 1–4 in every run
+- [x] With the user's go: `npm run eval -- --runs 1` → expect the kit arm's `skill-loaded` count no lower than the last run in `docs/EVALS.md` (criterion 7)
+- [x] Record both in Progress
 
 ### Task 5: docs and release 0.31.0
 
-- [ ] Post-implementation items in both repos; the 0.31.0 entry names the eval's before/after
-- [ ] Bump `0.30.0` → `0.31.0` where the release commit for 0.30.0 changed it (`git show --stat 65a1c84` Claude, its pi counterpart), lockfiles via `npm install --package-lock-only`
-- [ ] `npm test && npm run typecheck` in each repo → expect PASS
-- [ ] Commit `feat(docs-language): release 0.31.0` in each repo
+- [x] Post-implementation items in both repos; the 0.31.0 entry names the eval's before/after
+- [x] Bump `0.30.0` → `0.31.0` where the release commit for 0.30.0 changed it (`git show --stat 65a1c84` Claude, its pi counterpart), lockfiles via `npm install --package-lock-only`
+- [x] `npm test && npm run typecheck` in each repo → expect PASS
+- [x] Commit `feat(docs-language): release 0.31.0` in each repo
 
 ## Progress
 
-None yet
+Baseline (2026-10-21, verify.ts from the workspace): typecheck and tests pass in both repos. Drift: none, the branches start at Base. Execution: inline, chosen by the user; eval runs approved with the plan.
+
+pi edition. Task 2: complete (79e5be0..66187b9, npm test → 471 pass, 0 fail; using-skills body 800 words).
+
+pi edition. Task 3: complete (66187b9..6e1acb4, criterion 6 grep → no output; npm test → 471 pass, 0 fail; typecheck exit 0; writing-documentation body 791 words).
+
+Ruling: the commit graders read `.git/COMMIT_EDITMSG` instead of matching Bash input — a Bash call that writes the Russian client note and commits in one command would fail a Bash-input grader falsely, and `-F` messages would slip through — cost if wrong: the eval harness can't read `.git/` and both commit graders fail in both arms, which the red run shows.
+
+Task 5: CHANGELOG, ARCHITECTURE principle 6 and 0.31.0 (package.json, lockfile version lines, install pins in README, GETTING-STARTED and templates/settings.json) written. The lockfile's missing `peerDependenciesMeta`, which `npm install --package-lock-only` would add, is older drift and left out of this change.
