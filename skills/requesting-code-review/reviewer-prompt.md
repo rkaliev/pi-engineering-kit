@@ -21,6 +21,22 @@ Also read in full any new file the diff introduces.
 ## Verification commands
 {COMMANDS}. You may run them; report the results you saw.
 
+## Round
+{ROUND}: Full, Repeat or Prose. Check that it fits before you review:
+- Full: {BASE} is {RULES_BASE}. Review the whole range.
+- Repeat: {BASE} is the previous round's HEAD. Review {BASE}..{HEAD}, what it breaks, and every
+  finding review-log prints. Code this range doesn't change was reviewed in an earlier round: a new
+  finding there counts only at Critical. Anything less goes under Out of scope as
+  `missed earlier (<severity>)` and doesn't change the verdict.
+- Prose: the review-log header shows the previous round said Yes, and every path in
+  `git diff --name-only {BASE}..{HEAD}` is prose: a task file, Markdown under docs/ (except
+  docs/decisions/ and docs/adr/), README* or CHANGELOG*. Never prose: CLAUDE.md, AGENTS.md,
+  SKILL.md, anything under .claude/, .pi/, rules/, skills/, agents/, prompts/ or templates/, and
+  code files, comments included. Check only that the changed text is true of the code at {HEAD}
+  (behavior, commands, paths, links); skip the checklist.
+If {ROUND} doesn't fit, say why and review it as the round that does (a failed Prose check is a
+Repeat round).
+
 ## Review focus (from the plan, check each deliberately)
 {REVIEW_FOCUS or "none"}
 
@@ -57,7 +73,7 @@ Also read in full any new file the diff introduces.
   coding standards) anywhere on the branch are judged against the rules on {RULES_BASE} and apply
   only once merged.
 - First run `node {SKILL_DIR}/../../scripts/review-log.ts {BASE}`. If {BASE} is not {RULES_BASE}, this is
-  a repeat round: review {BASE}..{HEAD} and re-check every finding in the reports it prints
+  a Repeat or Prose round: review {BASE}..{HEAD} and re-check every finding in the reports it prints
   (fixed / still valid / withdrawn, with why); the author's summary is not the source, and if it
   prints `no recorded review`, the range starts at a commit nobody reviewed: say Inconclusive. If
   {BASE} is {RULES_BASE}, run `git merge-base --is-ancestor {BASE} {REMOTE_BASE}`: if it succeeds, the
@@ -67,6 +83,9 @@ Also read in full any new file the diff introduces.
 - No praise, no empty sections. Never invent a link, path or line number; cite only what you opened.
 
 ## Output
+### Round
+The round you ran, and why if it differs from {ROUND}.
+
 ### Criteria
 One line per numbered criterion: done / not done / not visible from code, with evidence.
 
@@ -75,8 +94,11 @@ One line per numbered criterion: done / not done / not visible from code, with e
 ####   contract violation, visible performance regression, missing required validation)
 #### Important (should fix: design problems, missing handling, test gaps, docs the change made stale)
 #### Minor (nice to have, with a concrete benefit)
-Each: `file:line` · trigger (inputs or conditions) · consequence · evidence (code, output,
-reproduction) · fix. State any uncertainty explicitly.
+Each: `F<n> [<rule ID>] file:line` · trigger (inputs or conditions) · consequence · evidence
+(code, output, reproduction) · fix. State any uncertainty explicitly. A finding keeps the `F<n>` it
+has in the reports review-log prints; a new one takes the next free number. The rule ID is the
+checklist's (`[SEV-03]`) or the project rule's anchor; leave the brackets out when no rule applies.
+A finding open since earlier rounds names them: `F2 (rounds 1–3)`.
 
 ### Assumptions
 Things worth checking that you could not confirm.
