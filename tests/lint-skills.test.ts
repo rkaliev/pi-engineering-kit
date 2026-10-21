@@ -184,3 +184,27 @@ for (const file of readdirSync(promptsDir).filter((f) => f.endsWith(".md"))) {
 		}
 	});
 }
+
+test("checklist rules carry unique stable IDs", () => {
+	const text = readFileSync(join(skillsDir, "requesting-code-review", "references", "checklist.md"), "utf8");
+	const sections = text.split(/^## /m).slice(1);
+	const ids: string[] = [];
+	for (const section of sections) {
+		const [heading, ...lines] = section.split("\n");
+		const fixed = heading === "Fixed severities";
+		for (const line of lines) {
+			if (fixed && /^\|/.test(line) && !/^\|\s*(ID|---)/.test(line)) {
+				const id = /^\|\s*([^|]+?)\s*\|/.exec(line)![1]!;
+				assert.match(id, /^SEV-\d{2}$/, `fixed-severity row without an ID: ${line}`);
+				ids.push(id);
+			}
+			if (!fixed && /^- /.test(line)) {
+				const id = /^- ((COR|TST|SEC|ARC|AI|HYG)-\d{2}) /.exec(line)?.[1];
+				assert.ok(id, `checklist bullet in "${heading}" without an ID: ${line}`);
+				ids.push(id);
+			}
+		}
+	}
+	assert.ok(ids.length > 40, `expected the whole checklist, found ${ids.length} IDs`);
+	assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), [], "duplicate IDs");
+});
