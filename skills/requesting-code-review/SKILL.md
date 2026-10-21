@@ -22,9 +22,9 @@ A review in a fresh context catches what the author's context hides. The reviewe
 4. **Act on the findings** with receiving-code-review:
    - fix Critical before anything else;
    - fix Important before proceeding;
-   - log Minor;
+   - log Minor (after a `Yes`, in Follow-ups, not a new commit);
    - push back with evidence when the reviewer is wrong.
-   Re-review the fixes (scoped to the new range).
+   Re-review the fixes (scoped to the new range). When rounds don't converge, stop as receiving-code-review says.
 
 ## Review gate
 

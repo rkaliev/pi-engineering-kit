@@ -18,6 +18,12 @@ Review feedback is a set of technical claims to verify, not orders to obey or pr
 7. **Account for every item.** Feedback comes in three places: inline threads, the review's own body (where reviewers and bots often put nitpicks and findings outside the diff) and top-level comments. Each item ends either fixed (with where) or answered (with why not). None is skipped silently. Answer an inline finding in its thread, and the items of a review body in one reply that numbers them in the review's order. "Will fix later" doesn't close an item: fix it now, or decline it here and add it to the task file's Follow-ups (once that file is gone, to the final report). Nitpicks on an approval still count. Don't call the review resolved while a blocking item is open or before a re-review has closed it, and don't reply again to a thread whose latest message is already yours.
 8. **Report coverage**, one line per item: `fixed (<sha>, file:line)`, `replied (<why>)` or `failed (<why>)`. A PR is ready only when every item is closed, no changes-requested verdict stands and the required checks have all passed on its current head. Green checks alone don't make it ready.
 
+## When rounds don't converge
+
+review-log gives the round number; findings keep their `F<n>`. Stop and ask the user before another fix when one finding is still open after two fix attempts, or when Critical or Important findings are still open after the third round. Give its history and your recommendation, and offer: a named fix, a design rethink, a user ruling, or move it to Follow-ups (never a Critical). Even if the user is away, end with the question.
+
+After a `Yes`, don't fix Minor findings or `missed earlier` items, since each fix needs another round: add them to the task file's Follow-ups (once it is gone, the final report).
+
 ## Pushback is part of the job
 
 Push back, with evidence, when a suggestion:
