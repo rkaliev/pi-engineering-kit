@@ -1,6 +1,6 @@
 # Files the agent writes are in English
 
-Status: design approved (2026-10-21)
+Status: plan approved (2026-10-21)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: d1f39ff35c259dd9ab9da0a1f3139561f47daa87 (pi edition: 5c57e17093fc8013e67619c62238bfe643422b50)
 Links: the Claude edition (eng-kit) carries the same file on its `feat/docs-language` branch; the eval tasks run there
