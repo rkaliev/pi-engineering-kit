@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
@@ -824,4 +824,27 @@ test("without a tracking ref for the base, a remote branch that merely ends in /
 	review(report(c, "Yes", x));
 	git("switch", "-q", "main");
 	assert.match(String(check("git merge feat/b")?.reason), /does not cover/, "x is on up/team/main, not on the local main");
+});
+
+test("reviewChain lists the earlier rounds of a chain, newest first", () => {
+	const { dir, root, commit, head, base, review } = repo();
+	review(report(head, "No", base));
+	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(report(fixed, "With fixes", head));
+	const final = commit({ "src/a.ts": "export const a = 3;\n" });
+	review(report(final, "Yes", fixed));
+	assert.deepEqual(reviewChain(dir, final, root), [
+		{ sha: final, base: fixed, verdict: "Yes" },
+		{ sha: fixed, base: head, verdict: "With fixes" },
+		{ sha: head, base, verdict: "No" },
+	]);
+});
+
+test("reviewChain stops at a broken link", () => {
+	const { dir, root, commit, head, base, review } = repo();
+	review(report(head, "No", base));
+	const unreviewed = commit({ "src/a.ts": "export const a = 2;\n" });
+	const final = commit({ "src/a.ts": "export const a = 3;\n" });
+	review(report(final, "Yes", unreviewed));
+	assert.deepEqual(reviewChain(dir, final, root), [{ sha: final, base: unreviewed, verdict: "Yes" }]);
 });

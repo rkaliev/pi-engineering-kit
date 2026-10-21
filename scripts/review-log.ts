@@ -6,7 +6,7 @@
  *   node <kit>/scripts/review-log.ts <rev>
  */
 import { spawnSync } from "node:child_process";
-import { readReports } from "../extensions/lib/reviews.ts";
+import { readReports, reviewChain } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
 if (!rev) {
@@ -20,9 +20,15 @@ if (!sha) {
 	process.exit(1);
 }
 // Records are keyed by the repository, so any folder or worktree of it finds them.
-const reports = readReports(process.cwd(), sha, process.env.ENG_KIT_REVIEWS_ROOT || undefined);
+const root = process.env.ENG_KIT_REVIEWS_ROOT || undefined;
+const reports = readReports(process.cwd(), sha, root);
 if (reports.length === 0) {
 	console.error(`no recorded review for ${sha.slice(0, 7)}`);
 	process.exit(1);
 }
+// The round number tells the author when rounds stop converging (receiving-code-review). A record from before
+// ranges were recorded has no base, so it still counts as one earlier round.
+const chain = reviewChain(process.cwd(), sha, root);
+const earlier = chain.map((r) => `${r.base.slice(0, 7)}..${r.sha.slice(0, 7)} ${r.verdict}`).join(", ") || `${sha.slice(0, 7)} ${reports[0]!.verdict}`;
+process.stdout.write(`Round ${Math.max(chain.length, 1) + 1} of this branch's review chain. Earlier rounds, newest first: ${earlier}.\n\n`);
 for (const { run, verdict, report } of reports) process.stdout.write(`## Reviewer run ${run} — ${verdict}\n\n${report}\n\n`);

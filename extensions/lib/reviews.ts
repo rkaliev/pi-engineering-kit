@@ -254,6 +254,16 @@ function writeJson(projectDir: string, file: string, value: Record<string, unkno
 	}
 }
 
+/** The rounds of the chain that ends at `sha`, newest first, following each round's first recorded base (no git calls, at most MAX_CHAIN links). */
+export function reviewChain(projectDir: string, sha: string, root?: string): Array<{ sha: string; base: string; verdict: Verdict }> {
+	const rounds = new Map(readReviews(projectDir, root).map((r) => [r.sha, r]));
+	const chain: Array<{ sha: string; base: string; verdict: Verdict }> = [];
+	for (let round = rounds.get(sha); round?.bases[0] && chain.length < MAX_CHAIN; round = rounds.get(round.bases[0])) {
+		chain.push({ sha: round.sha, base: round.bases[0], verdict: round.verdict });
+	}
+	return chain;
+}
+
 /** The reports of the latest round of reviews of `sha`, for a repeat round to re-check (see scripts/review-log.ts). */
 export function readReports(projectDir: string, sha: string, root?: string): Array<{ run: string; verdict: Verdict; report: string }> {
 	const dir = reviewsDir(projectDir, root);
