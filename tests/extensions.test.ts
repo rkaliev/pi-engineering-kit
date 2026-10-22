@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
-import { readReviews } from "../extensions/lib/reviews.ts";
+import { readReviews, recordVerdict } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
@@ -967,6 +967,18 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	const log = run();
 	assert.equal(log.status, 0, log.stderr);
 	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
+	assert.match(log.stdout, /^Round 2 since the last Yes \(the stop rule counts these\)\. Earlier rounds, newest first: [0-9a-f]{7}\.\.[0-9a-f]{7} No\.$/m);
+	assert.match(log.stdout, /^Highest finding IDs so far: none; a new finding takes the next number\.$/m);
+	// A failed run records no range and no report: review-log still prints the round and a placeholder.
+	writeFileSync(join(dir, "b.ts"), "export const b = 1;\n");
+	git("add", "-A");
+	git("commit", "-qm", "feat: b");
+	const failed = git("rev-parse", "HEAD");
+	recordVerdict(dir, failed, "Inconclusive", { promptId: "p2", run: "a2" }, reviewsRoot);
+	const afterFail = run();
+	assert.equal(afterFail.status, 0, afterFail.stderr);
+	assert.match(afterFail.stdout, new RegExp(`^Round 2 since the last Yes \\(the stop rule counts these\\)\\. Earlier rounds, newest first: ${failed.slice(0, 7)} Inconclusive\\.$`, "m"));
+	assert.match(afterFail.stdout, /\(no report stored for this run\)/);
 });
 
 test("token ledger: subagent results and the session's usage fill the branch's ledger; the status text and /usage show it", async () => {
