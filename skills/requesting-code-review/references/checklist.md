@@ -2,7 +2,7 @@
 
 Load the fixed severities always, and only the other sections that match the diff.
 
-Each rule has a stable ID: a finding cites it in brackets (`[SEV-03]`). A removed rule's ID is never reused; a new rule takes the next number in its section.
+Each rule has a stable ID: a finding cites it in brackets (`[SEV-03]`). A removed rule's ID is never reused: a new rule takes the number after the highest its section has ever used.
 
 ## Fixed severities
 

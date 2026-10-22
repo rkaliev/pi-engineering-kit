@@ -25,15 +25,20 @@ Also read in full any new file the diff introduces.
 {ROUND}: Full, Repeat or Prose. Check that it fits before you review:
 - Full: {BASE} is {RULES_BASE}. Review the whole range.
 - Repeat: {BASE} is the previous round's HEAD. Review {BASE}..{HEAD}, what it breaks, and every
-  finding review-log prints. Code this range doesn't change was reviewed in an earlier round: a new
-  finding there counts only at Critical. Anything less goes under Out of scope as
-  `missed earlier (<severity>)` and doesn't change the verdict.
-- Prose: the review-log header shows the previous round said Yes, and every path in
-  `git diff --name-only {BASE}..{HEAD}` is prose: a task file, Markdown under docs/ (except
-  docs/decisions/ and docs/adr/), README* or CHANGELOG*. Never prose: CLAUDE.md, AGENTS.md,
-  SKILL.md, anything under .claude/, .pi/, rules/, skills/, agents/, prompts/ or templates/, and
-  code files, comments included. Check only that the changed text is true of the code at {HEAD}
-  (behavior, commands, paths, links); skip the checklist.
+  finding review-log prints. Code an earlier round reviewed with a verdict other than Inconclusive,
+  and that this range neither changes nor newly reaches (a new caller, input, flag or config),
+  gets a new finding only at Critical. Anything less goes under Out of scope as
+  `missed earlier (<severity>)` and doesn't change the verdict. Code an Inconclusive round covered
+  counts as unreviewed: judge it at any severity.
+- Prose: {BASE} is not {RULES_BASE}, the review-log header shows the previous round said Yes, and
+  every path in `git diff --name-only --no-renames {BASE}..{HEAD}` (a renamed or deleted file
+  counts by its old path too) is prose: a task file, README*, CHANGELOG*, or Markdown under docs/
+  that isn't a decision record (docs/decisions/, docs/adr/ or wherever the project keeps them).
+  Never prose: CLAUDE.md, AGENTS.md, SKILL.md, anything under .claude/, .pi/, rules/, skills/,
+  agents/, prompts/ or templates/, a file the agent manifest imports or names as rules or
+  standards, and code files, comments included. Check that the changed text is true of the code at
+  {HEAD} (behavior, commands, paths, links), and apply SEV-01, SEV-09 and SEC-03 to the changed
+  lines; skip the rest of the checklist.
 If {ROUND} doesn't fit, say why and review it as the round that does (a failed Prose check is a
 Repeat round).
 
@@ -84,7 +89,8 @@ Repeat round).
 
 ## Output
 ### Round
-The round you ran, and why if it differs from {ROUND}.
+The round you ran, its number from the review-log header (1 for a Full round), and why if it
+differs from {ROUND}.
 
 ### Criteria
 One line per numbered criterion: done / not done / not visible from code, with evidence.
@@ -96,7 +102,8 @@ One line per numbered criterion: done / not done / not visible from code, with e
 #### Minor (nice to have, with a concrete benefit)
 Each: `F<n> [<rule ID>] file:line` · trigger (inputs or conditions) · consequence · evidence
 (code, output, reproduction) · fix. State any uncertainty explicitly. A finding keeps the `F<n>` it
-has in the reports review-log prints; a new one takes the next free number. The rule ID is the
+has in the reports review-log prints; a new one takes the next free number, with the prefix your task
+names for parallel reviewers (`F` otherwise). The rule ID is the
 checklist's (`[SEV-03]`) or the project rule's anchor; leave the brackets out when no rule applies.
 A finding open since earlier rounds names them: `F2 (rounds 1–3)`.
 
