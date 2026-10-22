@@ -1,12 +1,12 @@
 /**
- * Print the reviewer reports recorded for a commit (its latest round of reviews), so a repeat round
- * re-checks the open findings from the store instead of the author's summary of them.
+ * Print the round number since the last Yes and the reviewer reports recorded for a commit (its latest round of
+ * reviews), so a repeat round re-checks the open findings from the store instead of the author's summary of them.
  * Exits 1 when no review of that commit is recorded.
  *
  *   node <kit>/scripts/review-log.ts <rev>
  */
 import { spawnSync } from "node:child_process";
-import { readReports, reviewChain } from "../extensions/lib/reviews.ts";
+import { readReports, reviewChain, roundNumber } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
 if (!rev) {
@@ -26,9 +26,9 @@ if (reports.length === 0) {
 	console.error(`no recorded review for ${sha.slice(0, 7)}`);
 	process.exit(1);
 }
-// The round number tells the author when rounds stop converging (receiving-code-review). A record from before
-// ranges were recorded has no base, so it still counts as one earlier round.
+// The round number is counted from the last Yes, which closes a converged scope: receiving-code-review stops the
+// author when rounds don't converge. A failed run has no range, so the chain ends at it.
 const chain = reviewChain(process.cwd(), sha, root);
-const earlier = chain.map((r) => `${r.base.slice(0, 7)}..${r.sha.slice(0, 7)} ${r.verdict}`).join(", ") || `${sha.slice(0, 7)} ${reports[0]!.verdict}`;
-process.stdout.write(`Round ${Math.max(chain.length, 1) + 1} of this branch's review chain. Earlier rounds, newest first: ${earlier}.\n\n`);
+const earlier = chain.map((r) => `${r.base ? `${r.base.slice(0, 7)}..` : ""}${r.sha.slice(0, 7)} ${r.verdict}`).join(", ");
+process.stdout.write(`Round ${roundNumber(chain)} since the last Yes (the stop rule counts these). Earlier rounds, newest first: ${earlier}.\n\n`);
 for (const { run, verdict, report } of reports) process.stdout.write(`## Reviewer run ${run} — ${verdict}\n\n${report}\n\n`);

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
@@ -847,4 +847,42 @@ test("reviewChain stops at a broken link", () => {
 	const final = commit({ "src/a.ts": "export const a = 3;\n" });
 	review(report(final, "Yes", unreviewed));
 	assert.deepEqual(reviewChain(dir, final, root), [{ sha: final, base: unreviewed, verdict: "Yes" }]);
+});
+
+test("reviewChain stops at the round whose range starts on the remote base, even when the base commit was reviewed", () => {
+	const { dir, root, git, commit, base, review } = repo();
+	git("switch", "-q", "main");
+	const landed = commit({ "src/b.ts": "export const b = 1;\n" });
+	git("push", "-q", "origin", "main");
+	review(report(landed, "Yes", base));
+	git("switch", "-q", "feat/a");
+	git("rebase", "-q", "main");
+	const head = git("rev-parse", "HEAD");
+	review(report(head, "No", landed));
+	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(report(fixed, "Yes", head));
+	assert.deepEqual(reviewChain(dir, fixed, root).map((r) => r.sha), [fixed, head]);
+});
+
+test("reviewChain ends at an empty range, a failed run without a range, and follows the recorded one of parallel bases", () => {
+	const { dir, root, commit, head, base, review } = repo();
+	review(report(head, "No", head));
+	assert.deepEqual(reviewChain(dir, head, root), [{ sha: head, base: head, verdict: "No" }]);
+	recordVerdict(dir, head, "Inconclusive", { promptId: "failed", run: "r1" }, root);
+	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(report(fixed, "Yes", head));
+	assert.deepEqual(reviewChain(dir, fixed, root), [{ sha: fixed, base: head, verdict: "Yes" }, { sha: head, base: undefined, verdict: "Inconclusive" }]);
+	const next = commit({ "src/a.ts": "export const a = 3;\n" });
+	review(report(next, "Yes", base), "parallel", "r1");
+	review(report(next, "Yes", fixed), "parallel", "r2");
+	assert.deepEqual(reviewChain(dir, next, root).map((r) => r.sha), [next, fixed, head]);
+});
+
+test("roundNumber counts the rounds since the last Yes: a Yes closes a converged scope", () => {
+	const r = (verdict: "Yes" | "No" | "With fixes") => ({ sha: "s", base: "b", verdict });
+	assert.equal(roundNumber([]), 1);
+	assert.equal(roundNumber([r("No")]), 2);
+	assert.equal(roundNumber([r("With fixes"), r("No")]), 3);
+	assert.equal(roundNumber([r("Yes"), r("No"), r("No")]), 1);
+	assert.equal(roundNumber([r("No"), r("Yes"), r("No")]), 2);
 });

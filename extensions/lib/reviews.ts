@@ -254,14 +254,31 @@ function writeJson(projectDir: string, file: string, value: Record<string, unkno
 	}
 }
 
-/** The rounds of the chain that ends at `sha`, newest first, following each round's first recorded base (no git calls, at most MAX_CHAIN links). */
-export function reviewChain(projectDir: string, sha: string, root?: string): Array<{ sha: string; base: string; verdict: Verdict }> {
+/**
+ * The rounds of the chain that ends at `sha`, newest first: from the round recorded for `sha`, each round's base
+ * (of parallel reviewers' bases, one with a record of its own) back to the round whose range starts on the remote
+ * base. A failed run (no range), an empty range or a repeat ends it, and so do MAX_CHAIN links.
+ */
+export function reviewChain(projectDir: string, sha: string, root?: string): Array<{ sha: string; base: string | undefined; verdict: Verdict }> {
 	const rounds = new Map(readReviews(projectDir, root).map((r) => [r.sha, r]));
-	const chain: Array<{ sha: string; base: string; verdict: Verdict }> = [];
-	for (let round = rounds.get(sha); round?.bases[0] && chain.length < MAX_CHAIN; round = rounds.get(round.bases[0])) {
-		chain.push({ sha: round.sha, base: round.bases[0], verdict: round.verdict });
+	const base = baseBranch(projectDir);
+	const anchor = base === undefined ? undefined : anchorRef(projectDir, "origin", base);
+	const chain: Array<{ sha: string; base: string | undefined; verdict: Verdict }> = [];
+	const seen = new Set<string>();
+	for (let round = rounds.get(sha); round && !seen.has(round.sha) && chain.length < MAX_CHAIN; ) {
+		seen.add(round.sha);
+		const next = round.bases.find((b) => rounds.has(b)) ?? round.bases[0];
+		chain.push({ sha: round.sha, base: next, verdict: round.verdict });
+		if (next === undefined || next === round.sha || (anchor !== undefined && isAncestor(projectDir, next, anchor))) break;
+		round = rounds.get(next);
 	}
 	return chain;
+}
+
+/** The number of the round that follows `chain` (newest first), counted from the last Yes: a Yes closes a converged scope. */
+export function roundNumber(chain: Array<{ verdict: Verdict }>): number {
+	const yes = chain.findIndex((r) => r.verdict === "Yes");
+	return (yes === -1 ? chain.length : yes) + 1;
 }
 
 /** The reports of the latest round of reviews of `sha`, for a repeat round to re-check (see scripts/review-log.ts). */

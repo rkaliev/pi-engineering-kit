@@ -967,6 +967,7 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	const log = run();
 	assert.equal(log.status, 0, log.stderr);
 	assert.match(log.stdout, /— No\n\n#### Important\n`a\.ts:1` · no input check/);
+	assert.match(log.stdout, /^Round 2 since the last Yes \(the stop rule counts these\)\. Earlier rounds, newest first: [0-9a-f]{7}\.\.[0-9a-f]{7} No\.$/m);
 });
 
 test("token ledger: subagent results and the session's usage fill the branch's ledger; the status text and /usage show it", async () => {
