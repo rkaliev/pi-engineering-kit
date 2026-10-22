@@ -24,16 +24,14 @@ Also read in full any new file the diff introduces.
 ## Round
 {ROUND}: Full, Repeat or Prose. Check that it fits before you review:
 - Full: {BASE} is {RULES_BASE}. Review the whole range. If {PREVIOUS_HEAD} (this branch's last
-  reviewed HEAD before a rebase) isn't "none", run review-log on it too and carry on its round
+  reviewed HEAD before this Full round) isn't "none", run review-log on it too and carry on its round
   count and finding IDs.
 - Repeat: {BASE} is the previous round's HEAD. Review {BASE}..{HEAD}, what it breaks, and every
   finding review-log prints. Code an earlier round reviewed with a verdict other than Inconclusive,
   and that this range neither changes nor newly reaches (a new caller, input, flag or config),
   gets a new finding only at Critical. Anything less goes under Out of scope as
   `missed earlier (<severity>)` and doesn't change the verdict. Code an Inconclusive round covered
-  counts as unreviewed: judge it at any severity. A finding the requirements show the user moved to
-  Follow-ups (their ruling quoted) goes under Out of scope as `deferred by the user` and doesn't
-  change the verdict; a Critical can't be deferred.
+  counts as unreviewed: judge it at any severity.
 - Prose: {BASE} is not {RULES_BASE}, the review-log header shows the previous round said Yes, and
   every path in `git diff --name-only --no-renames {BASE}..{HEAD}` (a renamed or deleted file
   counts by its old path too) is prose: a task file, README*, CHANGELOG*, or Markdown under docs/
@@ -44,7 +42,9 @@ Also read in full any new file the diff introduces.
   in the product, bundled, loaded at runtime, run as doc tests: grep for each path), and code files, comments included. Check that the changed text is true of the code at
   {HEAD} (behavior, commands, paths, links), and apply the project's rules and SEV-01, SEV-09 and
   SEC-03 to the changed lines; skip the rest of the checklist.
-If {ROUND} doesn't fit, say why and review it as the round that does (a failed Prose check is a
+In every round, a finding the requirements show the user moved to Follow-ups (their ruling quoted)
+goes under Out of scope as `deferred by the user` and doesn't change the verdict; a Critical can't
+be deferred. If {ROUND} doesn't fit, say why and review it as the round that does (a failed Prose check is a
 Repeat round).
 
 ## Review focus (from the plan, check each deliberately)
@@ -109,7 +109,7 @@ Each: `F<n> [<rule ID>] file:line` · trigger (inputs or conditions) · conseque
 (code, output, reproduction) · fix. State any uncertainty explicitly. A finding keeps the `F<n>` it
 has in the reports review-log prints; a new one takes the number after the highest the review-log
 header names, with the prefix your task
-names for parallel reviewers (`F` otherwise). The rule ID is the
+names for parallel reviewers (`F` otherwise; `S` security, `T` tests, `C` another focus). The rule ID is the
 checklist's (`[SEV-03]`) or the project rule's anchor; leave the brackets out when no rule applies.
 A finding open since earlier rounds names them: `F2 (rounds 1–3)`.
 

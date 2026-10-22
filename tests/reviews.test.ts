@@ -898,11 +898,11 @@ test("reviewChain follows the parallel base that continues the chain, whatever o
 	}
 });
 
-test("highestFindingIds names the highest F and S finding number in every round of the chain", () => {
+test("highestFindingIds names the highest finding number of each prefix (F, S, T, C) in every round of the chain", () => {
 	const { dir, root, commit, head, base, review } = repo();
 	review(`#### Important\n- F1 [SEV-18] a.ts:1 · x\n- F4 a.ts:2 · y\n- S2 a.ts:3 · z\n${report(head, "No", base)}`);
 	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
-	review(`F1 fixed; F4 still open (rounds 1–2).\n- F5 a.ts:4 · w. See SEV-30 and HYG-01.\n${report(fixed, "With fixes", head)}`);
-	assert.deepEqual(highestFindingIds(dir, reviewChain(dir, fixed, root), root), { F: 5, S: 2 });
+	review(`F1 fixed; F4 still open (rounds 1–2).\n- F5 a.ts:4 · w. See SEV-30 and HYG-01.\n- T3 a.test.ts:1 · v\n- C1 a.ts:5 · u\n${report(fixed, "With fixes", head)}`);
+	assert.deepEqual(highestFindingIds(dir, reviewChain(dir, fixed, root), root), { F: 5, S: 2, T: 3, C: 1 });
 	assert.deepEqual(highestFindingIds(dir, [], root), {});
 });
