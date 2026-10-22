@@ -20,7 +20,7 @@ Review feedback is a set of technical claims to verify, not orders to obey or pr
 
 ## When rounds don't converge
 
-review-log gives the round number; findings keep their `F<n>`. Stop and ask the user before another fix when one finding is still open after two fix attempts, or when Critical or Important findings are still open after the third round. Give its history and your recommendation, and offer: a named fix, a design rethink, a user ruling, or move it to Follow-ups (never a Critical). Even if the user is away, end with the question.
+The reviewer's Round line numbers rounds since the last `Yes`; findings keep their IDs. Stop and ask the user before another fix when one finding is still open after two fix attempts, or when Critical or Important findings are still open after round 3. Give its history and your recommendation, and offer: a named fix, a design rethink, a user ruling, or move it to Follow-ups (never a Critical). Even if the user is away, end with the question.
 
 After a `Yes`, don't fix Minor findings or `missed earlier` items, since each fix needs another round: add them to the task file's Follow-ups (once it is gone, the final report).
 

@@ -210,4 +210,16 @@ test("checklist rules carry unique stable IDs", () => {
 	}
 	assert.ok(ids.length > 40, `expected the whole checklist, found ${ids.length} IDs`);
 	assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), [], "duplicate IDs");
+	// A removed rule's ID goes to the Retired line and a new rule takes the next number, so the IDs in use and the
+	// retired ones are exactly 01..highest in each section. Adding a rule bumps HIGHEST here. Replacing the last rule's
+	// text under its old ID can't be told from rewording it; review catches that.
+	const HIGHEST: Record<string, number> = { SEV: 30, COR: 7, TST: 5, SEC: 5, ARC: 5, AI: 6, HYG: 5 };
+	const retiredLine = /^Retired IDs: (.+)\.$/m.exec(text);
+	assert.ok(retiredLine, "the checklist names its retired IDs (`Retired IDs: none.`)");
+	const retired = retiredLine[1] === "none" ? [] : retiredLine[1]!.split(/,\s*/);
+	assert.deepEqual(retired.filter((id) => ids.includes(id)), [], "a retired ID is in use again");
+	for (const [prefix, highest] of Object.entries(HIGHEST)) {
+		const numbers = [...ids, ...retired].filter((id) => id.startsWith(`${prefix}-`)).map((id) => Number(id.slice(prefix.length + 1))).sort((a, b) => a - b);
+		assert.deepEqual(numbers, Array.from({ length: highest }, (_, i) => i + 1), `${prefix}: IDs in use and retired must be 01..${highest}`);
+	}
 });

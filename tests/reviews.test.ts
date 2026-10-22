@@ -886,3 +886,14 @@ test("roundNumber counts the rounds since the last Yes: a Yes closes a converged
 	assert.equal(roundNumber([r("Yes"), r("No"), r("No")]), 1);
 	assert.equal(roundNumber([r("No"), r("Yes"), r("No")]), 2);
 });
+
+test("reviewChain follows the parallel base that continues the chain, whatever order the runs were recorded in", () => {
+	for (const [self, inBranch] of [["a", "b"], ["b", "a"]]) {
+		const { dir, root, commit, head, base, review } = repo();
+		review(report(head, "No", base));
+		const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+		review(report(fixed, "No", fixed), "parallel", self);
+		review(report(fixed, "No", head), "parallel", inBranch);
+		assert.deepEqual(reviewChain(dir, fixed, root).map((r) => r.sha), [fixed, head], `self run ${self}`);
+	}
+});

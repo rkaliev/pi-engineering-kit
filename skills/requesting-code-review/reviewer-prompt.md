@@ -23,7 +23,9 @@ Also read in full any new file the diff introduces.
 
 ## Round
 {ROUND}: Full, Repeat or Prose. Check that it fits before you review:
-- Full: {BASE} is {RULES_BASE}. Review the whole range.
+- Full: {BASE} is {RULES_BASE}. Review the whole range. If your task names this branch's last
+  reviewed HEAD from before a rebase, run review-log on it too and carry on its round count and
+  finding IDs.
 - Repeat: {BASE} is the previous round's HEAD. Review {BASE}..{HEAD}, what it breaks, and every
   finding review-log prints. Code an earlier round reviewed with a verdict other than Inconclusive,
   and that this range neither changes nor newly reaches (a new caller, input, flag or config),
@@ -35,10 +37,10 @@ Also read in full any new file the diff introduces.
   counts by its old path too) is prose: a task file, README*, CHANGELOG*, or Markdown under docs/
   that isn't a decision record (docs/decisions/, docs/adr/ or wherever the project keeps them).
   Never prose: CLAUDE.md, AGENTS.md, SKILL.md, anything under .claude/, .pi/, rules/, skills/,
-  agents/, prompts/ or templates/, a file the agent manifest imports or names as rules or
-  standards, and code files, comments included. Check that the changed text is true of the code at
-  {HEAD} (behavior, commands, paths, links), and apply SEV-01, SEV-09 and SEC-03 to the changed
-  lines; skip the rest of the checklist.
+  agents/, prompts/ or templates/, a file the agent manifest (on {RULES_BASE} or {HEAD}) or a
+  path rule imports or names as rules or standards, and code files, comments included. Check that the changed text is true of the code at
+  {HEAD} (behavior, commands, paths, links), and apply the project's rules and SEV-01, SEV-09 and
+  SEC-03 to the changed lines; skip the rest of the checklist.
 If {ROUND} doesn't fit, say why and review it as the round that does (a failed Prose check is a
 Repeat round).
 
