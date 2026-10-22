@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
@@ -896,4 +896,13 @@ test("reviewChain follows the parallel base that continues the chain, whatever o
 		review(report(fixed, "No", head), "parallel", inBranch);
 		assert.deepEqual(reviewChain(dir, fixed, root).map((r) => r.sha), [fixed, head], `self run ${self}`);
 	}
+});
+
+test("highestFindingIds names the highest F and S finding number in every round of the chain", () => {
+	const { dir, root, commit, head, base, review } = repo();
+	review(`#### Important\n- F1 [SEV-18] a.ts:1 · x\n- F4 a.ts:2 · y\n- S2 a.ts:3 · z\n${report(head, "No", base)}`);
+	const fixed = commit({ "src/a.ts": "export const a = 2;\n" });
+	review(`F1 fixed; F4 still open (rounds 1–2).\n- F5 a.ts:4 · w. See SEV-30 and HYG-01.\n${report(fixed, "With fixes", head)}`);
+	assert.deepEqual(highestFindingIds(dir, reviewChain(dir, fixed, root), root), { F: 5, S: 2 });
+	assert.deepEqual(highestFindingIds(dir, [], root), {});
 });

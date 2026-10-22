@@ -6,7 +6,7 @@
  *   node <kit>/scripts/review-log.ts <rev>
  */
 import { spawnSync } from "node:child_process";
-import { readReports, reviewChain, roundNumber } from "../extensions/lib/reviews.ts";
+import { highestFindingIds, readReports, reviewChain, roundNumber } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
 if (!rev) {
@@ -30,5 +30,7 @@ if (reports.length === 0) {
 // author when rounds don't converge. A failed run has no range, so the chain ends at it.
 const chain = reviewChain(process.cwd(), sha, root);
 const earlier = chain.map((r) => `${r.base ? `${r.base.slice(0, 7)}..` : ""}${r.sha.slice(0, 7)} ${r.verdict}`).join(", ");
-process.stdout.write(`Round ${roundNumber(chain)} since the last Yes (the stop rule counts these). Earlier rounds, newest first: ${earlier}.\n\n`);
+const ids = Object.entries(highestFindingIds(process.cwd(), chain, root)).map(([prefix, n]) => `${prefix}${n}`).join(", ");
+process.stdout.write(`Round ${roundNumber(chain)} since the last Yes (the stop rule counts these). Earlier rounds, newest first: ${earlier}.\n`);
+process.stdout.write(`Highest finding IDs so far: ${ids || "none"}; a new finding takes the next number.\n\n`);
 for (const { run, verdict, report } of reports) process.stdout.write(`## Reviewer run ${run} — ${verdict}\n\n${report}\n\n`);

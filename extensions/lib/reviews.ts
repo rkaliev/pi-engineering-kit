@@ -283,6 +283,17 @@ export function roundNumber(chain: Array<{ verdict: Verdict }>): number {
 	return (yes === -1 ? chain.length : yes) + 1;
 }
 
+/** The highest finding number per prefix (`F`, `S`) in the reports of the chain's rounds, so a new finding never reuses an old ID. */
+export function highestFindingIds(projectDir: string, chain: Array<{ sha: string }>, root?: string): Record<string, number> {
+	const highest: Record<string, number> = {};
+	for (const { sha } of chain) {
+		for (const { report } of readReports(projectDir, sha, root)) {
+			for (const m of report.matchAll(/(?<![\w-])([FS])(\d{1,3})(?![\w-])/g)) highest[m[1]!] = Math.max(highest[m[1]!] ?? 0, Number(m[2]));
+		}
+	}
+	return highest;
+}
+
 /** The reports of the latest round of reviews of `sha`, for a repeat round to re-check (see scripts/review-log.ts). */
 export function readReports(projectDir: string, sha: string, root?: string): Array<{ run: string; verdict: Verdict; report: string }> {
 	const dir = reviewsDir(projectDir, root);
