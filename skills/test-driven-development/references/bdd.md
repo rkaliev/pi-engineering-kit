@@ -1,6 +1,6 @@
 # BDD scenarios (optional acceptance layer)
 
-Use BDD when acceptance criteria should read in the domain's language and be checked end to end: web and API products, payment, checkout and POS flows, anything people outside the team review. Skip it for libraries, CLIs and pure logic, where unit and API tests say the same thing more cheaply. Adding it to a project is the user's decision.
+Use BDD when acceptance criteria should read in the domain's language and be checked end to end: web and API products, payment, checkout and POS flows, anything people outside the team review. Skip it for libraries, CLIs and pure logic, where unit and API tests say the same thing more cheaply. Adding it to a project is the user's decision. Scenarios are in English (using-skills), unless the user asks for another language.
 
 **Tools:**
 - web: playwright-bdd or Cucumber-JS;
