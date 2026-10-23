@@ -456,8 +456,8 @@ test("verify: a worker subagent's changes are counted as its call's, with or wit
 });
 
 /** A folder outside git holding repositories `a` (committed `f.ts`) and `b` (committed `m.ts`), with verification commands. */
-function workspaceProject() {
-	const dir = project(COMMANDS);
+function workspaceProject(files: Record<string, string> = COMMANDS) {
+	const dir = project(files);
 	const git = (repo: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: join(dir, repo), stdio: "pipe" });
 	for (const [repo, file] of [["a", "f.ts"], ["b", "m.ts"]] as const) {
 		mkdirSync(join(dir, repo));
@@ -1033,6 +1033,39 @@ test("review-log prints the reports a reviewer run left for a commit", async () 
 	assert.equal(afterFail.status, 0, afterFail.stderr);
 	assert.match(afterFail.stdout, new RegExp(`^Round 2 since the last Yes \\(the stop rule counts these\\)\\. Earlier rounds, newest first: ${failed.slice(0, 7)} Inconclusive\\.$`, "m"));
 	assert.match(afterFail.stdout, /\(no report stored for this run\)/);
+});
+
+/** A workspace without verification commands, a guard with its own record store, and each repository's HEAD. */
+function reviewWorkspace() {
+	const { dir, git } = workspaceProject({});
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const head = (repo: string) => String(git(repo, "rev-parse", "HEAD")).trim();
+	const reviewer = (finalOutput: string) =>
+		g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput }] }, isError: false }, ctx(dir));
+	return { dir, reviewsRoot, head, reviewer };
+}
+
+test("review gate: a reviewer subagent's verdict in a workspace is recorded in the repository that has the commit", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	await reviewer(`Reviewed BASE: ${head("a")}\nReviewed HEAD: ${head("a")}\nReady to merge: Yes`);
+	assert.deepEqual(readReviews(join(dir, "a"), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head("a"), "Yes"]]);
+});
+
+test("review gate: a malformed report in a workspace lands Inconclusive on each repository's HEAD", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	await reviewer("Reviewed HEAD: deadbeef0");
+	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
+});
+
+test("review-log finds the commit's repository from the workspace folder", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	await reviewer(`Reviewed BASE: ${head("b")}\nReviewed HEAD: ${head("b")}\nReady to merge: No`);
+	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
+	const printed = spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), head("b")], { cwd: dir, encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	assert.equal(printed.status, 0, printed.stderr);
+	assert.match(printed.stdout, /## Reviewer run c1-0 — No/);
 });
 
 test("token ledger: subagent results and the session's usage fill the branch's ledger; the status text and /usage show it", async () => {

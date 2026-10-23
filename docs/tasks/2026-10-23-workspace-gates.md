@@ -187,11 +187,11 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 **Files:** Modify `scripts/review-log.ts` · Test `tests/extensions.test.ts`
 **Interfaces:** Consumes `commitRepos`
 
-- [ ] Write failing test `review-log finds the commit from the workspace folder` → spawn the script with `cwd: ws`, `ENG_KIT_REVIEWS_ROOT`, rev = `a`'s HEAD with a recorded review → exit 0 and the report printed. Run → expect FAIL: exit 1, `is not a commit in this repository`.
-- [ ] Add extension tests `a reviewer subagent result records a workspace verdict` (→ `readReviews(ws/a)` has `Yes`, no notify) and `a malformed report in a workspace lands Inconclusive on each HEAD`. They pass on Task 4's code: confirm each fails when `commitRepos` returns `[]` (a temporary mutation of a copy, not the file), then keep them as regression tests.
-- [ ] Implement: review-log resolves `rev` in `process.cwd()`; failing that, takes the first `commitRepos(process.cwd(), rev)` entry and reads its reports, chain and IDs from that folder; error `<rev> is not a commit in this repository or any repository here`.
-- [ ] Run `node --test tests/extensions.test.ts` → PASS, then `npm test`
-- [ ] Commit `fix(review-log): find the commit's repository from a workspace folder`
+- [x] Write failing test `review-log finds the commit from the workspace folder` → spawn the script with `cwd: ws`, `ENG_KIT_REVIEWS_ROOT`, rev = `a`'s HEAD with a recorded review → exit 0 and the report printed. Run → expect FAIL: exit 1, `is not a commit in this repository`.
+- [x] Add extension tests `a reviewer subagent result records a workspace verdict` (→ `readReviews(ws/a)` has `Yes`, no notify) and `a malformed report in a workspace lands Inconclusive on each HEAD`. They pass on Task 4's code: confirm each fails when `commitRepos` returns `[]` (a temporary mutation of a copy, not the file), then keep them as regression tests.
+- [x] Implement: review-log resolves `rev` in `process.cwd()`; failing that, takes the first `commitRepos(process.cwd(), rev)` entry and reads its reports, chain and IDs from that folder; error `<rev> is not a commit in this repository or any repository here`.
+- [x] Run `node --test tests/extensions.test.ts` → PASS, then `npm test`
+- [x] Commit `fix(review-log): find the commit's repository from a workspace folder`
 
 ### Task 6: docs and release 0.34.0
 
@@ -219,3 +219,4 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 - Ruling: two repo() repositories built in the same second have identical commits, so the test's b had a's SHA; b now gets its own README through a new repo() parameter (test helper only) — cost if wrong: none, the fixed tests were re-run RED on the pre-Task-4 code (5 fail for the planned reasons).
 - Added test 'a PR entry noted by 0.33.0 (branches, no folders) registers its branches in the project's store' for the legacy path settlePr keeps; it passes on old and new code, and a mutation of a copy (legacy entries lose their branch) makes it fail (actual []).
 - Task 4: complete (d4ae8ad..fix(review-gate) commit; tests patched in from the identical shared suite; node --test tests/reviews.test.ts → 62 pass; npm test → 510 tests: 499 pass, 11 skipped, 0 fail; tsc clean).
+- Task 5: complete (32f22d0..fix(review-log) commit; RED: review-log from the workspace exited 1; the two reviewer-result workspace tests fail (2 of 2) with commitRepos mutated, restored identical; GREEN: npm test → 513 tests: 502 pass, 11 skipped, 0 fail; tsc clean).
