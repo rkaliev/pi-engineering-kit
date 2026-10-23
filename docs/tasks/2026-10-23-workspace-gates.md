@@ -1,6 +1,6 @@
 # Verify and review gates work in a folder of several git repositories
 
-Status: plan approved (2026-10-23)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: 51faece0b31d9c6c96563a7bb3ac2decc781c214
 Links: None
@@ -121,15 +121,15 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 **Files:** Create `extensions/lib/repos.ts` · Test `tests/repos.test.ts`
 **Interfaces:** Produces `projectRepos(projectDir: string, ignore?: string[]): { kind: "repo" | "workspace" | "none"; repos: string[] }`, `repoOf(projectDir: string, path: string): string`, `MAX_REPOS = 32`
 
-- [ ] Write failing tests against a stub that returns `{ kind: "none", repos: [] }` and `projectDir`:
+- [x] Write failing tests against a stub that returns `{ kind: "none", repos: [] }` and `projectDir`:
   - `a folder inside git is one repository` → `{ kind: "repo", repos: [""] }`, also from a subfolder;
   - `a non-git folder of repositories is a workspace` → temp dir with `b/.git` (folder), `a/.git` (file `gitdir: …`), `plain/`, `ignored/.git` with ignore `["ignored/**"]`, `deep/x/.git`, a symlink `link → b` → `{ kind: "workspace", repos: ["a", "b"] }`;
   - `no repositories, or more than 32, is none` → an empty dir and a dir of 33 repositories give `{ kind: "none", repos: [] }`;
   - `repoOf names the repository a path is in` → `repoOf(ws, ws/b/src/x)` = `ws/b`; `repoOf(ws, ws/plain/x)` and `repoOf(ws, /elsewhere)` = `ws`; inside a repo it returns `projectDir`.
-- [ ] Run `node --test tests/repos.test.ts` → expect FAIL on the `kind` and `repos` assertions
-- [ ] Implement: `repo` when `git rev-parse --is-inside-work-tree` succeeds (one call, 3 s timeout); else the direct subfolders (`readdirSync` with file types, symlinks excluded) holding a `.git` entry, minus those a glob ignores (`isIgnored(name, ignore)`, or a `<stem>/**` glob whose stem is `name`), sorted; 1..32 of them → `workspace`. `repoOf` returns `join(projectDir, r)` for the workspace repository containing `path`, else `projectDir`.
-- [ ] Run `node --test tests/repos.test.ts` → PASS, then `npm test`
-- [ ] Commit `feat(repos): name the repositories of a project folder`
+- [x] Run `node --test tests/repos.test.ts` → expect FAIL on the `kind` and `repos` assertions
+- [x] Implement: `repo` when `git rev-parse --is-inside-work-tree` succeeds (one call, 3 s timeout); else the direct subfolders (`readdirSync` with file types, symlinks excluded) holding a `.git` entry, minus those a glob ignores (`isIgnored(name, ignore)`, or a `<stem>/**` glob whose stem is `name`), sorted; 1..32 of them → `workspace`. `repoOf` returns `join(projectDir, r)` for the workspace repository containing `path`, else `projectDir`.
+- [x] Run `node --test tests/repos.test.ts` → PASS, then `npm test`
+- [x] Commit `feat(repos): name the repositories of a project folder`
 
 ### Task 2: workspace fingerprint
 
@@ -207,4 +207,8 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 
 ## Progress
 
-None yet
+- Baseline 2026-10-23 on 595698c: typecheck and test PASS; suite 483 pass, 11 skipped (publish build tests, mode: needs pandoc, typst and mmdc).
+- Drift check: none (the plan was written on this HEAD).
+- Pre-flight: Interfaces agree across tasks; no conflicts.
+- Ruling: shared lib files are written test-first in the other edition and copied byte-identical; their RED was seen there on identical code, so here the copied tests are run green only — cost if wrong: a test that can't fail in this edition's import path, caught by the cmp check and the same assertions.
+- Task 1: complete (595698c..feat(repos) commit, node --test tests/repos.test.ts → 4 pass; npm test → 498 tests, 0 fail; tsc clean).
