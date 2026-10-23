@@ -10,10 +10,9 @@ import { stripRedirects } from "../extensions/lib/shell.ts";
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
 /** A repo with a remote: `main` pushed, then a work branch with one code commit and a task file. */
-function repo() {
-	const dir = mkdtempSync(join(tmpdir(), "reviews-"));
+function repo(dir = mkdtempSync(join(tmpdir(), "reviews-")), root = mkdtempSync(join(tmpdir(), "reviews-records-")), readme = "x\n") {
+	mkdirSync(dir, { recursive: true });
 	const remote = mkdtempSync(join(tmpdir(), "reviews-remote-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
 	const run = (cwd: string, ...args: string[]) => {
 		const r = spawnSync("git", args, { cwd, encoding: "utf8" });
 		assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
@@ -36,7 +35,7 @@ function repo() {
 	git("init", "-q", "-b", "main");
 	git("config", "user.email", "t@example.com");
 	git("config", "user.name", "t");
-	commit({ "README.md": "x\n", "src/base.ts": "export const base = 1;\n" });
+	commit({ "README.md": readme, "src/base.ts": "export const base = 1;\n" });
 	git("remote", "add", "origin", remote);
 	git("push", "-q", "origin", "main");
 	git("remote", "set-head", "origin", "main");
@@ -407,6 +406,59 @@ test("after the agent opens a PR, pushing a new unreviewed commit to its branch 
 	for (const push of ["git push", "git push -u origin feat/a", "git push origin HEAD"]) assert.match(String(check(push)?.reason), /no reviewer verdict recorded/, push);
 	review(report(next, "Yes", head));
 	assert.equal(check("git push"), undefined, "the new commit, reviewed");
+});
+
+/** A folder outside git holding two `repo()` repositories, `a` and `b`, that share one record store. */
+function workspaceRepos() {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	const b = repo(join(ws, "b"), root, "b\n");
+	const ids = { promptId: "p1", run: "r1" };
+	const check = (command: string) => checkReview(command, ws, ws, OPTIONS, root);
+	return { ws, root, a, b, ids, check };
+}
+
+test("a workspace records the verdict in the repository that has the commit", () => {
+	const { ws, root, a, b, ids } = workspaceRepos();
+	assert.equal(typeof recordReview(ws, report(a.head, "Yes", a.base), ids, root), "object");
+	assert.deepEqual(readReviews(a.dir, root).map((r) => [r.sha, r.verdict]), [[a.head, "Yes"]]);
+	assert.deepEqual(readReviews(b.dir, root), [], "the other repository has no such commit");
+});
+
+test("in a workspace, clones of one history both record the verdict", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
+	assert.equal(typeof recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p1", run: "r1" }, root), "object");
+	assert.equal(readReviews(a.dir, root)[0]?.sha, a.head);
+	assert.equal(readReviews(join(ws, "b"), root)[0]?.sha, a.head);
+});
+
+test("in a workspace, a SHA in no repository names them, and HEAD records on each repository's HEAD", () => {
+	const { ws, root, a, b, ids } = workspaceRepos();
+	assert.equal(recordReview(ws, report("1234567", "Yes", a.base), ids, root), "Reviewed HEAD 1234567 is not a commit in any repository here (a, b)");
+	assert.equal(typeof recordVerdict(ws, "HEAD", "Inconclusive", ids, root), "object");
+	assert.deepEqual(readReviews(a.dir, root).map((r) => [r.sha, r.verdict]), [[a.head, "Inconclusive"]]);
+	assert.deepEqual(readReviews(b.dir, root).map((r) => [r.sha, r.verdict]), [[b.head, "Inconclusive"]]);
+});
+
+test("in a workspace, a PR from a repository passes with its Yes and is refused without one", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	assert.match(String(check("cd a && gh pr create --fill")?.reason), /no reviewer verdict recorded/);
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	assert.equal(check("cd a && gh pr create --fill"), undefined);
+});
+
+test("in a workspace, a PR branch is gated in its own repository only", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
+	settlePr(ws, "t1", true, root);
+	a.commit({ "src/a.ts": "export const a = 2;\n" });
+	assert.match(String(check("git -C a push origin feat/a")?.reason), /no reviewer verdict recorded/, "a new commit on a's PR branch");
+	assert.equal(check("git -C b push origin feat/a"), undefined, "b's own feat/a has no PR");
 });
 
 test("a PR branch named with --head (fork syntax too) is remembered; a merged PR branch is forgotten", () => {
@@ -811,6 +863,14 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(other.dir, "t2", "gh pr create --fill && gh pr view --web", other.dir, other.root);
 	settlePr(other.dir, "t2", false, other.root);
 	assert.deepEqual(openPrBranches(other.dir, other.dir, "origin", "refs/remotes/origin/main", other.root), ["feat/a"], "the call failed after the PR step: it may exist");
+});
+
+test("a PR entry noted by 0.33.0 (branches, no folders) registers its branches in the project's store", () => {
+	const { dir, root } = repo();
+	mkdirSync(reviewsDir(dir, root), { recursive: true, mode: 0o700 });
+	writeFileSync(join(reviewsDir(dir, root), "prs-pending.json"), JSON.stringify({ t1: { branches: ["feat/old"], at: Date.now(), last: true } }));
+	settlePr(dir, "t1", true, root);
+	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root), ["feat/old"]);
 });
 
 test("without a tracking ref for the base, a remote branch that merely ends in /<base> is not the anchor", () => {

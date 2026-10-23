@@ -169,18 +169,18 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 **Files:** Modify `extensions/lib/reviews.ts` · Test `tests/reviews.test.ts`
 **Interfaces:** Consumes `projectRepos`, `repoOf` · Produces `commitRepos(projectDir: string, rev: string): Array<{ dir: string; sha: string }>`; `recordVerdict` and `recordReview` keep their signatures and return the first record
 
-- [ ] Red reproduction: `a workspace records the verdict in the repository that has the commit` → workspace of `repo()`-style repositories `a`, `b`; `recordReview(ws, <report naming a's HEAD>)` returns a record and `readReviews(ws/a)` holds it. Run `node --test tests/reviews.test.ts` → expect FAIL: `"Reviewed HEAD … is not a commit in this repository"`.
-- [ ] Write failing tests:
+- [x] Red reproduction: `a workspace records the verdict in the repository that has the commit` → workspace of `repo()`-style repositories `a`, `b`; `recordReview(ws, <report naming a's HEAD>)` returns a record and `readReviews(ws/a)` holds it. Run `node --test tests/reviews.test.ts` → expect FAIL: `"Reviewed HEAD … is not a commit in this repository"`.
+- [x] Write failing tests:
   - `clones of one history both record the verdict` → `b` cloned from `a` → both stores hold it;
   - `a SHA in no repository names them` → `"Reviewed HEAD <sha> is not a commit in any repository here (a, b)"`;
   - `HEAD records on each repository's HEAD` → `recordVerdict(ws, "HEAD", "Inconclusive")` → one record per store, each on its own HEAD;
   - `a workspace PR from a repository passes with its Yes and is denied without` → `check("cd a && gh pr create", { missing: "block" }, ws)`;
   - `a push to a repository's PR branch is gated by that repository's store` → `notePr`/`settlePr` for `cd a && gh pr create`, then `git -C a push origin feat/a` is gated;
   - `a branch named the same in another repository is not a PR branch` → push of `feat/a` from `b` is not gated by `a`'s PR.
-- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL on those assertions
-- [ ] Implement: `commitRepos` → `[{ dir: projectDir, sha }]` for kind `repo`, each workspace repository where `rev^{commit}` resolves, `[]` otherwise. `recordVerdict` writes one record per entry into `reviewsDir(entry.dir)`, BASE resolved in the same repository (entries without it skipped; none left → the BASE error); the not-a-commit error names the repositories in a workspace. `uncovered` and `openPrBranches` use the store of `repoOf(projectDir, where)`. `notePr` stores `{ prs: Array<{ branch, dir }>, at, last }`; `settlePr` writes each branch into the `prs.json` of `repoOf(projectDir, dir)` and still reads the legacy `branches`/`branch` entries (dir = `projectDir`).
-- [ ] Run `node --test tests/reviews.test.ts` → PASS, then `npm test`
-- [ ] Commit `fix(review-gate): record and check verdicts per repository of a workspace`
+- [x] Run `node --test tests/reviews.test.ts` → expect FAIL on those assertions
+- [x] Implement: `commitRepos` → `[{ dir: projectDir, sha }]` for kind `repo`, each workspace repository where `rev^{commit}` resolves, `[]` otherwise. `recordVerdict` writes one record per entry into `reviewsDir(entry.dir)`, BASE resolved in the same repository (entries without it skipped; none left → the BASE error); the not-a-commit error names the repositories in a workspace. `uncovered` and `openPrBranches` use the store of `repoOf(projectDir, where)`. `notePr` stores `{ prs: Array<{ branch, dir }>, at, last }`; `settlePr` writes each branch into the `prs.json` of `repoOf(projectDir, dir)` and still reads the legacy `branches`/`branch` entries (dir = `projectDir`).
+- [x] Run `node --test tests/reviews.test.ts` → PASS, then `npm test`
+- [x] Commit `fix(review-gate): record and check verdicts per repository of a workspace`
 
 ### Task 5: the guard's reviewer result and review-log in a workspace
 
@@ -216,3 +216,6 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 - Task 2: complete (b965899..feat(verify) fingerprint commit, node --test tests/worktree.test.ts → 19 pass; npm test → 500 tests: 489 pass, 11 skipped, 0 fail; tsc clean).
 - Ruling: Task 2's fingerprint already makes the workspace extension tests pass, so their RED was taken on the pre-Task-2 commit b965899 in a temporary worktree: the redirect case sent a follow-up (1 vs 0), the subagent's commit went unseen (0 vs 1) — cost if wrong: none, the same tests now pass on the fixed code.
 - Task 3: complete (3d14d28..fix(verify) commit; GREEN: node --test tests/worktree.test.ts tests/extensions.test.ts → 66 pass; npm test → 504 tests: 493 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: two repo() repositories built in the same second have identical commits, so the test's b had a's SHA; b now gets its own README through a new repo() parameter (test helper only) — cost if wrong: none, the fixed tests were re-run RED on the pre-Task-4 code (5 fail for the planned reasons).
+- Added test 'a PR entry noted by 0.33.0 (branches, no folders) registers its branches in the project's store' for the legacy path settlePr keeps; it passes on old and new code, and a mutation of a copy (legacy entries lose their branch) makes it fail (actual []).
+- Task 4: complete (d4ae8ad..fix(review-gate) commit; tests patched in from the identical shared suite; node --test tests/reviews.test.ts → 62 pass; npm test → 510 tests: 499 pass, 11 skipped, 0 fail; tsc clean).

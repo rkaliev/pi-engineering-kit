@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { projectRepos, repoOf } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
@@ -66,7 +67,7 @@ const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_REPORT = 200_000;
 /** The PRs/MRs the agent opened: `{ "<branch>": <ms> }`, next to the verdict records. */
 const PRS_FILE = "prs.json";
-/** PR/MR creations seen before their call finished: `{ "<tool call id>": { branches, at, last } }`. */
+/** PR/MR creations seen before their call finished: `{ "<tool call id>": { prs: [{ branch, dir }], at, last } }`. */
 const PENDING_FILE = "prs-pending.json";
 const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Rounds a chain may pass through back to the remote base. */
@@ -101,21 +102,45 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
-	const sha = git(projectDir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
-	if (!sha) return `Reviewed HEAD ${rev} is not a commit in this repository`;
-	const base = extra.base === undefined ? undefined : git(projectDir, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
-	if (extra.base !== undefined && !base) return `Reviewed BASE ${extra.base} is not a commit in this repository`;
-	const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
-	const dir = reviewsDir(projectDir, root);
-	try {
-		mkdirSync(dir, { recursive: true, mode: 0o700 });
-		if (!ownDir(dir)) return `${dir} belongs to another user`;
-		writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
-		prune(dir);
-	} catch (err) {
-		return `could not write ${dir}: ${(err as Error).message}`;
+	const found = commitRepos(projectDir, rev);
+	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
+	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there.
+	let first: ReviewRecord | undefined;
+	for (const { dir: repo, sha } of found) {
+		const base = extra.base === undefined ? undefined : git(repo, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
+		if (extra.base !== undefined && !base) continue;
+		const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
+		const dir = reviewsDir(repo, root);
+		try {
+			mkdirSync(dir, { recursive: true, mode: 0o700 });
+			if (!ownDir(dir)) return `${dir} belongs to another user`;
+			writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
+			prune(dir);
+		} catch (err) {
+			return `could not write ${dir}: ${(err as Error).message}`;
+		}
+		first ??= record;
 	}
-	return record;
+	return first ?? `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
+}
+
+/**
+ * The repositories where `rev` names a commit, with its SHA there: the project's own repository, or each repository
+ * of a workspace (see `projectRepos`) that has it. Empty outside git and where no repository has it.
+ */
+export function commitRepos(projectDir: string, rev: string): Array<{ dir: string; sha: string }> {
+	const { kind, repos } = projectRepos(projectDir);
+	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
+	return dirs.flatMap((dir) => {
+		const sha = git(dir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+		return sha ? [{ dir, sha }] : [];
+	});
+}
+
+/** Where a commit was looked for, for a message: this repository, or the workspace's repositories by name. */
+function here(projectDir: string): string {
+	const { kind, repos } = projectRepos(projectDir);
+	return kind === "workspace" ? `any repository here (${repos.join(", ")})` : "this repository";
 }
 
 /** Recorded rounds per reviewed SHA, newest first: the latest prompt's reviews combined to the worst verdict. */
@@ -151,11 +176,14 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
-	const branches: Array<string | undefined> = [];
+	const branches: Array<{ branch: string | undefined; dir: string }> = [];
 	// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
 	let last = true;
-	// `gh pr create --head owner:branch` (a fork) pushes to `branch`.
+	// `gh pr create --head owner:branch` (a fork) pushes to `branch`. A PR from one of several folders is noted in
+	// each, so the repository it lands in has it.
 	const head = (l: Extract<Landing, { kind: "pr" }>) => l.target?.replace(/^[^:]+:/, "");
+	const prBranches = (l: Extract<Landing, { kind: "pr" }>, dirs: string[]) =>
+		(dirs.length > 0 ? dirs : head(l) !== undefined ? [cwd] : []).map((dir) => ({ branch: head(l) ?? currentBranch(dir), dir }));
 	// Every folder the texts' moves may reach, and any folder a move names where the guard can't follow it.
 	const anywhere = (texts: string[]) => [...texts.flatMap((t) => reachable(t, cwd).dirs), ...namedFolders(command, cwd)];
 	if (hiddenLanding(command)) {
@@ -164,7 +192,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 		const subs = [...quotedSubstitutions(text), ...substitutions];
 		const prs = [text, ...subs].flatMap((t) => segmentsOf(tokenize(stripRedirects(t))).map(({ raw }) => landing(raw.map((w) => w.replace(/^\(+|\)+$/g, "")).filter(Boolean))));
 		const dirs = anywhere([text, ...subs]);
-		for (const l of prs) if (l?.kind === "pr" && !l.merge && !l.repo) branches.push(...(head(l) !== undefined ? [head(l)] : dirs.map(currentBranch)));
+		for (const l of prs) if (l?.kind === "pr" && !l.merge && !l.repo) branches.push(...prBranches(l, dirs));
 		last = false;
 	}
 	const shell = new Subshells(cwd, command);
@@ -177,33 +205,43 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 		if (shell.move(raw, alone, before) === undefined && l?.kind === "pr" && !l.merge && !l.repo) {
 			// After a move the guard doesn't follow (the user confirmed it), the PR may come from any folder the command may reach.
 			const dirs = dir !== undefined ? [dir] : anywhere([command]);
-			branches.push(...(head(l) !== undefined ? [head(l)] : dirs.map(currentBranch)));
+			branches.push(...prBranches(l, dirs));
 			if (index !== segments.length - 1) last = false;
 		}
 	});
-	const unique = [...new Set(branches.filter((b) => b !== undefined))];
+	const unique = [...new Map(branches.filter((b) => b.branch !== undefined).map((b) => [`${b.dir}\0${b.branch}`, b])).values()];
 	if (unique.length === 0) return;
 	const pending = readJson(projectDir, PENDING_FILE, root);
-	pending[callId] = { branches: unique, at: Date.now(), last };
+	pending[callId] = { prs: unique, at: Date.now(), last };
 	writeJson(projectDir, PENDING_FILE, pending, root);
 }
 
 /** After the call: register its noted PR branches if it succeeded (or failed after the PR step), forget them if not. */
 export function settlePr(projectDir: string, callId: string, ok: boolean, root?: string): void {
 	const pending = readJson(projectDir, PENDING_FILE, root);
-	const noted = pending[callId] as { branches?: unknown; branch?: unknown; last?: unknown } | undefined;
+	const noted = pending[callId] as { prs?: unknown; branches?: unknown; branch?: unknown; last?: unknown } | undefined;
 	if (!noted) return;
 	delete pending[callId];
 	for (const [id, entry] of Object.entries(pending)) {
 		if (Date.now() - Number((entry as { at?: unknown }).at ?? 0) > PENDING_MAX_AGE_MS) delete pending[id];
 	}
 	writeJson(projectDir, PENDING_FILE, pending, root);
-	// An entry noted before 0.21.2 has one `branch`.
-	const branches = Array.isArray(noted.branches) ? noted.branches : [noted.branch];
+	// An entry noted before 0.34.0 has `branches` (before 0.21.2 one `branch`), from the project folder.
+	const legacy = (Array.isArray(noted.branches) ? noted.branches : [noted.branch]).map((branch: unknown) => ({ branch, dir: projectDir }));
+	const entries = (Array.isArray(noted.prs) ? noted.prs : legacy) as Array<{ branch?: unknown; dir?: unknown }>;
 	if (!ok && noted.last !== false) return;
-	const prs = readPrs(projectDir, root);
-	for (const branch of branches) if (typeof branch === "string" && branch !== "") prs[branch] = Date.now();
-	writePrs(projectDir, prs, root);
+	// A PR branch belongs to the repository it was opened from: in a workspace, its own store.
+	const stores = new Map<string, string[]>();
+	for (const { branch, dir } of entries) {
+		if (typeof branch !== "string" || branch === "" || typeof dir !== "string") continue;
+		const store = repoOf(projectDir, dir);
+		stores.set(store, [...(stores.get(store) ?? []), branch]);
+	}
+	for (const [store, names] of stores) {
+		const prs = readPrs(store, root);
+		for (const branch of names) prs[branch] = Date.now();
+		writePrs(store, prs, root);
+	}
 }
 
 /**
@@ -363,7 +401,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		if (!base) continue;
 		const land = l.kind === "push" ? withDestination(l, where) : l;
 		const remote = land.kind === "push" && land.remote ? land.remote : "origin";
-		const refs = targets(land, where, base, land.kind === "push" ? openPrBranches(projectDir, where, remote, anchorRef(where, remote, base), root) : []);
+		const refs = targets(land, where, base, land.kind === "push" ? openPrBranches(repoOf(projectDir, where), where, remote, anchorRef(where, remote, base), root) : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -608,8 +646,9 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 	const landed = git(where, ["rev-parse", "--verify", "--quiet", tracking]) !== undefined && isAncestor(where, sha, tracking);
 	if (landed) return undefined;
 
-	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see.
-	const reviews = readReviews(projectDir, root);
+	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see. In a
+	// workspace the verdicts are the landing repository's.
+	const reviews = readReviews(repoOf(projectDir, where), root);
 	const match = reviews.find((r) => r.sha === sha);
 	if (!match) {
 		// Name an earlier review only when it was of this branch (an ancestor): then the branch changed after it.
