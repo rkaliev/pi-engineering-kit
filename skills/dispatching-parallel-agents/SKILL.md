@@ -27,7 +27,7 @@ Independent problems investigated one after another waste time and fill one cont
 2. **Write one focused prompt per agent**, self-contained, since it has none of your context:
    - **Scope:** exact files, tests, or the question.
    - **Goal:** what "done" means, with the verification command.
-   - **Constraints:** read-only, or which files it may change; don't touch anything else.
+   - **Constraints:** read-only, or which files it may change; don't touch anything else; what it writes is in English (using-skills).
    - **Output:** root cause, changes as a file list, commands run with results, open questions.
 3. **Dispatch all agents in one call** (the parallel `tasks` mode), using the matching agent: `scout` for recon, `reviewer` for review, `worker` for edits. Writers must have disjoint file sets. Otherwise use separate worktrees or run them sequentially.
 4. **Integrate:**

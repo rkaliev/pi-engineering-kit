@@ -36,7 +36,7 @@ Run exactly these; they mirror CI.
 - Business logic lives in `<path>`; UI and components only display state.
 - New dependencies need approval.
 - Money: <integer minor units | Decimal>; see the payments-and-money skill.
-- UI text language: <ru | en | …>. Test names: <language>.
+- UI text language: <ru | en | …>.
 - Commits: <Conventional Commits | house style>. <Any trailer or issue-ID rules.>
 
 ## Boundaries

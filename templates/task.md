@@ -9,7 +9,7 @@ Links: <issue · decision records · legacy map · or None>
 
 <details><summary>Original request</summary>
 
-<The user's words, verbatim.>
+<The user's words, verbatim, in the language they used.>
 
 </details>
 

@@ -4,7 +4,7 @@ argument-hint: "[topic | changelog | decision <topic>]"
 ---
 Documentation request: $@
 
-Use the writing-documentation skill. Follow the project's existing documentation structure and language where there is one.
+Use the writing-documentation skill. Follow the project's existing documentation structure where there is one.
 
 - **No argument: inventory and map.** Read the README, `docs/`, decision records, CHANGELOG, the agent manifest, any task file still on the branch, and the code's modules. Propose a documentation map: what the README needs, one topic chapter per feature, module or domain (`docs/NN-topic.md`, listed in `docs/README.md`), and whether a CHANGELOG is missing. Show the map and wait for my yes. Then write the approved documents from the code and the decision records.
 - **A topic or module name:** create or refresh that one chapter from the code (template in the skill's references), and add it to the index.

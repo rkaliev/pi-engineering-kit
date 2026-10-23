@@ -9,7 +9,7 @@ Docs are part of the change. They ship in the same commit or PR as the code they
 
 ## Follow the project first
 
-Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the docs language, the changelog style. Extend that structure; use the layout below only where nothing exists, and say so.
+Read what the repo has: README, `docs/`, decision records or RFCs, CONTRIBUTING, the changelog style. Extend that structure, in the language using-skills sets, even where older docs use another; use the layout below only where nothing exists, and say so.
 
 ## Where each thing goes
 
@@ -69,4 +69,3 @@ Report which of these you did. To enforce these rules mechanically, propose chec
 | "I'll update the docs later" | Later means never; the next reader acts on the stale version. |
 | "I'll copy that section here too" | Two copies drift. Link to one. |
 | "Describe how it will work" | Docs describe what exists. Plans go in the task file. |
-| "The comment explains the code" | If it restates the code, delete it. |

@@ -213,7 +213,7 @@ test("checklist rules carry unique stable IDs", () => {
 	// A removed rule's ID goes to the Retired line and a new rule takes the next number, so the IDs in use and the
 	// retired ones are exactly 01..highest in each section. Adding a rule bumps HIGHEST here. Replacing the last rule's
 	// text under its old ID can't be told from rewording it; review catches that.
-	const HIGHEST: Record<string, number> = { SEV: 30, COR: 7, TST: 5, SEC: 5, ARC: 5, AI: 6, HYG: 5 };
+	const HIGHEST: Record<string, number> = { SEV: 30, COR: 7, TST: 5, SEC: 5, ARC: 5, AI: 6, HYG: 6 };
 	const retiredLine = /^Retired IDs: (.+)\.$/m.exec(text);
 	assert.ok(retiredLine, "the checklist names its retired IDs (`Retired IDs: none.`)");
 	const retired = retiredLine[1] === "none" ? [] : retiredLine[1]!.split(/,\s*/);
