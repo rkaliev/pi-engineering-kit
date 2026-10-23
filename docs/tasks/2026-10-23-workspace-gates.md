@@ -197,9 +197,9 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 
 **Files:** Modify README.md, docs/ARCHITECTURE.md, docs/ARCHITECTURE.ru.md, skills/requesting-code-review/references/review-gate.md, CHANGELOG.md, package.json
 
-- [ ] Update each doc as Post-implementation lists; ARCHITECTURE.ru.md stays Russian (an existing Russian file keeps its language)
-- [ ] Run `npm test` (lint-skills, release) and `node .github/release.ts check` → PASS
-- [ ] Commit `docs: workspace gates (0.34.0)`
+- [x] Update each doc as Post-implementation lists; ARCHITECTURE.ru.md stays Russian (an existing Russian file keeps its language)
+- [x] Run `npm test` (lint-skills, release) and `node .github/release.ts check` → PASS
+- [x] Commit `docs: workspace gates (0.34.0)`
 
 ### Task 7: live check
 
@@ -220,3 +220,4 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 - Added test 'a PR entry noted by 0.33.0 (branches, no folders) registers its branches in the project's store' for the legacy path settlePr keeps; it passes on old and new code, and a mutation of a copy (legacy entries lose their branch) makes it fail (actual []).
 - Task 4: complete (d4ae8ad..fix(review-gate) commit; tests patched in from the identical shared suite; node --test tests/reviews.test.ts → 62 pass; npm test → 510 tests: 499 pass, 11 skipped, 0 fail; tsc clean).
 - Task 5: complete (32f22d0..fix(review-log) commit; RED: review-log from the workspace exited 1; the two reviewer-result workspace tests fail (2 of 2) with commitRepos mutated, restored identical; GREEN: npm test → 513 tests: 502 pass, 11 skipped, 0 fail; tsc clean).
+- Task 6: complete (06219a7..docs commit; README verify and review gate, ARCHITECTURE.md and .ru.md (guard and verify rows, review gate paragraph, section 7), review-gate.md, CHANGELOG 0.34.0, version 0.34.0 in package.json and package-lock.json, install pins @v0.34.0 in README, GETTING-STARTED(.ru) and templates/settings.json; node .github/release.ts check → 'release metadata ok: 0.34.0'; npm test → 513 tests: 502 pass, 11 skipped, 0 fail; tsc clean).
