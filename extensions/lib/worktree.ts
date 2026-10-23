@@ -3,9 +3,10 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored } from "./commands.ts";
+import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
 import { blankQuoted, heredocs, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
@@ -19,15 +20,21 @@ export interface Tree {
 	head: string;
 	/** Project-relative path → `"<size> <mtimeMs>"`, or `"deleted"`. */
 	files: Record<string, string>;
+	/** In a workspace: each repository folder's `HEAD`, or `""` before its first commit. */
+	heads?: Record<string, string>;
+	/** In a workspace: the parts not fingerprinted, a repository folder or `""` for the files outside them, sorted. */
+	blind?: string[];
 }
 
 const MAX_BUFFER = 16 * 1024 * 1024;
+/** How long one workspace fingerprint may take, all repositories and the walk together. */
+export const WORKSPACE_BUDGET_MS = 2000;
 
-function git(projectDir: string, args: string[]): string {
+function git(projectDir: string, args: string[], timeout = GIT_TIMEOUT_MS): string {
 	return execFileSync("git", ["--no-optional-locks", ...args], {
 		cwd: projectDir,
 		encoding: "utf8",
-		timeout: GIT_TIMEOUT_MS,
+		timeout,
 		maxBuffer: MAX_BUFFER,
 		stdio: ["ignore", "pipe", "ignore"],
 	});
@@ -38,46 +45,116 @@ function git(projectDir: string, args: string[]): string {
  * committing them is not a change; gitignored files and paths matching `ignore` are left out. `undefined` outside git,
  * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
  * `why.slow` says the repository is too big or slow to fingerprint (a timeout or the cap), as opposed to not being a
- * repository (yet).
+ * repository (yet). A folder outside git that holds repositories (a workspace, see `projectRepos`) gets each
+ * repository's entries under its folder and every file outside them; a part over the limit, failing or past the
+ * deadline is listed in `blind` instead, and `why.slow` is never set.
  */
-export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean } = {}): Tree | undefined {
+export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean } = {}, limits: { deadline?: number; maxEntries?: number } = {}): Tree | undefined {
+	const maxEntries = limits.maxEntries ?? MAX_ENTRIES;
 	try {
-		const prefix = git(projectDir, ["rev-parse", "--show-prefix"]).trim();
-		const records = git(projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
-		if (records.length > MAX_ENTRIES + 1) {
+		const tree = repoTree(projectDir, "", ignore, maxEntries, GIT_TIMEOUT_MS);
+		if (tree === "slow") why.slow = true;
+		return tree === "slow" ? undefined : tree;
+	} catch (err) {
+		if (timedOut(err)) {
 			why.slow = true;
 			return undefined;
 		}
-		const files: Record<string, string> = {};
-		const add = (repoPath: string) => {
-			if (!repoPath.startsWith(prefix)) return;
-			const path = repoPath.slice(prefix.length);
-			if (!isIgnored(path, ignore)) files[path] = identity(join(projectDir, path));
-		};
-		for (let i = 0; i < records.length; i++) {
-			const record = records[i]!;
-			if (record.length < 4) continue;
-			add(record.slice(3));
-			// A rename or copy (in either column) is followed by its source path: both count.
-			if (/[RC]/.test(record.slice(0, 2))) add(records[++i] ?? "");
-		}
-		let head = "";
-		try {
-			head = git(projectDir, ["rev-parse", "--verify", "-q", "HEAD"]).trim();
-		} catch {
-			// no commit yet
-		}
-		return { head, files };
-	} catch (err) {
-		if ((err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM") why.slow = true;
-		return undefined;
 	}
+	const { kind, repos } = projectRepos(projectDir, ignore);
+	if (kind !== "workspace") return undefined;
+	const deadline = limits.deadline ?? Date.now() + WORKSPACE_BUDGET_MS;
+	const files: Record<string, string> = {};
+	const heads: Record<string, string> = {};
+	const blind: string[] = [];
+	for (const repo of repos) {
+		const left = Math.min(GIT_TIMEOUT_MS, deadline - Date.now());
+		let tree: Tree | "slow" | undefined;
+		try {
+			tree = left > 0 ? repoTree(join(projectDir, repo), `${repo}/`, ignore, maxEntries, left) : undefined;
+		} catch {
+			tree = undefined;
+		}
+		if (tree === undefined || tree === "slow") {
+			blind.push(repo);
+			continue;
+		}
+		Object.assign(files, tree.files);
+		heads[repo] = tree.head;
+	}
+	const outside = walkOutside(projectDir, repos, ignore, maxEntries, deadline);
+	if (outside) Object.assign(files, outside);
+	else blind.push("");
+	return { head: "", files, heads, blind: blind.sort() };
+}
+
+function timedOut(err: unknown): boolean {
+	return (err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM";
+}
+
+/** One repository's listed files, each path prefixed with `label` (its folder in a workspace); throws outside git. */
+function repoTree(dir: string, label: string, ignore: string[], maxEntries: number, timeout: number): Tree | "slow" {
+	const prefix = git(dir, ["rev-parse", "--show-prefix"], timeout).trim();
+	const records = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], timeout).split("\0");
+	if (records.length > maxEntries + 1) return "slow";
+	const files: Record<string, string> = {};
+	const add = (repoPath: string) => {
+		if (!repoPath.startsWith(prefix)) return;
+		const path = repoPath.slice(prefix.length);
+		if (!isIgnored(label + path, ignore)) files[label + path] = identity(join(dir, path));
+	};
+	for (let i = 0; i < records.length; i++) {
+		const record = records[i]!;
+		if (record.length < 4) continue;
+		add(record.slice(3));
+		// A rename or copy (in either column) is followed by its source path: both count.
+		if (/[RC]/.test(record.slice(0, 2))) add(records[++i] ?? "");
+	}
+	let head = "";
+	try {
+		head = git(dir, ["rev-parse", "--verify", "-q", "HEAD"], timeout).trim();
+	} catch {
+		// no commit yet
+	}
+	return { head, files };
+}
+
+/**
+ * Every file of a workspace outside its repositories, by content identity: no `.git`, symlinks or ignored paths.
+ * `undefined` over `maxEntries` files or past the deadline.
+ */
+function walkOutside(projectDir: string, repos: string[], ignore: string[], maxEntries: number, deadline: number): Record<string, string> | undefined {
+	const files: Record<string, string> = {};
+	let count = 0;
+	const pending = [""];
+	while (pending.length > 0) {
+		if (Date.now() > deadline) return undefined;
+		const rel = pending.pop()!;
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(join(projectDir, rel), { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
+			if (entry.isSymbolicLink() || entry.name === ".git" || (rel === "" && repos.includes(entry.name))) continue;
+			if (entry.isDirectory()) {
+				if (!ignoredFolder(path, ignore)) pending.push(path);
+			} else if (entry.isFile() && !isIgnored(path, ignore)) {
+				if (++count > maxEntries) return undefined;
+				files[path] = identity(join(projectDir, path));
+			}
+		}
+	}
+	return files;
 }
 
 /**
  * The project files whose content changed between two fingerprints, sorted; empty means nothing changed. A path that
  * left the list (staged and committed, or restored) counts only if its size or time now differ; when `HEAD` moved, the
- * files its commits touched that were clean before count too (an edit committed in the same command, a checkout).
+ * files its commits touched that were clean before count too (an edit committed in the same command, a checkout). In
+ * a workspace that holds per repository, in its folder.
  */
 export function changedPaths(before: Tree, after: Tree, projectDir: string, ignore: string[] = []): string[] {
 	const changed = new Set<string>();
@@ -85,10 +162,16 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
 		const now = after.files[path] ?? identity(join(projectDir, path));
 		if (before.files[path] !== now) changed.add(path);
 	}
-	if (before.head && after.head && before.head !== after.head) {
+	const moved: Array<[string, string, string]> =
+		before.heads && after.heads
+			? Object.entries(after.heads).flatMap(([repo, head]) => (before.heads![repo] !== undefined ? [[repo, before.heads![repo]!, head] as [string, string, string]] : []))
+			: [["", before.head, after.head]];
+	for (const [repo, from, to] of moved) {
+		if (!from || !to || from === to) continue;
+		const label = repo === "" ? "" : `${repo}/`;
 		try {
-			const touched = git(projectDir, ["diff", "--name-only", "--relative", "-z", before.head, after.head, "--", "."]).split("\0");
-			for (const path of touched) if (path && !(path in before.files) && !isIgnored(path, ignore)) changed.add(path);
+			const touched = git(join(projectDir, repo), ["diff", "--name-only", "--relative", "-z", from, to, "--", "."]).split("\0");
+			for (const path of touched) if (path && !(label + path in before.files) && !isIgnored(label + path, ignore)) changed.add(label + path);
 		} catch {
 			// an unreachable commit (a rewritten history): the listed files above still count
 		}

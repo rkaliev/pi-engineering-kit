@@ -136,18 +136,18 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 **Files:** Modify `extensions/lib/worktree.ts` · Test `tests/worktree.test.ts`
 **Interfaces:** Consumes `projectRepos` · `Tree` gains `heads?: Record<string, string>` (repository → HEAD, `""` before its first commit) and `blind?: string[]` (parts not fingerprinted: a repository, or `""` for the files outside the repositories) · `treeFingerprint(projectDir, ignore, why = {}, limits: { deadline?: number; maxEntries?: number } = {})`; `changedPaths` keeps its signature
 
-- [ ] Write failing tests in a temp workspace with repositories `a`, `b` (one commit each) and a loose file `notes/x.js`:
+- [x] Write failing tests in a temp workspace with repositories `a`, `b` (one commit each) and a loose file `notes/x.js`:
   - `a workspace fingerprint lists each repository's changes under its folder` → edit `a/f.ts`, add `b/n.ts` → `changedPaths` = `["a/f.ts", "b/n.ts"]`;
   - `a commit in one repository counts its files` → commit `b/c.ts` between fingerprints → `["b/c.ts"]`, `heads.b` differs;
   - `a file outside the repositories counts, an ignored one doesn't` → edit `notes/x.js` and `docs/y.md` → `["notes/x.js"]`;
   - `a repository over the limit is blind, not the workspace` → `limits.maxEntries = 2` with three new files in `a` → `blind` = `["a"]`, a change in `b` still listed;
   - `an expired deadline leaves every part blind` → `limits.deadline = Date.now() - 1` → `blind` = `["", "a", "b"]`, `files` = `{}`;
   - `a removed repository folder counts its listed files` → remove `a/` after a fingerprint with `a/f.ts` dirty → `a/f.ts` listed, no throw.
-- [ ] Run `node --test tests/worktree.test.ts` → expect FAIL: `treeFingerprint` returns `undefined` for the workspace
-- [ ] Implement `workspaceFingerprint` behind `treeFingerprint` (kind `repo` → today's code, unchanged; `none` → `undefined`): per repository today's status logic with paths prefixed `<repo>/` and its HEAD into `heads`; then a walk of the project skipping repository folders, `.git`, symlinks and ignored paths (a directory is pruned when a `<stem>/**` glob's stem matches it), each file by `identity()`. A part over `maxEntries` (default `MAX_ENTRIES`), failing git, or reached after the deadline (default now + `WORKSPACE_BUDGET_MS`) goes into `blind` and contributes no entries; each git call's timeout is `min(GIT_TIMEOUT_MS, time left)`. `changedPaths`: when both trees have `heads`, the HEAD diff runs per repository whose HEAD moved, in `join(projectDir, repo)`, results prefixed; without `heads`, as today.
-- [ ] Measure `treeFingerprint` on the real workspace root, 5 runs; record the median in Progress (risk "a large workspace").
-- [ ] Run `node --test tests/worktree.test.ts` → PASS, then `npm test`
-- [ ] Commit `feat(verify): fingerprint every repository of a workspace and the files outside them`
+- [x] Run `node --test tests/worktree.test.ts` → expect FAIL: `treeFingerprint` returns `undefined` for the workspace
+- [x] Implement `workspaceFingerprint` behind `treeFingerprint` (kind `repo` → today's code, unchanged; `none` → `undefined`): per repository today's status logic with paths prefixed `<repo>/` and its HEAD into `heads`; then a walk of the project skipping repository folders, `.git`, symlinks and ignored paths (a directory is pruned when a `<stem>/**` glob's stem matches it), each file by `identity()`. A part over `maxEntries` (default `MAX_ENTRIES`), failing git, or reached after the deadline (default now + `WORKSPACE_BUDGET_MS`) goes into `blind` and contributes no entries; each git call's timeout is `min(GIT_TIMEOUT_MS, time left)`. `changedPaths`: when both trees have `heads`, the HEAD diff runs per repository whose HEAD moved, in `join(projectDir, repo)`, results prefixed; without `heads`, as today.
+- [x] Measure `treeFingerprint` on the real workspace root, 5 runs; record the median in Progress (risk "a large workspace").
+- [x] Run `node --test tests/worktree.test.ts` → PASS, then `npm test`
+- [x] Commit `feat(verify): fingerprint every repository of a workspace and the files outside them`
 
 ### Task 3: the verify gate counts what a workspace call changed
 
@@ -207,8 +207,10 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 
 ## Progress
 
-- Baseline 2026-10-23 on 595698c: typecheck and test PASS; suite 483 pass, 11 skipped (publish build tests, mode: needs pandoc, typst and mmdc).
+- Baseline 2026-10-23 on 595698c: typecheck and test PASS.
 - Drift check: none (the plan was written on this HEAD).
 - Pre-flight: Interfaces agree across tasks; no conflicts.
 - Ruling: shared lib files are written test-first in the other edition and copied byte-identical; their RED was seen there on identical code, so here the copied tests are run green only — cost if wrong: a test that can't fail in this edition's import path, caught by the cmp check and the same assertions.
-- Task 1: complete (595698c..feat(repos) commit, node --test tests/repos.test.ts → 4 pass; npm test → 498 tests, 0 fail; tsc clean).
+- Task 1: complete (595698c..feat(repos) commit, node --test tests/repos.test.ts → 4 pass; npm test → 494 tests: 483 pass, 11 skipped (publish build tests, mode: needs pandoc, typst and mmdc), 0 fail; tsc clean).
+- Measured 2026-10-23: treeFingerprint on a real two-repository workspace, 5 runs: median 71 ms.
+- Task 2: complete (a9ca526..feat(verify) fingerprint commit, node --test tests/worktree.test.ts → 19 pass; npm test → 500 tests: 489 pass, 11 skipped, 0 fail; tsc clean).

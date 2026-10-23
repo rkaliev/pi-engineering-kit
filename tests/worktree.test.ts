@@ -106,6 +106,78 @@ test("treeFingerprint: outside a git repository there is none", () => {
 	assert.equal(treeFingerprint(mkdtempSync(join(tmpdir(), "no-git-")), []), undefined);
 });
 
+/** A folder outside git holding repositories `a` (committed `f.ts`) and `b` (committed `m.ts`), and a loose `notes/x.js`. */
+function workspace(): string {
+	const ws = mkdtempSync(join(tmpdir(), "workspace-"));
+	for (const [name, file] of [["a", "f.ts"], ["b", "m.ts"]] as const) {
+		mkdirSync(join(ws, name));
+		git(join(ws, name), "init", "-q", "-b", "main");
+		writeFileSync(join(ws, name, file), "export {};\n");
+		git(join(ws, name), "add", "-A");
+		git(join(ws, name), "commit", "-q", "-m", "initial");
+	}
+	mkdirSync(join(ws, "notes"));
+	writeFileSync(join(ws, "notes", "x.js"), "1;\n");
+	return ws;
+}
+
+test("treeFingerprint: a workspace lists each repository's changes under its folder", () => {
+	const ws = workspace();
+	const before = fingerprint(ws);
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 1;\n");
+	writeFileSync(join(ws, "b", "n.ts"), "export {};\n");
+	assert.deepEqual(changedPaths(before, fingerprint(ws), ws), ["a/f.ts", "b/n.ts"]);
+});
+
+test("treeFingerprint: a commit in one workspace repository counts the files it touched", () => {
+	const ws = workspace();
+	const before = fingerprint(ws);
+	writeFileSync(join(ws, "b", "c.ts"), "export {};\n");
+	git(join(ws, "b"), "add", "c.ts");
+	git(join(ws, "b"), "commit", "-q", "-m", "c");
+	const after = fingerprint(ws);
+	assert.notEqual(after.heads?.b, before.heads?.b);
+	assert.deepEqual(changedPaths(before, after, ws), ["b/c.ts"]);
+});
+
+test("treeFingerprint: a file outside the workspace repositories counts, an ignored one doesn't", () => {
+	const ws = workspace();
+	const ignore = ["docs/**"];
+	const before = fingerprint(ws, ignore);
+	writeFileSync(join(ws, "notes", "x.js"), "2;\n");
+	mkdirSync(join(ws, "docs"));
+	writeFileSync(join(ws, "docs", "y.md"), "y\n");
+	assert.deepEqual(changedPaths(before, fingerprint(ws, ignore), ws, ignore), ["notes/x.js"]);
+});
+
+test("treeFingerprint: a workspace repository over the limit is blind, the others still compare", () => {
+	const ws = workspace();
+	const before = treeFingerprint(ws, [], {}, { maxEntries: 2 });
+	assert.ok(before);
+	for (const n of [1, 2, 3]) writeFileSync(join(ws, "a", `${n}.ts`), "");
+	writeFileSync(join(ws, "b", "m.ts"), "export const m = 1;\n");
+	const after = treeFingerprint(ws, [], {}, { maxEntries: 2 });
+	assert.ok(after);
+	assert.deepEqual(after.blind, ["a"]);
+	assert.deepEqual(changedPaths(before, after, ws), ["b/m.ts"]);
+});
+
+test("treeFingerprint: past the deadline every workspace part is blind", () => {
+	const tree = treeFingerprint(workspace(), [], {}, { deadline: Date.now() - 1 });
+	assert.ok(tree);
+	assert.deepEqual(tree.blind, ["", "a", "b"]);
+	assert.deepEqual(tree.files, {});
+});
+
+test("treeFingerprint: a removed workspace repository counts the files it listed", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	const before = fingerprint(ws);
+	rmSync(join(ws, "a"), { recursive: true, force: true });
+	assert.ok(changedPaths(before, fingerprint(ws), ws).includes("a/f.ts"));
+});
+
+
 test("shellWriteTargets: files a command writes inside the project", () => {
 	const project = mkdtempSync(join(tmpdir(), "no-git-"));
 	const targets = (command: string, cwd = project) => shellWriteTargets(command, cwd, project);
