@@ -154,15 +154,15 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 **Files:** Modify `extensions/lib/worktree.ts`, `extensions/verify.ts` · Test `tests/worktree.test.ts`, `tests/extensions.test.ts`
 **Interfaces:** Produces `callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[]` (ignore filtering stays with the caller)
 
-- [ ] Red reproduction in `tests/extensions.test.ts` with a helper `workspaceProject()` (temp dir, repositories `a` and `b` with one commit each, `.pi/verify.json` with one command): `in a workspace, a redirect to an unknown variable path marks nothing` → a `bashCall("cd a && true > $S/red.log")` writing no project file → `agent_end` sends no `verify-gate` message. Run `node --test tests/extensions.test.ts` → expect FAIL: a `verify-gate` message naming `$S/red.log`.
-- [ ] Write failing tests:
+- [x] Red reproduction in `tests/extensions.test.ts` with a helper `workspaceProject()` (temp dir, repositories `a` and `b` with one commit each, `.pi/verify.json` with one command): `in a workspace, a redirect to an unknown variable path marks nothing` → a `bashCall("cd a && true > $S/red.log")` writing no project file → `agent_end` sends no `verify-gate` message. Run `node --test tests/extensions.test.ts` → expect FAIL: a `verify-gate` message naming `$S/red.log`.
+- [x] Write failing tests:
   - extension `in a workspace, a shell write in a repository marks it` → a bash call that writes `a/f.ts` → `agent_end` message names `a/f.ts`;
   - extension `a subagent call's changes in a workspace are its own` → `subagent` tool_call, write `b/n.ts`, tool_result → `agent_end` message names `b/n.ts`;
   - unit `callChanges reads text targets only inside blind parts` → blind `["a"]`: `> a/x` counts, `> b/x` doesn't; blind `[""]`: `> loose.js` counts, `> a/x` doesn't.
-- [ ] Run `node --test tests/extensions.test.ts tests/worktree.test.ts` → expect FAIL on those assertions
-- [ ] Implement `callChanges`: both trees → `changedPaths(before, now, projectDir)` plus `shellWriteTargets` filtered to paths inside a part blind in either tree (`""` = under no repository named in `heads` or `blind`); a tree missing and `after` given → text targets, as today. `track` computes `paths` as `callChanges(...).filter((p) => !isIgnored(p, ignore))`; `gitOff` is set only by a `repo` fingerprint (a workspace never sets `why.slow`).
-- [ ] Run `node --test tests/extensions.test.ts tests/worktree.test.ts` → PASS, then `npm test` and `npm run typecheck`
-- [ ] Commit `fix(verify): a workspace call counts what it changed, not what its text names`
+- [x] Run `node --test tests/extensions.test.ts tests/worktree.test.ts` → expect FAIL on those assertions
+- [x] Implement `callChanges`: both trees → `changedPaths(before, now, projectDir)` plus `shellWriteTargets` filtered to paths inside a part blind in either tree (`""` = under no repository named in `heads` or `blind`); a tree missing and `after` given → text targets, as today. `track` computes `paths` as `callChanges(...).filter((p) => !isIgnored(p, ignore))`; `gitOff` is set only by a `repo` fingerprint (a workspace never sets `why.slow`).
+- [x] Run `node --test tests/extensions.test.ts tests/worktree.test.ts` → PASS, then `npm test` and `npm run typecheck`
+- [x] Commit `fix(verify): a workspace call counts what it changed, not what its text names`
 
 ### Task 4: verdicts per repository
 
@@ -207,10 +207,12 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 
 ## Progress
 
-- Baseline 2026-10-23 on 595698c: typecheck and test PASS.
+- Baseline 2026-10-23 on 389a370: typecheck and test PASS.
 - Drift check: none (the plan was written on this HEAD).
 - Pre-flight: Interfaces agree across tasks; no conflicts.
 - Ruling: shared lib files are written test-first in the other edition and copied byte-identical; their RED was seen there on identical code, so here the copied tests are run green only — cost if wrong: a test that can't fail in this edition's import path, caught by the cmp check and the same assertions.
-- Task 1: complete (595698c..feat(repos) commit, node --test tests/repos.test.ts → 4 pass; npm test → 494 tests: 483 pass, 11 skipped (publish build tests, mode: needs pandoc, typst and mmdc), 0 fail; tsc clean).
+- Task 1: complete (389a370..feat(repos) commit, node --test tests/repos.test.ts → 4 pass; npm test → 494 tests: 483 pass, 11 skipped (publish build tests, mode: needs pandoc, typst and mmdc), 0 fail; tsc clean).
 - Measured 2026-10-23: treeFingerprint on a real two-repository workspace, 5 runs: median 71 ms.
-- Task 2: complete (a9ca526..feat(verify) fingerprint commit, node --test tests/worktree.test.ts → 19 pass; npm test → 500 tests: 489 pass, 11 skipped, 0 fail; tsc clean).
+- Task 2: complete (b965899..feat(verify) fingerprint commit, node --test tests/worktree.test.ts → 19 pass; npm test → 500 tests: 489 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: Task 2's fingerprint already makes the workspace extension tests pass, so their RED was taken on the pre-Task-2 commit b965899 in a temporary worktree: the redirect case sent a follow-up (1 vs 0), the subagent's commit went unseen (0 vs 1) — cost if wrong: none, the same tests now pass on the fixed code.
+- Task 3: complete (3d14d28..fix(verify) commit; GREEN: node --test tests/worktree.test.ts tests/extensions.test.ts → 66 pass; npm test → 504 tests: 493 pass, 11 skipped, 0 fail; tsc clean).

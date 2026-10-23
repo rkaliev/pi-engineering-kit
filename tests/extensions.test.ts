@@ -455,6 +455,60 @@ test("verify: a worker subagent's changes are counted as its call's, with or wit
 	assert.match(sent[0]!.message.content, /src\/a\.ts/);
 });
 
+/** A folder outside git holding repositories `a` (committed `f.ts`) and `b` (committed `m.ts`), with verification commands. */
+function workspaceProject() {
+	const dir = project(COMMANDS);
+	const git = (repo: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: join(dir, repo), stdio: "pipe" });
+	for (const [repo, file] of [["a", "f.ts"], ["b", "m.ts"]] as const) {
+		mkdirSync(join(dir, repo));
+		git(repo, "init", "-q", "-b", "main");
+		writeFileSync(join(dir, repo, file), "export {};\n");
+		git(repo, "add", "-A");
+		git(repo, "commit", "-q", "-m", "initial");
+	}
+	return { dir, git };
+}
+
+test("verify: in a workspace, a redirect to an unknown variable path marks nothing", async () => {
+	const { dir } = workspaceProject();
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "cd a && true > $S/red.log");
+	await bashCall(emit, c, "S=$(mktemp -d); for e in x y; do true > $S/t-$e.log; done");
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0);
+});
+
+test("verify: in a workspace, a shell write in a repository marks it with its folder", async () => {
+	const { dir } = workspaceProject();
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "echo x > a/f.ts", false, () => writeFileSync(join(dir, "a", "f.ts"), "x\n"));
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /a\/f\.ts/);
+});
+
+test("verify: in a workspace, a subagent call's commit in a repository is its own", async () => {
+	const { dir, git } = workspaceProject();
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_call", { toolName: "subagent", toolCallId: "w1", input: {} }, c);
+	writeFileSync(join(dir, "b", "c.ts"), "export {};\n");
+	git("b", "add", "c.ts");
+	git("b", "commit", "-q", "-m", "c");
+	await emit("tool_result", { toolName: "subagent", toolCallId: "w1", input: {}, content: [], isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /b\/c\.ts/);
+});
+
 test("verify: a folder that becomes a git repository mid-session is fingerprinted from then on", async () => {
 	const dir = project({ ...COMMANDS, "src/a.ts": "export const a = 1;\n" });
 	const { pi, emit, sent } = fakePi();

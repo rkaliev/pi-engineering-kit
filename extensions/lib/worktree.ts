@@ -179,6 +179,24 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
 	return [...changed].sort();
 }
 
+/**
+ * What a call changed: the fingerprints compared, plus the files its text writes inside a part either fingerprint is
+ * blind to (a workspace repository, or `""` for the files outside them). Without both fingerprints, only its text.
+ */
+export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
+	const written = () => (after ? shellWriteTargets(after.command, after.cwd, projectDir, process.env, after.powershell) : []);
+	if (!before || !now) return written();
+	const paths = changedPaths(before, now, projectDir);
+	const blind = new Set([...(before.blind ?? []), ...(now.blind ?? [])]);
+	if (blind.size === 0) return paths;
+	const repos = new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind].filter((r) => r !== ""));
+	const unseen = written().filter((p) => {
+		const top = p.split("/")[0]!;
+		return repos.has(top) ? blind.has(top) : blind.has("");
+	});
+	return [...new Set([...paths, ...unseen])].sort();
+}
+
 function identity(file: string): string {
 	try {
 		const { size, mtimeMs } = statSync(file);

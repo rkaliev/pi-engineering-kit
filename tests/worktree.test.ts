@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { changedPaths, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { callChanges, changedPaths, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -177,6 +177,18 @@ test("treeFingerprint: a removed workspace repository counts the files it listed
 	assert.ok(changedPaths(before, fingerprint(ws), ws).includes("a/f.ts"));
 });
 
+
+test("callChanges: in a workspace, text targets count only inside a blind part", () => {
+	const ws = "/ws";
+	const tree = (blind: string[]) => ({ head: "", files: {}, heads: { a: "1", b: "2" }, blind });
+	const writes = (blind: string[], command: string) => callChanges(tree(blind), tree(blind), ws, { command, cwd: ws });
+	assert.deepEqual(writes(["a"], "echo > a/x"), ["a/x"]);
+	assert.deepEqual(writes(["a"], "echo > b/x"), []);
+	assert.deepEqual(writes([""], "echo > loose.js"), ["loose.js"]);
+	assert.deepEqual(writes([""], "echo > a/x"), []);
+	assert.deepEqual(callChanges(tree([]), tree(["a"]), ws, { command: "echo > a/x", cwd: ws }), ["a/x"], "blind in either tree");
+	assert.deepEqual(callChanges(undefined, undefined, ws, { command: "echo > a/x", cwd: ws }), ["a/x"], "no tree: the text, as before");
+});
 
 test("shellWriteTargets: files a command writes inside the project", () => {
 	const project = mkdtempSync(join(tmpdir(), "no-git-"));
