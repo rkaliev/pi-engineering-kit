@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
-import { readReviews, recordVerdict } from "../extensions/lib/reviews.ts";
+import { readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
@@ -1111,6 +1111,34 @@ test("review gate: a malformed report in a workspace lands Inconclusive on each 
 	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
 	await reviewer("Reviewed HEAD: deadbeef0");
 	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
+});
+
+test("review gate: a reviewer verdict short of Yes that misses a workspace repository is recorded elsewhere and noted", async () => {
+	const { dir, git } = workspaceProject({});
+	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	writeFileSync(reviewsDir(join(dir, "a"), reviewsRoot), "not a folder");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const head = String(git("a", "rev-parse", "HEAD")).trim();
+	const c = ctx(dir);
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `F1 the finding\nReviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: No` }] }, isError: false }, c);
+	assert.ok(c.notes.some((n) => /missed a repository/.test(n)), c.notes.join("\n"));
+	assert.equal(readReviews(join(dir, "c"), reviewsRoot)[0]?.verdict, "No");
+});
+
+test("review gate: a review of unverified edits that names no commit here falls back to each repository's HEAD", async () => {
+	const { dir, git } = workspaceProject();
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	verifyState.unverified = true;
+	try {
+		await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: "Reviewed BASE: deadbeef0\nReviewed HEAD: deadbeef1\nReady to merge: Yes" }] }, isError: false }, ctx(dir));
+	} finally {
+		verifyState.unverified = false;
+	}
+	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[String(git(repo, "rev-parse", "HEAD")).trim(), "Inconclusive"]], repo);
 });
 
 test("review-log reads a short SHA as the commit it abbreviates, never a branch of that name", async () => {

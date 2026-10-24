@@ -238,6 +238,27 @@ test("callChanges: a part blind before and fingerprinted now has no baseline, so
 	assert.deepEqual(callChanges(before, fingerprint(ws), ws, { command: "ls", cwd: ws }), []);
 });
 
+test("callChanges: a listed file changed in the call where its part goes blind counts in that call", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	const seen = fingerprint(ws);
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 3;\n");
+	const blind = treeFingerprint(ws, [], {}, { deadline: Date.now() - 1, previous: seen });
+	assert.deepEqual(callChanges(seen, blind, ws, { command: "python gen.py", cwd: ws }), ["a/f.ts"]);
+});
+
+test("callChanges: with a blind part, source, . and eval hide names only as the command, not as an argument", () => {
+	const ws = "/ws";
+	const tree = { head: "", files: {}, heads: { a: "1", b: "2" }, blind: ["svc"] };
+	const changes = (command: string) => callChanges(tree, tree, ws, { command, cwd: ws });
+	assert.deepEqual(changes("cd a && npx eslint . > $S/lint.log"), [], "`.` as an argument");
+	assert.deepEqual(changes("cd a && echo source eval > $S/x.log"), [], "the words as arguments");
+	assert.deepEqual(changes(". ./env.sh; echo x > f.ts"), ["f.ts"]);
+	assert.deepEqual(changes("if true; then source x; fi; echo x > f.ts"), ["f.ts"]);
+	assert.deepEqual(changes("export $(cat .env); echo x > f.ts"), ["f.ts"], "a declaration of names the text doesn't show");
+	assert.deepEqual(changes("CDPATH=a; cd src && echo x > f.ts"), ["f.ts"], "CDPATH changes where a move lands");
+});
+
 test("callChanges: with a blind part, a command that moves the shell has its targets placed from every folder it may reach", () => {
 	const ws = "/ws";
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
@@ -251,6 +272,9 @@ test("callChanges: with a blind part, a command that moves the shell has its tar
 	assert.deepEqual(changes("cd $D && echo x > f.ts"), ["f.ts"], "a move the shell parser can't follow: every target counts");
 	assert.deepEqual(changes("source env.sh; echo x > f.ts"), ["f.ts"], "names it can't see: every target counts");
 	assert.deepEqual(changes("Set-Location a; 'x' > f.ts", true), ["f.ts"], "PowerShell moves aren't followed: every target counts");
+	assert.deepEqual(changes("Set-Location(\"a\"); 'x' > f.ts", true), ["f.ts"]);
+	assert.deepEqual(changes("cd..; 'x' > f.ts", true), ["f.ts"]);
+	assert.deepEqual(changes("Microsoft.PowerShell.Management\\Set-Location a; 'x' > f.ts", true), ["f.ts"]);
 	assert.deepEqual(changes("echo x > f.ts"), [], "no move: placed outside, which is fingerprinted");
 });
 
@@ -262,21 +286,24 @@ test("treeFingerprint: a folder symlink in a workspace is not walked; it is a bl
 	symlinkSync(target, join(ws, "notes", "deep"));
 	symlinkSync(join(target, "y.ts"), join(ws, "notes", "y.ts"));
 	const tree = fingerprint(ws);
-	assert.deepEqual(tree.blind, ["notes/deep", "svc"]);
+	assert.deepEqual(tree.blind, ["notes/deep", "notes/y.ts", "svc"], "the file link points outside the project");
 	assert.ok(!Object.keys(tree.files).some((p) => p.startsWith("svc/") || p.startsWith("notes/deep/")));
 	assert.deepEqual(callChanges(tree, tree, ws, { command: "echo x > svc/y.ts", cwd: ws }), ["svc/y.ts"]);
 	assert.deepEqual(callChanges(tree, tree, ws, { command: "echo x > notes/deep/y.ts", cwd: ws }), ["notes/deep/y.ts"]);
 });
 
-test("treeFingerprint: a file symlink in a workspace counts by what it points to", () => {
+test("treeFingerprint: a file symlink in a workspace counts by what it points to inside the project; one pointing outside is blind", () => {
 	const ws = workspace();
-	const target = join(mkdtempSync(join(tmpdir(), "linked-")), "y.ts");
-	writeFileSync(target, "1;\n");
-	symlinkSync(target, join(ws, "notes", "y.ts"));
+	writeFileSync(join(ws, "notes", "real.ts"), "1;\n");
+	symlinkSync(join(ws, "notes", "real.ts"), join(ws, "notes", "y.ts"));
+	const outside = join(mkdtempSync(join(tmpdir(), "linked-")), "o.ts");
+	writeFileSync(outside, "1;\n");
+	symlinkSync(outside, join(ws, "notes", "o.ts"));
 	const before = fingerprint(ws);
-	assert.deepEqual(before.blind, []);
-	writeFileSync(target, "22;\n");
-	assert.deepEqual(changedPaths(before, fingerprint(ws), ws), ["notes/y.ts"]);
+	assert.deepEqual(before.blind, ["notes/o.ts"], "not stat'ed: its target may be a slow mount");
+	writeFileSync(join(ws, "notes", "real.ts"), "22;\n");
+	assert.deepEqual(changedPaths(before, fingerprint(ws), ws), ["notes/real.ts", "notes/y.ts"]);
+	assert.deepEqual(callChanges(before, before, ws, { command: "echo x > notes/o.ts", cwd: ws }), ["notes/o.ts"]);
 });
 
 test("treeFingerprint: the walk skips OS, editor, dependency and local tool files", () => {
@@ -291,7 +318,7 @@ test("treeFingerprint: the walk skips OS, editor, dependency and local tool file
 	assert.deepEqual(changedPaths(before, fingerprint(ws), ws), []);
 });
 
-test("treeFingerprint: in a workspace, ignore globs match a repository's own paths too; a folder is pruned only by a <folder>/** glob", () => {
+test("treeFingerprint: in a workspace, a repository's default globs ignore its docs; a folder is pruned only by a <folder>/** glob", () => {
 	const ws = workspace();
 	const ignore = ["docs/**", "**/*.md"];
 	mkdirSync(join(ws, "a", "docs"));
@@ -318,6 +345,7 @@ test("treeFingerprint: a repository's own files match its own ignore globs, not 
 	assert.equal(filter("a/gen/x.ts"), true);
 	assert.equal(filter("a/scripts/build.ts"), false);
 	assert.equal(filter("scripts/x.ts"), true);
+	assert.equal(filter("a\\gen\\x.ts"), true, "a Windows path");
 });
 
 test("changedPaths: a workspace commit diff that can't run in time marks the repository folder", () => {

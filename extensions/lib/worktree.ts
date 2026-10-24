@@ -3,12 +3,12 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, commandIndex, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -115,7 +115,7 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 		Object.assign(files, tree.files);
 		heads[part] = tree.head;
 	});
-	// A blind part keeps what it had: the next comparison then measures from a real baseline, with neither noise nor loss.
+	// A blind part keeps the paths it listed, so the next comparison measures from a real baseline without noise.
 	const unseen: string[] = [];
 	const parts2 = [...repos, ...outsideParts(repos, blind)];
 	for (const part of blind) {
@@ -125,7 +125,8 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 			unseen.push(part);
 			continue;
 		}
-		for (const [path, id] of Object.entries(previous!.files)) if (partOf(path, parts2) === part) files[path] = id;
+		// The paths are carried, their identity read now: a change to a listed file still counts in this call.
+		for (const path of Object.keys(previous!.files)) if (partOf(path, parts2) === part) files[path] = identity(join(projectDir, path));
 		if (part !== "") heads[part] = previous!.heads![part]!;
 	}
 	return { head: "", files, heads, blind: blind.sort(), unseen: unseen.sort(), late: late.sort() };
@@ -206,7 +207,13 @@ function walkOutside(projectDir: string, repos: string[], ignore: string[], maxE
 		for (const entry of entries) {
 			const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
 			if (entry.name === ".git" || (rel === "" && repos.includes(entry.name))) continue;
-			const folder = entry.isDirectory() || (entry.isSymbolicLink() && isFolder(join(projectDir, path)));
+			// A symlink is followed only into the project: its target elsewhere may be a mount that hangs on stat.
+			const link = entry.isSymbolicLink() ? linkTarget(join(projectDir, path)) : undefined;
+			if (link !== undefined && !within(resolve(projectDir), link)) {
+				if (!isIgnored(path, ignore) && !ignoredFolder(path, ignore)) links.push(path);
+				continue;
+			}
+			const folder = entry.isDirectory() || (link !== undefined && isFolder(link));
 			if (folder) {
 				if (ignoredFolder(path, ignore)) continue;
 				if (entry.isSymbolicLink()) links.push(path);
@@ -218,6 +225,15 @@ function walkOutside(projectDir: string, repos: string[], ignore: string[], maxE
 		}
 	}
 	return { files, links };
+}
+
+/** Where a symlink points, resolved against its folder. */
+function linkTarget(path: string): string {
+	try {
+		return resolve(dirname(path), readlinkSync(path));
+	} catch {
+		return path;
+	}
 }
 
 function isFolder(path: string): boolean {
@@ -265,8 +281,9 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
  * What a call changed: the fingerprints compared, plus the files its text writes inside a part either fingerprint is
  * blind to (a workspace repository, a folder symlink, or `""` for the files outside them). A part never fingerprinted
  * before has no baseline, so its listed files don't count; its text targets do. With a blind part, a command that moves
- * the shell has its targets placed from every folder it may reach; one whose moves can't be followed (a variable, a
- * PowerShell move) or that may bind names it doesn't show (`source`, `eval`) has every text target count. Without
+ * the shell has its targets placed from every folder it may reach; one whose moves can't be followed (a variable,
+ * `chdir`, `CDPATH`, a PowerShell move) or that may bind names it doesn't show (`source`, `.` or `eval` as the command)
+ * has every text target count. Without
  * both fingerprints, only its text.
  */
 export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
@@ -290,9 +307,13 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 
 /** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
 function placesOf(command: string, cwd: string, powershell = false): string[] | undefined {
-	if (powershell) return undefined;
-	const segments = splitSegments(tokenize(heredocs(command).text));
-	if (segments.some((seg) => seg.some((t, i) => !MOVES.has(t.replace(/^[({!]+/, "")) && hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))))) return undefined;
+	if (powershell || /\bcdpath\b/i.test(command) || process.env.CDPATH) return undefined;
+	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration, as the command word only.
+	for (const seg of splitSegments(tokenize(heredocs(command).text))) {
+		const words = seg.map((t) => t.replace(/^[({!]+/, "")).filter(Boolean);
+		const at = commandIndex(words);
+		if (at !== -1 && !MOVES.has(words[at]!) && hidesBinding(words[at]!, words.slice(at + 1))) return undefined;
+	}
 	const { dirs, unknown } = reachable(command, cwd);
 	return unknown ? undefined : dirs;
 }
@@ -309,7 +330,8 @@ export function ignoredPath(projectDir: string, rel: string, ignore: string[]): 
 export function ignoreFilter(projectDir: string, ignore: string[]): (rel: string) => boolean {
 	let repos: string[] | undefined;
 	const own = new Map<string, string[]>();
-	return (rel) => {
+	return (path) => {
+		const rel = path.replaceAll("\\", "/");
 		if (isIgnored(rel, ignore)) return true;
 		const slash = rel.indexOf("/");
 		if (slash < 0 || !existsSync(join(projectDir, rel.slice(0, slash), ".git"))) return false;
@@ -367,7 +389,7 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 
 /** Whether a command's text moves the shell or may bind names it doesn't show (see `hidesBinding`); in PowerShell, any move word. */
 function hidesPlace(command: string, powershell = false): boolean {
-	if (powershell && /(^|[\s;|&({])(cd|chdir|sl|set-location|push-location|pushd|pop-location|popd)(?=$|[\s;|&)])/i.test(command)) return true;
+	if (powershell && /(^|[^\w-])(cd|chdir|sl|set-location|push-location|pushd|pop-location|popd)(?![\w-])/i.test(command)) return true;
 	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
 }
 

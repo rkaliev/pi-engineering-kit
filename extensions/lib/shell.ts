@@ -146,6 +146,11 @@ const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 /** Words that may stand before a command in the same segment. */
 const PREFIXES = new Set(["{", "}", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 
+/** Where a segment's command word is: after reserved words, `builtin`-style prefixes and assignments; -1 for none. */
+export function commandIndex(words: string[]): number {
+	return words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
+}
+
 /** A move the guard follows exactly. */
 type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
 
@@ -155,8 +160,7 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  * `--`, then one folder for `pushd`, none for `popd`, at most one for `cd`, written without a glob or brace.
  */
 export function parseMove(words: string[]): Move | "other" | undefined {
-	// The command word comes after reserved words, `builtin`-style prefixes and assignments.
-	const at = words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
+	const at = commandIndex(words);
 	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
 	if (at > 0 || words[at] === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];

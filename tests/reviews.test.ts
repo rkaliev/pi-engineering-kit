@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
+import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { stripRedirects } from "../extensions/lib/shell.ts";
 
@@ -521,14 +522,49 @@ test("in a workspace, a store that can't be written doesn't stop the others", ()
 	assert.equal(readReviews(join(ws, "b"), root)[0]?.sha, a.head);
 });
 
-test("in a workspace, an Inconclusive that a repository with the commit misses is an error, so the caller falls back", () => {
+test("in a workspace, a verdict short of Yes that misses a repository is recorded where it can and names the miss", () => {
 	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
 	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
 	writeFileSync(reviewsDir(a.dir, root), "not a folder");
-	assert.match(String(recordVerdict(ws, a.head, "Inconclusive", { promptId: "p1", run: "r1" }, root)), /could not write/);
-	assert.equal(readReviews(join(ws, "b"), root)[0]?.verdict, "Inconclusive", "the others still get it");
+	const result = recordVerdict(ws, a.head, "No", { promptId: "p1", run: "r1" }, root, { report: "the findings" });
+	assert.equal(typeof result, "object");
+	assert.match(String((result as { missed?: string }).missed), /could not write/);
+	assert.equal(readReviews(join(ws, "b"), root)[0]?.verdict, "No", "the others still get it, with its report");
+});
+
+test("in a workspace, a lookup that runs out of time in a repository makes a verdict short of Yes name the miss", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
+	const { restore } = slowGit(realpathSync(join(ws, "b")), "rev-parse");
+	try {
+		const result = recordVerdict(ws, a.head, "Inconclusive", { promptId: "p1", run: "r1" }, root);
+		assert.match(String((result as { missed?: string }).missed), /in time/);
+	} finally {
+		restore();
+	}
+});
+
+test("in a workspace, a verdict short of Yes reaches a repository where its BASE doesn't resolve, without a range", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", "--depth", "1", "-b", "feat/a", `file://${a.dir}`, join(ws, "b")]).status, 0);
+	recordReview(ws, report(a.head, "No", a.base), { promptId: "p1", run: "r1" }, root);
+	assert.deepEqual(readReviews(join(ws, "b"), root).map((r) => [r.verdict, r.bases]), [["No", []]]);
+	recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p2", run: "r1" }, root);
+	assert.equal(readReviews(join(ws, "b"), root)[0]?.verdict, "No", "a Yes needs its range, so b keeps the No");
+});
+
+test("a Yes recorded in a workspace repository doesn't let a landing pass once the folder stops being a workspace", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	assert.equal(check("cd a && gh pr create --fill"), undefined, "a workspace");
+	for (let i = 10; i < 41; i++) mkdirSync(join(ws, `r${i}`, ".git"), { recursive: true });
+	assert.match(String(check("cd a && gh pr create --fill")?.reason), /no reviewer verdict recorded/, "the folder's own store holds no verdict");
 });
 
 test("a PR branch registered in a workspace repository still gates its push after the folder stops being a workspace", () => {
