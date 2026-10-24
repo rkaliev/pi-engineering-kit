@@ -203,7 +203,7 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 
 ### Task 7: live check
 
-- [ ] Criterion 10: from a workspace root, `pi -e <this repo>`; run one review and one `cd <repo> && … > $S/red.log` call → the verdict is recorded (review-log from the workspace prints it) and the verify gate doesn't send a follow-up. Record in Progress.
+- [x] Criterion 10: from a workspace root, `pi -e <this repo>`; run one review and one `cd <repo> && … > $S/red.log` call → the verdict is recorded (review-log from the workspace prints it) and the verify gate doesn't send a follow-up. Record in Progress.
 
 ## Progress
 
@@ -222,3 +222,5 @@ Ruling: the two defects' red reproductions open Task 3 (verify) and Task 4 (revi
 - Task 5: complete (32f22d0..fix(review-log) commit; RED: review-log from the workspace exited 1; the two reviewer-result workspace tests fail (2 of 2) with commitRepos mutated, restored identical; GREEN: npm test → 513 tests: 502 pass, 11 skipped, 0 fail; tsc clean).
 - Task 6: complete (06219a7..docs commit; README verify and review gate, ARCHITECTURE.md and .ru.md (guard and verify rows, review gate paragraph, section 7), review-gate.md, CHANGELOG 0.34.0, version 0.34.0 in package.json and package-lock.json, install pins @v0.34.0 in README, GETTING-STARTED(.ru) and templates/settings.json; node .github/release.ts check → 'release metadata ok: 0.34.0'; npm test → 513 tests: 502 pass, 11 skipped, 0 fail; tsc clean).
 - Live check 2026-10-24 (Task 7, criterion 10) blocked: pi -p in a scratch workspace fails before any tool call with provider error 400 invalid_request_error 'Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going.' The account needs extra usage (or another provider) for a pi run; waiting for the user's decision.
+- Ruling (user, 2026-10-24): criterion 10 closes without a live pi run; docs/ARCHITECTURE(.ru) 'Not verified' names it, and the shared code is byte-identical with the edition whose live run passed — cost if wrong: a pi-only wiring defect in extensions/verify.ts or guard.ts that the extension tests miss.
+- Task 7: complete (no live run, by the ruling above).
