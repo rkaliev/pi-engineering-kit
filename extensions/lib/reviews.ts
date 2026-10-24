@@ -15,7 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
-import { projectRepos, repoOf } from "./repos.ts";
+import { projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
@@ -74,6 +74,7 @@ const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_CHAIN = 20;
 /** git calls one coverage check may spend, well inside the hook's 10 s timeout. */
 const MAX_CHAIN_CALLS = 300;
+const GIT_TIMEOUT_MS = 5000;
 
 /** The range and verdict in a reviewer's report. Several reports (parallel reviewers) give the worst verdict. */
 export function parseReview(text: string): { base: string; sha: string; verdict: Verdict } | undefined {
@@ -104,37 +105,69 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
 	const found = commitRepos(projectDir, rev);
 	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
-	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there.
+	// A SHA the reviewer wrote names one commit: different commits under one abbreviation get no verdict at all.
+	if (HEX.test(rev) && new Set(found.map((f) => f.sha)).size > 1) return `Reviewed HEAD ${rev} names different commits in different repositories; give the full SHA`;
+	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there;
+	// one store that can't be written doesn't keep the record from the others.
 	let first: ReviewRecord | undefined;
+	let failure: string | undefined;
 	for (const { dir: repo, sha } of found) {
-		const base = extra.base === undefined ? undefined : git(repo, ["rev-parse", "--verify", "--quiet", `${extra.base}^{commit}`]);
+		const base = extra.base === undefined ? undefined : resolveCommit(repo, extra.base);
 		if (extra.base !== undefined && !base) continue;
 		const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
 		const dir = reviewsDir(repo, root);
 		try {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
-			if (!ownDir(dir)) return `${dir} belongs to another user`;
+			if (!ownDir(dir)) {
+				failure ??= `${dir} belongs to another user`;
+				continue;
+			}
 			writeAtomic(join(dir, `${sha}.${safe(ids.promptId)}.${safe(ids.run)}.json`), JSON.stringify(record));
 			prune(dir);
 		} catch (err) {
-			return `could not write ${dir}: ${(err as Error).message}`;
+			failure ??= `could not write ${dir}: ${(err as Error).message}`;
+			continue;
 		}
 		first ??= record;
 	}
-	return first ?? `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
+	return first ?? failure ?? `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
+}
+
+/** A reviewer's hex abbreviation (or full SHA), as opposed to a ref name such as `HEAD`. */
+const HEX = /^[0-9a-f]{4,40}$/i;
+/** How long resolving a commit across a workspace's repositories may take, inside the hook's 10 s. */
+const LOOKUP_BUDGET_MS = 4000;
+
+/** The commit `rev` names in `dir`. A hex `rev` must abbreviate it: a branch or tag that happens to be named so doesn't count. */
+function resolveCommit(dir: string, rev: string, timeout?: number): string | undefined {
+	const sha = git(dir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], timeout);
+	return sha && (!HEX.test(rev) || sha.startsWith(rev.toLowerCase())) ? sha : undefined;
 }
 
 /**
  * The repositories where `rev` names a commit, with its SHA there: the project's own repository, or each repository
- * of a workspace (see `projectRepos`) that has it. Empty outside git and where no repository has it.
+ * of a workspace (see `projectRepos`) that has it, as far as the lookup's time allows (a repository not reached
+ * records nothing, so a landing from it is refused). Empty outside git and where no repository has it.
  */
 export function commitRepos(projectDir: string, rev: string): Array<{ dir: string; sha: string }> {
 	const { kind, repos } = projectRepos(projectDir);
 	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
+	const deadline = Date.now() + LOOKUP_BUDGET_MS;
 	return dirs.flatMap((dir) => {
-		const sha = git(dir, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+		const left = Math.floor(deadline - Date.now());
+		const sha = left > 0 ? resolveCommit(dir, rev, Math.min(GIT_TIMEOUT_MS, left)) : undefined;
 		return sha ? [{ dir, sha }] : [];
 	});
+}
+
+/**
+ * Where a landing's or a PR's review records live: the project's store, or in a workspace the store of the
+ * repository the folder is a checkout of (keyed by its git common directory, so a worktree elsewhere or another
+ * spelling of the path finds the same one).
+ */
+function storeFor(projectDir: string, dir: string): string {
+	if (projectRepos(projectDir).kind !== "workspace") return projectDir;
+	return git(dir, ["rev-parse", "--git-dir"]) !== undefined ? dir : projectDir;
 }
 
 /** Where a commit was looked for, for a message: this repository, or the workspace's repositories by name. */
@@ -234,7 +267,7 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 	const stores = new Map<string, string[]>();
 	for (const { branch, dir } of entries) {
 		if (typeof branch !== "string" || branch === "" || typeof dir !== "string") continue;
-		const store = repoOf(projectDir, dir);
+		const store = storeFor(projectDir, dir);
 		stores.set(store, [...(stores.get(store) ?? []), branch]);
 	}
 	for (const [store, names] of stores) {
@@ -242,6 +275,16 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 		for (const branch of names) prs[branch] = Date.now();
 		writePrs(store, prs, root);
 	}
+}
+
+/**
+ * The open PR branches a landing in `where` checks: its repository's, and in a workspace the folder's own store's too,
+ * which holds PRs registered before 0.34.0 and ones whose folder the guard couldn't tell.
+ */
+function prBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string): string[] {
+	const store = storeFor(projectDir, where);
+	const own = openPrBranches(store, where, remote, anchor, root);
+	return store === projectDir ? own : [...new Set([...own, ...openPrBranches(projectDir, where, remote, anchor, root)])];
 }
 
 /**
@@ -401,7 +444,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		if (!base) continue;
 		const land = l.kind === "push" ? withDestination(l, where) : l;
 		const remote = land.kind === "push" && land.remote ? land.remote : "origin";
-		const refs = targets(land, where, base, land.kind === "push" ? openPrBranches(repoOf(projectDir, where), where, remote, anchorRef(where, remote, base), root) : []);
+		const refs = targets(land, where, base, land.kind === "push" ? prBranches(projectDir, where, remote, anchorRef(where, remote, base), root) : []);
 		if (refs.length === 0) continue;
 		if (unsafeBefore) {
 			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
@@ -648,7 +691,7 @@ function uncovered(where: string, projectDir: string, base: string, ref: string,
 
 	// A verdict covers exactly the commit the reviewer reviewed: anything else is a change it didn't see. In a
 	// workspace the verdicts are the landing repository's.
-	const reviews = readReviews(repoOf(projectDir, where), root);
+	const reviews = readReviews(storeFor(projectDir, where), root);
 	const match = reviews.find((r) => r.sha === sha);
 	if (!match) {
 		// Name an earlier review only when it was of this branch (an ancestor): then the branch changed after it.
@@ -812,12 +855,12 @@ export function writeAtomic(path: string, text: string): void {
 	renameSync(tmp, path);
 }
 
-function git(cwd: string, args: string[]): string | undefined {
-	return gitRaw(cwd, args)?.trim();
+function git(cwd: string, args: string[], timeout?: number): string | undefined {
+	return gitRaw(cwd, args, timeout)?.trim();
 }
 
 /** git output as is. Paths are never quoted. */
-function gitRaw(cwd: string, args: string[]): string | undefined {
-	const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
+function gitRaw(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): string | undefined {
+	const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
 	return r.status === 0 ? r.stdout : undefined;
 }

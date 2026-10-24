@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { projectRepos, repoOf } from "../extensions/lib/repos.ts";
+import { projectRepos } from "../extensions/lib/repos.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
 
@@ -43,13 +43,9 @@ test("projectRepos: a folder with no repositories, or with more than 32, is none
 	assert.deepEqual(projectRepos(many), { kind: "none", repos: [] });
 });
 
-test("repoOf: the workspace repository holding a path, else the project folder", () => {
-	const ws = workspace();
-	assert.equal(repoOf(ws, join(ws, "b", "src", "x.ts")), join(ws, "b"));
-	assert.equal(repoOf(ws, join(ws, "b")), join(ws, "b"));
-	assert.equal(repoOf(ws, join(ws, "plain", "x.ts")), ws);
-	assert.equal(repoOf(ws, join(tmpdir(), "elsewhere")), ws);
-	const dir = mkdtempSync(join(tmpdir(), "repos-"));
-	git(dir, "init", "-q");
-	assert.equal(repoOf(dir, join(dir, "src", "x.ts")), dir);
+test("projectRepos: the 32 limit counts ignored repositories too, so callers with and without ignore agree", () => {
+	const many = mkdtempSync(join(tmpdir(), "repos-"));
+	for (let i = 10; i < 43; i++) mkdirSync(join(many, `r${i}`, ".git"), { recursive: true });
+	assert.deepEqual(projectRepos(many, ["r42/**"]), { kind: "none", repos: [] });
+	assert.deepEqual(projectRepos(many), { kind: "none", repos: [] });
 });

@@ -461,6 +461,66 @@ test("in a workspace, a PR branch is gated in its own repository only", () => {
 	assert.equal(check("git -C b push origin feat/a"), undefined, "b's own feat/a has no PR");
 });
 
+test("in a workspace, a reviewed push to a repository's PR branch passes", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
+	settlePr(ws, "t1", true, root);
+	assert.equal(check("git -C a push origin feat/a"), undefined);
+});
+
+test("in a workspace, a PR branch is found from a worktree of its repository outside the folder", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
+	settlePr(ws, "t1", true, root);
+	a.git("switch", "-q", "main");
+	const wt = join(mkdtempSync(join(tmpdir(), "reviews-wt-")), "a");
+	a.git("worktree", "add", "-q", wt, "feat/a");
+	const next = a.commit({ "src/a.ts": "export const a = 2;\n" }, wt);
+	assert.match(String(check(`git -C ${wt} push origin feat/a`)?.reason), new RegExp(`no reviewer verdict recorded for ${next.slice(0, 7)}`));
+});
+
+test("in a workspace, a PR branch registered in the folder's own store (0.33.0) still gates a repository's push", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	mkdirSync(reviewsDir(ws, root), { recursive: true, mode: 0o700 });
+	writeFileSync(join(reviewsDir(ws, root), "prs.json"), JSON.stringify({ "feat/a": Date.now() }));
+	a.commit({ "src/a.ts": "export const a = 2;\n" });
+	assert.match(String(check("git -C a push origin feat/a")?.reason), /no reviewer verdict recorded/);
+});
+
+test("in a workspace, clones of one history don't share PR branches", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", "-b", "feat/a", a.dir, join(ws, "b")]).status, 0);
+	a.run(join(ws, "b"), "remote", "set-head", "origin", "main");
+	recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p1", run: "r1" }, root);
+	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
+	settlePr(ws, "t1", true, root);
+	a.commit({ "src/a.ts": "export const a = 2;\n" }, join(ws, "b"));
+	assert.equal(checkReview("git -C b push origin feat/a", ws, ws, OPTIONS, root), undefined, "b's feat/a has no PR");
+});
+
+test("in a workspace, a short SHA names the commit it abbreviates, not a ref of that name elsewhere", () => {
+	const { ws, root, a, b, ids } = workspaceRepos();
+	b.git("branch", a.head.slice(0, 10));
+	b.git("branch", a.base.slice(0, 10));
+	assert.equal(typeof recordReview(ws, report(a.head, "Yes", a.base), ids, root), "object");
+	assert.deepEqual(readReviews(b.dir, root), [], "b's branch named like a's SHA gets nothing");
+});
+
+test("in a workspace, a store that can't be written doesn't stop the others", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
+	writeFileSync(reviewsDir(a.dir, root), "not a folder");
+	assert.equal(typeof recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p1", run: "r1" }, root), "object");
+	assert.equal(readReviews(join(ws, "b"), root)[0]?.sha, a.head);
+});
+
 test("a PR branch named with --head (fork syntax too) is remembered; a merged PR branch is forgotten", () => {
 	const { dir, root, git, commit, head, base, check, review } = repo();
 	review(report(head, "Yes", base));

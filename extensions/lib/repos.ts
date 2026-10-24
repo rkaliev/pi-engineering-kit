@@ -4,7 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { join } from "node:path";
 import { isIgnored } from "./commands.ts";
 
 /** More first-level repositories than this and the folder is treated as holding none. */
@@ -19,35 +19,27 @@ export interface ProjectRepos {
 
 /**
  * Inside a git working tree, one repository. Otherwise the direct subfolders (not symlinks) that hold a `.git` entry,
- * a folder or a linked worktree's file, minus the ignored ones; 1..MAX_REPOS of them make a workspace. Deeper levels
- * aren't searched, and discovery runs no git.
+ * a folder or a linked worktree's file: up to MAX_REPOS of them, at least one not ignored, make a workspace of the ones
+ * not ignored. Deeper levels aren't searched, and discovery runs no git.
  */
 export function projectRepos(projectDir: string, ignore: string[] = []): ProjectRepos {
 	const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: projectDir, encoding: "utf8", timeout: 3000 });
 	if (inside.status === 0 && inside.stdout.trim() === "true") return { kind: "repo", repos: [""] };
-	let names: string[];
+	let found: string[];
 	try {
-		names = readdirSync(projectDir, { withFileTypes: true })
-			.filter((e) => e.isDirectory() && existsSync(join(projectDir, e.name, ".git")) && !ignoredFolder(e.name, ignore))
+		found = readdirSync(projectDir, { withFileTypes: true })
+			.filter((e) => e.isDirectory() && existsSync(join(projectDir, e.name, ".git")))
 			.map((e) => e.name)
 			.sort();
 	} catch {
 		return { kind: "none", repos: [] };
 	}
-	return names.length > 0 && names.length <= MAX_REPOS ? { kind: "workspace", repos: names } : { kind: "none", repos: [] };
+	// The limit counts before ignoring, so callers with and without `ignore` agree on the kind.
+	const names = found.filter((name) => !ignoredFolder(name, ignore));
+	return names.length > 0 && found.length <= MAX_REPOS ? { kind: "workspace", repos: names } : { kind: "none", repos: [] };
 }
 
-/** A folder a glob names itself or everything under (`name/**`). */
+/** A folder a glob names with everything under it (`<folder>/**`); a glob for files never prunes a folder. */
 export function ignoredFolder(rel: string, ignore: string[]): boolean {
-	return isIgnored(rel, ignore) || ignore.some((g) => g.endsWith("/**") && isIgnored(rel, [g.slice(0, -3)]));
-}
-
-/** The workspace repository folder that holds `path`, or `projectDir` itself (inside a repository, or outside them all). */
-export function repoOf(projectDir: string, path: string): string {
-	const { kind, repos } = projectRepos(projectDir);
-	if (kind !== "workspace") return projectDir;
-	const rel = relative(projectDir, path);
-	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return projectDir;
-	const top = rel.split(/[\\/]/)[0]!;
-	return repos.includes(top) ? join(projectDir, top) : projectDir;
+	return ignore.some((g) => g.endsWith("/**") && isIgnored(rel, [g.slice(0, -3)]));
 }
