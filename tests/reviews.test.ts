@@ -521,6 +521,39 @@ test("in a workspace, a store that can't be written doesn't stop the others", ()
 	assert.equal(readReviews(join(ws, "b"), root)[0]?.sha, a.head);
 });
 
+test("in a workspace, an Inconclusive that a repository with the commit misses is an error, so the caller falls back", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
+	writeFileSync(reviewsDir(a.dir, root), "not a folder");
+	assert.match(String(recordVerdict(ws, a.head, "Inconclusive", { promptId: "p1", run: "r1" }, root)), /could not write/);
+	assert.equal(readReviews(join(ws, "b"), root)[0]?.verdict, "Inconclusive", "the others still get it");
+});
+
+test("a PR branch registered in a workspace repository still gates its push after the folder stops being a workspace", () => {
+	const { ws, root, a, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
+	settlePr(ws, "t1", true, root);
+	for (let i = 10; i < 41; i++) mkdirSync(join(ws, `r${i}`, ".git"), { recursive: true });
+	a.commit({ "src/a.ts": "export const a = 2;\n" });
+	assert.match(String(check("git -C a push origin feat/a")?.reason), /no reviewer verdict recorded/);
+});
+
+test("in a workspace, the folder's own PR branches aren't pruned by another repository's merged branch of that name", () => {
+	const { ws, root, a, b, ids, check } = workspaceRepos();
+	recordReview(ws, report(a.head, "Yes", a.base), ids, root);
+	mkdirSync(reviewsDir(ws, root), { recursive: true, mode: 0o700 });
+	writeFileSync(join(reviewsDir(ws, root), "prs.json"), JSON.stringify({ "feat/a": Date.now() }));
+	b.git("switch", "-q", "main");
+	b.git("merge", "-q", "--ff-only", "feat/a");
+	b.git("push", "-q", "origin", "main");
+	check("git -C b push origin main");
+	a.commit({ "src/a.ts": "export const a = 2;\n" });
+	assert.match(String(check("git -C a push origin feat/a")?.reason), /no reviewer verdict recorded/, "a's PR branch is still gated");
+});
+
 test("a PR branch named with --head (fork syntax too) is remembered; a merged PR branch is forgotten", () => {
 	const { dir, root, git, commit, head, base, check, review } = repo();
 	review(report(head, "Yes", base));

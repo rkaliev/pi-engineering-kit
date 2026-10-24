@@ -17,9 +17,9 @@ import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
-import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { commandMatches, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChanges, ignoredPath, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChanges, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -85,13 +85,14 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
 		const why: { slow?: boolean; slowParts?: string[] } = {};
-		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why, { skip: [...slowParts] });
+		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why, { skip: [...slowParts], previous: tree });
 		if (why.slow) gitOff = true;
 		for (const part of why.slowParts ?? []) slowParts.add(part);
 		// A call's own snapshot (by id; `run_verification` takes the last tree just before it runs).
 		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
 		const before = own ?? tree;
-		const paths = callChanges(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }).filter((p) => !isIgnored(p, ignore));
+		const ignored = ignoreFilter(cwd, ignore);
+		const paths = callChanges(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }).filter((p) => !ignored(p));
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
 		const counts = after ? !(after.exempt && own) : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];

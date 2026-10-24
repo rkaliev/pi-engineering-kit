@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
 import { readReviews, recordVerdict } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
@@ -469,26 +470,21 @@ function workspaceProject(files: Record<string, string> = COMMANDS) {
 	return { dir, git };
 }
 
-test("verify: a slow workspace repository is remembered for the session, so later calls don't wait on it", async () => {
+test("verify: a workspace repository late twice running is remembered for the session, so later calls don't wait on it", async () => {
 	const { dir } = workspaceProject();
-	const bin = mkdtempSync(join(tmpdir(), "slow-git-"));
-	const log = join(bin, "calls.log");
-	writeFileSync(log, "");
-	const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-	writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$PWD" = "${realpathSync(join(dir, "a"))}" ]; then echo call >> "${log}"; sleep 4; fi\nexec "${real}" "$@"\n`, { mode: 0o755 });
-	const path = process.env.PATH;
-	process.env.PATH = `${bin}:${path}`;
+	const { log, restore } = slowGit(realpathSync(join(dir, "a")));
 	try {
 		const { pi, emit } = fakePi();
 		verify(pi);
 		const c = ctx(dir);
 		await emit("session_start", { reason: "startup" }, c);
-		const calls = readFileSync(log, "utf8");
-		assert.notEqual(calls, "", "the first fingerprint tried the slow repository");
+		assert.notEqual(readFileSync(log, "utf8"), "", "the first fingerprint tried the slow repository");
 		await bashCall(emit, c, "ls");
-		assert.equal(readFileSync(log, "utf8"), calls, "no git in the remembered repository");
+		const calls = readFileSync(log, "utf8");
+		await bashCall(emit, c, "ls");
+		assert.equal(readFileSync(log, "utf8"), calls, "late twice running: no git in it any more");
 	} finally {
-		process.env.PATH = path;
+		restore();
 	}
 });
 
@@ -505,6 +501,26 @@ test("verify: in a workspace, an edit a glob ignores by its path inside the repo
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1);
 	assert.match(sent[0]!.message.content, /a\/src\/d\.ts/);
+});
+
+test("verify: in a workspace, a repository's files follow its own ignore globs, in edits and commits", async () => {
+	const { dir, git } = workspaceProject({ ...COMMANDS, ".pi/verify.json": JSON.stringify({ commands: ["npm test"], ignore: ["scripts/**"] }) });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "git -C a commit", false, () => {
+		mkdirSync(join(dir, "a", "docs"));
+		writeFileSync(join(dir, "a", "docs", "setup.yaml"), "x: 1\n");
+		git("a", "add", "docs/setup.yaml");
+		git("a", "commit", "-q", "-m", "docs");
+	});
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 0, "a's default docs/** ignores its committed docs file");
+	await emit("tool_result", { toolName: "write", input: { path: "a/scripts/build.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "the workspace's scripts/** is for the workspace's own folder");
+	assert.match(sent[0]!.message.content, /a\/scripts\/build\.ts/);
 });
 
 test("verify: in a workspace, a redirect to an unknown variable path marks nothing", async () => {
@@ -1095,6 +1111,22 @@ test("review gate: a malformed report in a workspace lands Inconclusive on each 
 	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
 	await reviewer("Reviewed HEAD: deadbeef0");
 	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
+});
+
+test("review-log reads a short SHA as the commit it abbreviates, never a branch of that name", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: join(dir, "a"), stdio: "pipe" });
+	const first = head("a");
+	writeFileSync(join(dir, "a", "g.ts"), "export {};\n");
+	git("add", "g.ts");
+	git("commit", "-q", "-m", "g");
+	const second = head("a");
+	await reviewer(`WRONG-COMMIT\nReviewed BASE: ${first}\nReviewed HEAD: ${second}\nReady to merge: No`);
+	git("branch", first.slice(0, 10), second);
+	const { CLAUDE_PROJECT_DIR: _unset, ...shellEnv } = process.env;
+	const printed = spawnSync(process.execPath, [join(import.meta.dirname, "..", "scripts", "review-log.ts"), first.slice(0, 10)], { cwd: join(dir, "a"), encoding: "utf8", env: { ...shellEnv, ENG_KIT_REVIEWS_ROOT: reviewsRoot } });
+	assert.doesNotMatch(printed.stdout, /WRONG-COMMIT/);
+	assert.equal(printed.status, 1);
 });
 
 test("review-log finds the commit's repository from the workspace folder", async () => {

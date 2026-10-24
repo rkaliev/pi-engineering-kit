@@ -103,7 +103,7 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): ReviewRecord | string {
-	const found = commitRepos(projectDir, rev);
+	const { found, complete } = lookup(projectDir, rev);
 	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
 	// A SHA the reviewer wrote names one commit: different commits under one abbreviation get no verdict at all.
 	if (HEX.test(rev) && new Set(found.map((f) => f.sha)).size > 1) return `Reviewed HEAD ${rev} names different commits in different repositories; give the full SHA`;
@@ -130,6 +130,9 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 		}
 		first ??= record;
 	}
+	// A verdict that holds a landing back must reach every repository that has the commit, or a parallel Yes there
+	// would stand alone: a miss is an error, so the caller falls back to each HEAD.
+	if (verdict !== "Yes" && (failure !== undefined || !complete)) return failure ?? "the repositories could not all be searched in time";
 	return first ?? failure ?? `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
 }
 
@@ -150,23 +153,31 @@ function resolveCommit(dir: string, rev: string, timeout?: number): string | und
  * records nothing, so a landing from it is refused). Empty outside git and where no repository has it.
  */
 export function commitRepos(projectDir: string, rev: string): Array<{ dir: string; sha: string }> {
+	return lookup(projectDir, rev).found;
+}
+
+/** `commitRepos`, and whether every repository was searched within the time. */
+function lookup(projectDir: string, rev: string): { found: Array<{ dir: string; sha: string }>; complete: boolean } {
 	const { kind, repos } = projectRepos(projectDir);
 	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
 	const deadline = Date.now() + LOOKUP_BUDGET_MS;
-	return dirs.flatMap((dir) => {
+	let complete = true;
+	const found = dirs.flatMap((dir) => {
 		const left = Math.floor(deadline - Date.now());
+		if (left <= 0) complete = false;
 		const sha = left > 0 ? resolveCommit(dir, rev, Math.min(GIT_TIMEOUT_MS, left)) : undefined;
 		return sha ? [{ dir, sha }] : [];
 	});
+	return { found, complete };
 }
 
 /**
- * Where a landing's or a PR's review records live: the project's store, or in a workspace the store of the
- * repository the folder is a checkout of (keyed by its git common directory, so a worktree elsewhere or another
- * spelling of the path finds the same one).
+ * Where a landing's or a PR's review records live: the project's store inside a repository; otherwise the store of
+ * the repository the folder is a checkout of (keyed by its git common directory, so a worktree elsewhere or another
+ * spelling of the path finds the same one), even once the folder stops being a workspace; else the folder's own.
  */
 function storeFor(projectDir: string, dir: string): string {
-	if (projectRepos(projectDir).kind !== "workspace") return projectDir;
+	if (projectRepos(projectDir).kind === "repo") return projectDir;
 	return git(dir, ["rev-parse", "--git-dir"]) !== undefined ? dir : projectDir;
 }
 
@@ -284,19 +295,21 @@ export function settlePr(projectDir: string, callId: string, ok: boolean, root?:
 function prBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string): string[] {
 	const store = storeFor(projectDir, where);
 	const own = openPrBranches(store, where, remote, anchor, root);
-	return store === projectDir ? own : [...new Set([...own, ...openPrBranches(projectDir, where, remote, anchor, root)])];
+	// The folder's entries may be another repository's: only their age, not this repository's refs, retires them.
+	return store === projectDir ? own : [...new Set([...own, ...openPrBranches(projectDir, where, remote, anchor, root, Date.now(), false)])];
 }
 
 /**
  * Branches of the PRs the agent opened that are still open. A merged one is dropped once the PR's head as the
- * remote last showed it (`<remote>/<branch>`, else the local branch) is on `anchor`; so is one older than 30 days.
+ * remote last showed it (`<remote>/<branch>`, else the local branch) is on `anchor` (unless `merged` is false: the
+ * entries may be another repository's); so is one older than 30 days.
  */
-export function openPrBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string, now = Date.now()): string[] {
+export function openPrBranches(projectDir: string, where: string, remote: string, anchor: string, root?: string, now = Date.now(), merged = true): string[] {
 	const prs = readPrs(projectDir, root);
 	let changed = false;
 	for (const [branch, at] of Object.entries(prs)) {
 		const tip = git(where, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]) ?? git(where, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
-		if (now - at > MAX_AGE_MS || (tip !== undefined && isAncestor(where, tip, anchor))) {
+		if (now - at > MAX_AGE_MS || (merged && tip !== undefined && isAncestor(where, tip, anchor))) {
 			delete prs[branch];
 			changed = true;
 		}

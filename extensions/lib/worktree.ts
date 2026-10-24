@@ -5,10 +5,10 @@
 import { execFileSync } from "node:child_process";
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { isIgnored } from "./commands.ts";
+import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs, safeRealpath, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -22,8 +22,15 @@ export interface Tree {
 	files: Record<string, string>;
 	/** In a workspace: each repository folder's `HEAD`, or `""` before its first commit. */
 	heads?: Record<string, string>;
-	/** In a workspace: the parts not fingerprinted, a repository folder or `""` for the files outside them, sorted. */
+	/**
+	 * In a workspace: the parts not fingerprinted in this call, sorted: a repository folder, `""` for the files outside
+	 * the repositories, or a folder symlink the walk met. A part fingerprinted before keeps its last entries and HEAD.
+	 */
 	blind?: string[];
+	/** In a workspace: the blind parts never fingerprinted, so with no entries to compare (a subset of `blind`). */
+	unseen?: string[];
+	/** In a workspace: the parts that ran out of their share of the time in this call (a subset of `blind`). */
+	late?: string[];
 }
 
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -44,24 +51,28 @@ function git(projectDir: string, args: string[], timeout = GIT_TIMEOUT_MS): stri
  * Files a workspace's own walk never counts, whatever `ignore` says: what the OS, an editor, a dependency install or a
  * local tool writes on its own. Inside a repository, git's ignore rules do this.
  */
-const WALK_EXCLUDES = ["**/.DS_Store", "**/Thumbs.db", ".claude/settings.local.json", ".pi/git/**", ".pi/npm/**", "**/.idea/**", "**/.vscode/**", "**/node_modules/**"];
+const WALK_EXCLUDES = ["**/.DS_Store", "**/Thumbs.db", ".claude/settings.local.json", ".claude/*.lock", ".pi/git/**", ".pi/npm/**", "**/.idea/**", "**/.vscode/**", "**/node_modules/**"];
 
 /**
  * The files `git status` lists under `projectDir` (changed, new or deleted), by content identity only, so staging or
  * committing them is not a change; gitignored files and paths matching `ignore` are left out. `undefined` outside git,
  * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
  * `why.slow` says the repository is too big or slow to fingerprint (a timeout or the cap), as opposed to not being a
- * repository (yet). A folder outside git that holds repositories (a workspace, see `projectRepos`) gets each
- * repository's entries under its folder and every file outside them. A part over the limit, failing, out of its share
- * of the deadline, named in `limits.skip`, or a symlink the walk meets is listed in `blind` instead; one that timed out
- * or went over the limit is also added to `why.slowParts`, for the caller to skip for the rest of the session.
+ * repository (yet).
+ *
+ * A folder outside git that holds repositories (a workspace, see `projectRepos`) gets each repository's entries under
+ * its folder, matched against its own ignore globs by the path inside it and against `ignore` by the workspace path,
+ * and every file outside them, against `ignore`. Each part has an equal share of the time left before
+ * `limits.deadline`. A part over the limit, failing, out of its share, named in `limits.skip`, or a folder symlink the
+ * walk meets is listed in `blind` and keeps its entries and HEAD from `limits.previous`. One over the limit, or out of
+ * its share in this call and in `previous` too, is added to `why.slowParts`, for the caller to skip for the session.
  */
-export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean; slowParts?: string[] } = {}, limits: { deadline?: number; maxEntries?: number; skip?: string[] } = {}): Tree | undefined {
+export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean; slowParts?: string[] } = {}, limits: { deadline?: number; maxEntries?: number; skip?: string[]; previous?: Tree } = {}): Tree | undefined {
 	const maxEntries = limits.maxEntries ?? MAX_ENTRIES;
 	try {
-		const tree = repoTree(projectDir, "", ignore, maxEntries, Number.POSITIVE_INFINITY);
-		if (tree === "slow") why.slow = true;
-		return tree === "slow" ? undefined : tree;
+		const tree = repoTree(projectDir, "", ignore, ignore, maxEntries, Number.POSITIVE_INFINITY);
+		if (tree === "cap") why.slow = true;
+		return tree === "cap" ? undefined : tree;
 	} catch (err) {
 		if (timedOut(err)) {
 			why.slow = true;
@@ -72,38 +83,62 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 	if (kind !== "workspace") return undefined;
 	const deadline = limits.deadline ?? Date.now() + WORKSPACE_BUDGET_MS;
 	const skip = new Set(limits.skip ?? []);
-	const slow = (part: string) => (why.slowParts = [...(why.slowParts ?? []), part]);
+	const previous = limits.previous?.heads !== undefined ? limits.previous : undefined;
 	const files: Record<string, string> = {};
 	const heads: Record<string, string> = {};
 	const blind: string[] = [...skip].filter((part) => part === "" || repos.includes(part));
+	const late: string[] = [];
+	const remember = (part: string) => (why.slowParts = [...(why.slowParts ?? []), part]);
+	const missed = (part: string, outcome: "cap" | "late" | "fail") => {
+		blind.push(part);
+		if (outcome === "late") late.push(part);
+		if (outcome === "cap" || (outcome === "late" && previous?.late?.includes(part))) remember(part);
+	};
 	// Each part gets an equal share of the time left, so one slow repository can't starve the others.
 	const parts = [...repos.filter((r) => !skip.has(r)), ...(skip.has("") ? [] : [""])];
 	parts.forEach((part, i) => {
 		const share = Date.now() + (deadline - Date.now()) / (parts.length - i);
 		if (part === "") {
 			const outside = walkOutside(projectDir, repos, [...ignore, ...WALK_EXCLUDES], maxEntries, share);
-			if (outside === "slow") slow("");
-			if (typeof outside === "string") blind.push("");
-			else {
-				Object.assign(files, outside.files);
-				blind.push(...outside.links);
-			}
+			if (typeof outside === "string") return missed("", outside);
+			Object.assign(files, outside.files);
+			blind.push(...outside.links);
 			return;
 		}
-		let tree: Tree | "slow" | undefined;
+		let tree: Tree | "cap" | "late" | "fail";
 		try {
-			tree = share > Date.now() ? repoTree(join(projectDir, part), `${part}/`, ignore, maxEntries, share) : undefined;
+			tree = share > Date.now() ? repoTree(join(projectDir, part), `${part}/`, ignore, resolveIgnore(join(projectDir, part)), maxEntries, share) : "late";
 		} catch (err) {
-			if (timedOut(err)) tree = "slow";
+			tree = timedOut(err) ? "late" : "fail";
 		}
-		if (tree === "slow") slow(part);
-		if (tree === undefined || tree === "slow") blind.push(part);
-		else {
-			Object.assign(files, tree.files);
-			heads[part] = tree.head;
-		}
+		if (typeof tree === "string") return missed(part, tree);
+		Object.assign(files, tree.files);
+		heads[part] = tree.head;
 	});
-	return { head: "", files, heads, blind: blind.sort() };
+	// A blind part keeps what it had: the next comparison then measures from a real baseline, with neither noise nor loss.
+	const unseen: string[] = [];
+	const parts2 = [...repos, ...outsideParts(repos, blind)];
+	for (const part of blind) {
+		if (part !== "" && !repos.includes(part)) continue;
+		const had = previous !== undefined && !(previous.unseen ?? []).includes(part) && (part === "" || previous.heads![part] !== undefined);
+		if (!had) {
+			unseen.push(part);
+			continue;
+		}
+		for (const [path, id] of Object.entries(previous!.files)) if (partOf(path, parts2) === part) files[path] = id;
+		if (part !== "") heads[part] = previous!.heads![part]!;
+	}
+	return { head: "", files, heads, blind: blind.sort(), unseen: unseen.sort(), late: late.sort() };
+}
+
+/** The non-repository parts named in `blind` (folder symlinks); `""` is always one. */
+function outsideParts(repos: string[], blind: string[]): string[] {
+	return blind.filter((p) => p !== "" && !repos.includes(p));
+}
+
+/** The part a workspace path belongs to: the longest part folder it is in, or `""` for none. */
+function partOf(path: string, parts: string[]): string {
+	return parts.filter((r) => r !== "" && (path === r || path.startsWith(`${r}/`))).sort((x, y) => y.length - x.length)[0] ?? "";
 }
 
 function timedOut(err: unknown): boolean {
@@ -118,18 +153,19 @@ function timeLeft(deadline: number): number {
 }
 
 /**
- * One repository's listed files, each path prefixed with `label` (its folder in a workspace), matched against `ignore`
- * by that path and, in a workspace, by its path inside the repository too; throws outside git.
+ * One repository's listed files, each path prefixed with `label` (its folder in a workspace), left out when `ignore`
+ * matches that path or `own` matches the path inside the repository; throws outside git. In a workspace a HEAD read
+ * that runs out of time throws too, so the repository is blind rather than taken for one without commits.
  */
-function repoTree(dir: string, label: string, ignore: string[], maxEntries: number, deadline: number): Tree | "slow" {
+function repoTree(dir: string, label: string, ignore: string[], own: string[], maxEntries: number, deadline: number): Tree | "cap" {
 	const prefix = git(dir, ["rev-parse", "--show-prefix"], timeLeft(deadline)).trim();
 	const records = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], timeLeft(deadline)).split("\0");
-	if (records.length > maxEntries + 1) return "slow";
+	if (records.length > maxEntries + 1) return "cap";
 	const files: Record<string, string> = {};
 	const add = (repoPath: string) => {
 		if (!repoPath.startsWith(prefix)) return;
 		const path = repoPath.slice(prefix.length);
-		if (!isIgnored(label + path, ignore) && !(label !== "" && isIgnored(path, ignore))) files[label + path] = identity(join(dir, path));
+		if (!isIgnored(label + path, ignore) && !isIgnored(path, own)) files[label + path] = identity(join(dir, path));
 	};
 	for (let i = 0; i < records.length; i++) {
 		const record = records[i]!;
@@ -141,18 +177,19 @@ function repoTree(dir: string, label: string, ignore: string[], maxEntries: numb
 	let head = "";
 	try {
 		head = git(dir, ["rev-parse", "--verify", "-q", "HEAD"], timeLeft(deadline)).trim();
-	} catch {
+	} catch (err) {
+		if (label !== "" && timedOut(err)) throw err;
 		// no commit yet
 	}
 	return { head, files };
 }
 
 /**
- * Every file of a workspace outside its repositories, by content identity, without `.git` or ignored paths; the
- * symlinks it meets are not followed but returned in `links`. `"slow"` over `maxEntries` files, `"late"` past the
- * deadline.
+ * Every file of a workspace outside its repositories, by content identity, without `.git` or ignored paths; a file
+ * symlink counts by what it points to, and a folder symlink is not followed but returned in `links`. `"cap"` over
+ * `maxEntries` files, `"late"` past the deadline.
  */
-function walkOutside(projectDir: string, repos: string[], ignore: string[], maxEntries: number, deadline: number): { files: Record<string, string>; links: string[] } | "slow" | "late" {
+function walkOutside(projectDir: string, repos: string[], ignore: string[], maxEntries: number, deadline: number): { files: Record<string, string>; links: string[] } | "cap" | "late" {
 	const files: Record<string, string> = {};
 	const links: string[] = [];
 	let count = 0;
@@ -169,17 +206,26 @@ function walkOutside(projectDir: string, repos: string[], ignore: string[], maxE
 		for (const entry of entries) {
 			const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
 			if (entry.name === ".git" || (rel === "" && repos.includes(entry.name))) continue;
-			if (entry.isSymbolicLink()) {
-				if (!isIgnored(path, ignore) && !ignoredFolder(path, ignore)) links.push(path);
-			} else if (entry.isDirectory()) {
-				if (!ignoredFolder(path, ignore)) pending.push(path);
-			} else if (entry.isFile() && !isIgnored(path, ignore)) {
-				if (++count > maxEntries) return "slow";
+			const folder = entry.isDirectory() || (entry.isSymbolicLink() && isFolder(join(projectDir, path)));
+			if (folder) {
+				if (ignoredFolder(path, ignore)) continue;
+				if (entry.isSymbolicLink()) links.push(path);
+				else pending.push(path);
+			} else if ((entry.isFile() || entry.isSymbolicLink()) && !isIgnored(path, ignore)) {
+				if (++count > maxEntries) return "cap";
 				files[path] = identity(join(projectDir, path));
 			}
 		}
 	}
 	return { files, links };
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -217,35 +263,62 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
 
 /**
  * What a call changed: the fingerprints compared, plus the files its text writes inside a part either fingerprint is
- * blind to (a workspace repository, a symlink, or `""` for the files outside them). A part blind before has no
- * baseline, so its listed files don't count; its text targets do. With a blind part, a command that moves the shell or
- * may bind names (`cd`, a subshell, `source`) has every text target count, since its targets can't be placed. Without
+ * blind to (a workspace repository, a folder symlink, or `""` for the files outside them). A part never fingerprinted
+ * before has no baseline, so its listed files don't count; its text targets do. With a blind part, a command that moves
+ * the shell has its targets placed from every folder it may reach; one whose moves can't be followed (a variable, a
+ * PowerShell move) or that may bind names it doesn't show (`source`, `eval`) has every text target count. Without
  * both fingerprints, only its text.
  */
 export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
-	const written = () => (after ? shellWriteTargets(after.command, after.cwd, projectDir, process.env, after.powershell) : []);
+	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);
 	if (!before || !now) return written();
 	const blind = new Set([...(before.blind ?? []), ...(now.blind ?? [])]);
 	if (blind.size === 0) return changedPaths(before, now, projectDir);
-	const repos = [...new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind])].filter((r) => r !== "");
-	const partOf = (path: string) => repos.filter((r) => path === r || path.startsWith(`${r}/`)).sort((x, y) => y.length - x.length)[0] ?? "";
-	const blindBefore = new Set(before.blind ?? []);
-	const paths = changedPaths(before, now, projectDir).filter((p) => !blindBefore.has(partOf(p)));
-	const moves = after !== undefined && hidesPlace(after.command);
-	const unseen = written().filter((p) => moves || blind.has(partOf(p)));
-	return [...new Set([...paths, ...unseen])].sort();
+	const parts = [...new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind])].filter((r) => r !== "");
+	const unseenBefore = new Set(before.unseen ?? []);
+	const paths = changedPaths(before, now, projectDir).filter((p) => !unseenBefore.has(partOf(p, parts)));
+	let targets: string[] = [];
+	if (after !== undefined) {
+		const where = hidesPlace(after.command, after.powershell) ? placesOf(after.command, after.cwd, after.powershell) : [after.cwd];
+		targets =
+			where === undefined
+				? written()
+				: [...new Set(where.flatMap((cwd) => written(cwd)))].filter((p) => blind.has(partOf(p, parts)));
+	}
+	return [...new Set([...paths, ...targets])].sort();
+}
+
+/** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
+function placesOf(command: string, cwd: string, powershell = false): string[] | undefined {
+	if (powershell) return undefined;
+	const segments = splitSegments(tokenize(heredocs(command).text));
+	if (segments.some((seg) => seg.some((t, i) => !MOVES.has(t.replace(/^[({!]+/, "")) && hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))))) return undefined;
+	const { dirs, unknown } = reachable(command, cwd);
+	return unknown ? undefined : dirs;
 }
 
 /**
  * Whether `ignore` excludes a project-relative path: by that path, or, for a file inside a workspace repository, by its
- * path inside the repository, as a session in that repository would match it.
+ * path inside the repository against that repository's own ignore globs, as a session in that repository matches it.
  */
 export function ignoredPath(projectDir: string, rel: string, ignore: string[]): boolean {
-	if (isIgnored(rel, ignore)) return true;
-	const slash = rel.indexOf("/");
-	if (slash < 0 || !existsSync(join(projectDir, rel.slice(0, slash), ".git"))) return false;
-	const { kind, repos } = projectRepos(projectDir, ignore);
-	return kind === "workspace" && repos.includes(rel.slice(0, slash)) && isIgnored(rel.slice(slash + 1), ignore);
+	return ignoreFilter(projectDir, ignore)(rel);
+}
+
+/** `ignoredPath` for many paths: the workspace's repositories and their globs are read once. */
+export function ignoreFilter(projectDir: string, ignore: string[]): (rel: string) => boolean {
+	let repos: string[] | undefined;
+	const own = new Map<string, string[]>();
+	return (rel) => {
+		if (isIgnored(rel, ignore)) return true;
+		const slash = rel.indexOf("/");
+		if (slash < 0 || !existsSync(join(projectDir, rel.slice(0, slash), ".git"))) return false;
+		const repo = rel.slice(0, slash);
+		repos ??= ((r) => (r.kind === "workspace" ? r.repos : []))(projectRepos(projectDir, ignore));
+		if (!repos.includes(repo)) return false;
+		if (!own.has(repo)) own.set(repo, resolveIgnore(join(projectDir, repo)));
+		return isIgnored(rel.slice(slash + 1), own.get(repo)!);
+	};
 }
 
 function identity(file: string): string {
@@ -292,8 +365,9 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	return [...new Set(inside)];
 }
 
-/** Whether a command's text moves the shell or may bind names it doesn't show (see `hidesBinding`). */
-function hidesPlace(command: string): boolean {
+/** Whether a command's text moves the shell or may bind names it doesn't show (see `hidesBinding`); in PowerShell, any move word. */
+function hidesPlace(command: string, powershell = false): boolean {
+	if (powershell && /(^|[\s;|&({])(cd|chdir|sl|set-location|push-location|pushd|pop-location|popd)(?=$|[\s;|&)])/i.test(command)) return true;
 	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
 }
 
@@ -306,7 +380,7 @@ function movesOrBinds(segments: string[][]): boolean {
  * a sourced file, `eval`, or a declaration of anything but plain `NAME=v` words (`export $(…)`, `local X`).
  */
 function hidesBinding(word: string, rest: string[]): boolean {
-	if (["cd", "pushd", "popd", "source", ".", "eval"].includes(word)) return true;
+	if (MOVES.has(word) || ["source", ".", "eval"].includes(word)) return true;
 	return ["export", "declare", "typeset", "local", "readonly"].includes(word) && !rest.every((w) => /^[A-Za-z_]\w*=/.test(w));
 }
 

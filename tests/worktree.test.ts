@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { callChanges, changedPaths, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { slowGit } from "./slow-git.ts";
+import { callChanges, changedPaths, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -169,36 +170,54 @@ test("treeFingerprint: past the deadline every workspace part is blind", () => {
 	assert.deepEqual(tree.files, {});
 });
 
-/** Runs `fn` with a `git` on PATH that logs and sleeps 4 s in the folder `slowDir`, and is the real git elsewhere. */
-function withSlowGit<T>(slowDir: string, fn: (log: string) => T): T {
-	const bin = mkdtempSync(join(tmpdir(), "slow-git-"));
-	const log = join(bin, "calls.log");
-	writeFileSync(log, "");
-	const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-	writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$PWD" = "${slowDir}" ]; then echo call >> "${log}"; sleep 4; fi\nexec "${real}" "$@"\n`, { mode: 0o755 });
-	const path = process.env.PATH;
-	process.env.PATH = `${bin}:${path}`;
-	try {
-		return fn(log);
-	} finally {
-		process.env.PATH = path;
-	}
-}
-
-test("treeFingerprint: a slow workspace repository is blind alone, reported, and skipped once the caller remembers it", () => {
+test("treeFingerprint: a workspace repository late once is blind for that call; late twice running, it is remembered", () => {
 	const ws = workspace();
 	writeFileSync(join(ws, "b", "m.ts"), "export const m = 1;\n");
-	withSlowGit(realpathSync(join(ws, "a")), (log) => {
-		const why: { slowParts?: string[] } = {};
-		const tree = treeFingerprint(ws, [], why);
-		assert.ok(tree);
-		assert.deepEqual(tree.blind, ["a"], "only the slow repository");
-		assert.ok("b/m.ts" in tree.files && "notes/x.js" in tree.files, "the other parts are still fingerprinted");
-		assert.deepEqual(why.slowParts, ["a"]);
+	const { log, restore } = slowGit(realpathSync(join(ws, "a")));
+	try {
+		const why1: { slowParts?: string[] } = {};
+		const first = treeFingerprint(ws, [], why1);
+		assert.ok(first);
+		assert.deepEqual(first.blind, ["a"], "only the slow repository");
+		assert.ok("b/m.ts" in first.files && "notes/x.js" in first.files, "the other parts are still fingerprinted");
+		assert.deepEqual(why1.slowParts ?? [], [], "one late fingerprint is not remembered");
+		const why2: { slowParts?: string[] } = {};
+		assert.deepEqual(treeFingerprint(ws, [], why2, { previous: first })?.blind, ["a"]);
+		assert.deepEqual(why2.slowParts, ["a"], "late twice running");
 		const calls = readFileSync(log, "utf8");
 		assert.deepEqual(treeFingerprint(ws, [], {}, { skip: ["a"] })?.blind, ["a"]);
 		assert.equal(readFileSync(log, "utf8"), calls, "a remembered part runs no git");
-	});
+	} finally {
+		restore();
+	}
+});
+
+test("treeFingerprint: a workspace repository whose HEAD read runs out of time is blind, not a repository without commits", () => {
+	const ws = workspace();
+	const { restore } = slowGit(realpathSync(join(ws, "a")), "--verify");
+	try {
+		const tree = treeFingerprint(ws, []);
+		assert.ok(tree);
+		assert.deepEqual(tree.blind, ["a"]);
+		assert.equal(tree.heads?.a, undefined);
+	} finally {
+		restore();
+	}
+});
+
+test("treeFingerprint: a part that goes blind keeps its last fingerprint, so neither noise nor changes are lost", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	const seen = fingerprint(ws);
+	const blind = treeFingerprint(ws, [], {}, { deadline: Date.now() - 1, previous: seen });
+	assert.ok(blind);
+	assert.deepEqual(blind.blind, ["", "a", "b"]);
+	assert.equal(blind.files["a/f.ts"], seen.files["a/f.ts"], "carried");
+	assert.equal(blind.heads?.a, seen.heads?.a);
+	assert.deepEqual(callChanges(seen, blind, ws, { command: "ls", cwd: ws }), [], "nothing changed");
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 3;\n");
+	writeFileSync(join(ws, "notes", "x.js"), "3;\n");
+	assert.deepEqual(callChanges(blind, fingerprint(ws), ws, { command: "ls", cwd: ws }), ["a/f.ts", "notes/x.js"], "changed while blind, found once seen again");
 });
 
 test("treeFingerprint: a workspace repository whose git fails is blind but not remembered as slow", () => {
@@ -219,20 +238,29 @@ test("callChanges: a part blind before and fingerprinted now has no baseline, so
 	assert.deepEqual(callChanges(before, fingerprint(ws), ws, { command: "ls", cwd: ws }), []);
 });
 
-test("callChanges: with a blind part, a command that moves the shell has every text target count", () => {
+test("callChanges: with a blind part, a command that moves the shell has its targets placed from every folder it may reach", () => {
 	const ws = "/ws";
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
-	assert.deepEqual(callChanges(tree, tree, ws, { command: "(cd a && echo x > f.ts)", cwd: ws }), ["f.ts"]);
-	assert.deepEqual(callChanges(tree, tree, ws, { command: "pushd a && echo x > f.ts && popd", cwd: ws }), ["f.ts"]);
-	assert.deepEqual(callChanges(tree, tree, ws, { command: "echo x > f.ts", cwd: ws }), [], "no move: placed outside, which is fingerprinted");
+	const changes = (command: string, powershell = false) => callChanges(tree, tree, ws, { command, cwd: ws, powershell });
+	assert.deepEqual(changes("(cd a && echo x > f.ts)"), ["a/f.ts"]);
+	assert.deepEqual(changes("pushd a && echo x > f.ts && popd"), ["a/f.ts"]);
+	assert.deepEqual(changes("chdir a && echo x > f.ts"), ["f.ts"], "a move the guard's parser doesn't follow: every target counts");
+	assert.deepEqual(changes("cd b && true > $S/red.log"), [], "an unknown variable path from a fingerprinted repository");
+	assert.deepEqual(changes("cd a && true > $S/red.log"), ["a/$S/red.log"], "from the blind one it may land there");
+	assert.deepEqual(changes("cd b && echo x > f.ts"), [], "a fingerprinted repository");
+	assert.deepEqual(changes("cd $D && echo x > f.ts"), ["f.ts"], "a move the shell parser can't follow: every target counts");
+	assert.deepEqual(changes("source env.sh; echo x > f.ts"), ["f.ts"], "names it can't see: every target counts");
+	assert.deepEqual(changes("Set-Location a; 'x' > f.ts", true), ["f.ts"], "PowerShell moves aren't followed: every target counts");
+	assert.deepEqual(changes("echo x > f.ts"), [], "no move: placed outside, which is fingerprinted");
 });
 
-test("treeFingerprint: a symlink in a workspace is not walked; it is a blind part, so writes through it count", () => {
+test("treeFingerprint: a folder symlink in a workspace is not walked; it is a blind part, so writes through it count", () => {
 	const ws = workspace();
 	const target = mkdtempSync(join(tmpdir(), "linked-"));
 	writeFileSync(join(target, "y.ts"), "1;\n");
 	symlinkSync(target, join(ws, "svc"));
 	symlinkSync(target, join(ws, "notes", "deep"));
+	symlinkSync(join(target, "y.ts"), join(ws, "notes", "y.ts"));
 	const tree = fingerprint(ws);
 	assert.deepEqual(tree.blind, ["notes/deep", "svc"]);
 	assert.ok(!Object.keys(tree.files).some((p) => p.startsWith("svc/") || p.startsWith("notes/deep/")));
@@ -240,9 +268,20 @@ test("treeFingerprint: a symlink in a workspace is not walked; it is a blind par
 	assert.deepEqual(callChanges(tree, tree, ws, { command: "echo x > notes/deep/y.ts", cwd: ws }), ["notes/deep/y.ts"]);
 });
 
+test("treeFingerprint: a file symlink in a workspace counts by what it points to", () => {
+	const ws = workspace();
+	const target = join(mkdtempSync(join(tmpdir(), "linked-")), "y.ts");
+	writeFileSync(target, "1;\n");
+	symlinkSync(target, join(ws, "notes", "y.ts"));
+	const before = fingerprint(ws);
+	assert.deepEqual(before.blind, []);
+	writeFileSync(target, "22;\n");
+	assert.deepEqual(changedPaths(before, fingerprint(ws), ws), ["notes/y.ts"]);
+});
+
 test("treeFingerprint: the walk skips OS, editor, dependency and local tool files", () => {
 	const ws = workspace();
-	const files = [".DS_Store", "notes/.DS_Store", "Thumbs.db", ".claude/settings.local.json", ".pi/git/pkg/a.js", ".pi/npm/pkg/a.js", ".idea/workspace.xml", ".vscode/settings.json", "node_modules/x/i.js", "notes/node_modules/y.js"];
+	const files = [".DS_Store", "notes/.DS_Store", "Thumbs.db", ".claude/settings.local.json", ".claude/scheduled_tasks.lock", ".pi/git/pkg/a.js", ".pi/npm/pkg/a.js", ".idea/workspace.xml", ".vscode/settings.json", "node_modules/x/i.js", "notes/node_modules/y.js"];
 	for (const f of files) {
 		mkdirSync(join(ws, f, ".."), { recursive: true });
 		writeFileSync(join(ws, f), "1");
@@ -262,6 +301,23 @@ test("treeFingerprint: in a workspace, ignore globs match a repository's own pat
 	writeFileSync(join(ws, "a", "docs", "d.svg"), "<svg/>");
 	writeFileSync(join(ws, "guide.md", "index.js"), "2;\n");
 	assert.deepEqual(changedPaths(before, fingerprint(ws, ignore), ws, ignore), ["guide.md/index.js"]);
+});
+
+test("treeFingerprint: a repository's own files match its own ignore globs, not a workspace glob for the workspace's folders", () => {
+	const ws = workspace();
+	mkdirSync(join(ws, "a", ".pi"));
+	writeFileSync(join(ws, "a", ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], ignore: ["gen/**"] }));
+	mkdirSync(join(ws, "a", "gen"));
+	mkdirSync(join(ws, "a", "scripts"));
+	const ignore = ["scripts/**"];
+	const before = fingerprint(ws, ignore);
+	writeFileSync(join(ws, "a", "gen", "x.ts"), "1;\n");
+	writeFileSync(join(ws, "a", "scripts", "build.ts"), "1;\n");
+	assert.deepEqual(changedPaths(before, fingerprint(ws, ignore), ws, ignore), ["a/scripts/build.ts"]);
+	const filter = ignoreFilter(ws, ignore);
+	assert.equal(filter("a/gen/x.ts"), true);
+	assert.equal(filter("a/scripts/build.ts"), false);
+	assert.equal(filter("scripts/x.ts"), true);
 });
 
 test("changedPaths: a workspace commit diff that can't run in time marks the repository folder", () => {

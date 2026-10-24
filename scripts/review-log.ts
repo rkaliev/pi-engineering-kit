@@ -5,7 +5,6 @@
  *
  *   node <kit>/scripts/review-log.ts <rev>
  */
-import { spawnSync } from "node:child_process";
 import { commitRepos, highestFindingIds, readReports, reviewChain, roundNumber } from "../extensions/lib/reviews.ts";
 
 const rev = process.argv[2];
@@ -13,14 +12,18 @@ if (!rev) {
 	console.error("Usage: node scripts/review-log.ts <rev>");
 	process.exit(2);
 }
-const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { encoding: "utf8" });
-// From a folder of repositories (a workspace), the first repository that has the commit.
-const found = r.status === 0 ? { dir: process.cwd(), sha: r.stdout.trim() } : commitRepos(process.cwd(), rev)[0];
-if (!found) {
+// The repository of the current folder, or in a folder of repositories (a workspace) each one that has the commit; a
+// short SHA must abbreviate the commit it names, never a branch or tag of that name.
+const found = commitRepos(process.cwd(), rev);
+if (found.length === 0) {
 	console.error(`${rev} is not a commit in this repository or any repository here`);
 	process.exit(1);
 }
-const { dir, sha } = found;
+if (new Set(found.map((f) => f.sha)).size > 1) {
+	console.error(`${rev} names different commits in different repositories; give the full SHA`);
+	process.exit(1);
+}
+const { dir, sha } = found[0]!;
 // Records are keyed by the repository, so any folder or worktree of it finds them.
 const root = process.env.ENG_KIT_REVIEWS_ROOT || undefined;
 const reports = readReports(dir, sha, root);
