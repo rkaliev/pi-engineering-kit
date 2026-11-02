@@ -45,7 +45,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let pending = new Map<string, Tree>();
 	/** git timed out or listed too many files once: the command text decides for the rest of the session. */
 	let gitOff = false;
-	/** Workspace parts whose git timed out or went over the limit: not fingerprinted again this session. */
+	/** Workspace parts over the entry limit or out of their share twice running: not fingerprinted again this session. */
 	let slowParts = new Set<string>();
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];

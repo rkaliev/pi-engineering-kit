@@ -98,7 +98,7 @@ export function reviewedHead(text: string): string | undefined {
  * Record one reviewer run's report. `run` identifies the run (agent id, tool call id), so parallel reviewers
  * never overwrite each other. Returns the record, or why none was written.
  */
-export function recordReview(projectDir: string, text: string, ids: { promptId: string; run: string }, root?: string): ReviewRecord | string {
+export function recordReview(projectDir: string, text: string, ids: { promptId: string; run: string }, root?: string): RecordResult | string {
 	const parsed = parseReview(text);
 	if (!parsed) return "the report needs one `Reviewed BASE: <sha>` line, one `Reviewed HEAD: <sha>` line and one `Ready to merge:` verdict";
 	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root, { base: parsed.base, report: text });
@@ -110,12 +110,14 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
 	// A SHA the reviewer wrote names one commit: different commits under one abbreviation get no verdict at all.
 	if (HEX.test(rev) && new Set(found.map((f) => f.sha)).size > 1) return `Reviewed HEAD ${rev} names different commits in different repositories; give the full SHA`;
-	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there;
-	// one store that can't be written doesn't keep the record from the others.
+	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there.
+	const bases = found.map(({ dir }) => (extra.base === undefined ? undefined : (resolveCommit(dir, extra.base) ?? undefined)));
+	if (extra.base !== undefined && bases.every((b) => b === undefined)) return `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
+	// One store that can't be written doesn't keep the record from the others.
 	let first: ReviewRecord | undefined;
 	let failure: string | undefined;
-	for (const { dir: repo, sha } of found) {
-		const base = extra.base === undefined ? undefined : (resolveCommit(repo, extra.base) ?? undefined);
+	for (const [i, { dir: repo, sha }] of found.entries()) {
+		const base = bases[i];
 		// A Yes counts only with its range; a verdict short of Yes holds a landing back without one (a shallow clone).
 		if (extra.base !== undefined && !base && verdict === "Yes") continue;
 		const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
@@ -139,6 +141,20 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 	const missed = verdict !== "Yes" && (failure !== undefined || !complete) ? (failure ?? "a repository could not be searched in time") : undefined;
 	if (first) return missed === undefined ? first : { ...first, missed };
 	return failure ?? `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
+}
+
+/**
+ * Hold a commit back where a verdict short of Yes may have missed it: Inconclusive for `rev` (callers pass their own
+ * run id, so the reviewer's record keeps its report), else for each repository's HEAD. Returns why that missed a
+ * repository too, if it did; then a parallel Yes there could still stand alone.
+ */
+export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string): string | undefined {
+	if (rev !== undefined) {
+		const held = recordVerdict(projectDir, rev, "Inconclusive", ids, root);
+		if (typeof held !== "string" && held.missed === undefined) return undefined;
+	}
+	const heads = recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root);
+	return typeof heads === "string" ? heads : heads.missed;
 }
 
 /** A reviewer's hex abbreviation (or full SHA), as opposed to a ref name such as `HEAD`. */
@@ -172,8 +188,9 @@ function lookup(projectDir: string, rev: string): { found: Array<{ dir: string; 
 	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
 	const deadline = Date.now() + LOOKUP_BUDGET_MS;
 	let complete = true;
-	const found = dirs.flatMap((dir) => {
-		const left = Math.floor(deadline - Date.now());
+	// Each repository gets an equal share of the time left, so one slow repository can't starve the others.
+	const found = dirs.flatMap((dir, i) => {
+		const left = Math.floor((deadline - Date.now()) / (dirs.length - i));
 		const sha = left > 0 ? resolveCommit(dir, rev, Math.min(GIT_TIMEOUT_MS, left)) : null;
 		if (sha === null) complete = false;
 		return sha ? [{ dir, sha }] : [];

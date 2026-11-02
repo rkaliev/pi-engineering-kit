@@ -259,6 +259,62 @@ test("callChanges: with a blind part, source, . and eval hide names only as the 
 	assert.deepEqual(changes("CDPATH=a; cd src && echo x > f.ts"), ["f.ts"], "CDPATH changes where a move lands");
 });
 
+test("callChanges: with only symlinks blind, a move the hook can't follow counts only targets under a symlink", () => {
+	const ws = workspace();
+	const outside = join(mkdtempSync(join(tmpdir(), "linked-")), "o.ts");
+	writeFileSync(outside, "1;\n");
+	symlinkSync(outside, join(ws, "notes", "o.ts"));
+	symlinkSync(mkdtempSync(join(tmpdir(), "linked-")), join(ws, "svc"));
+	const tree = fingerprint(ws);
+	assert.deepEqual(tree.blind, ["notes/o.ts", "svc"]);
+	const changes = (command: string) => callChanges(tree, tree, ws, { command, cwd: ws });
+	assert.deepEqual(changes("S=$(mktemp -d); cd a && echo x > $S/x"), [], "the task's own case, with a symlink in the workspace");
+	assert.deepEqual(changes("source .venv/bin/activate && pytest > $LOG"), []);
+	assert.deepEqual(changes("cd $D && echo x > svc/y.ts"), ["svc/y.ts"], "a target written under the symlink");
+});
+
+test("treeFingerprint: a part remembered for the session keeps its stored identities; only a part blind in this call is read again", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	const seen = fingerprint(ws);
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 3;\n");
+	const latched = treeFingerprint(ws, [], {}, { skip: ["a"], previous: seen });
+	assert.equal(latched?.files["a/f.ts"], seen.files["a/f.ts"], "not read: the part costs no I/O once remembered");
+});
+
+test("treeFingerprint: a symlink chain or a path through a symlinked folder that leaves the project is a blind part, never followed", () => {
+	const ws = workspace();
+	const outside = mkdtempSync(join(tmpdir(), "linked-"));
+	writeFileSync(join(outside, "x"), "1;\n");
+	symlinkSync(join(outside, "x"), join(ws, "notes", "l2"));
+	symlinkSync(join(ws, "notes", "l2"), join(ws, "notes", "l1"));
+	symlinkSync(outside, join(ws, "notes", "sub"));
+	symlinkSync(join(ws, "notes", "sub", "x"), join(ws, "notes", "c"));
+	assert.deepEqual(fingerprint(ws).blind, ["notes/c", "notes/l1", "notes/l2", "notes/sub"]);
+});
+
+test("callChanges: with a blind part, a CDPATH in the environment counts every target of a command that moves", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const saved = process.env.CDPATH;
+	process.env.CDPATH = "a";
+	try {
+		assert.deepEqual(callChanges(tree, tree, "/ws", { command: "cd src && echo x > f.ts", cwd: "/ws" }), ["f.ts"]);
+	} finally {
+		if (saved === undefined) delete process.env.CDPATH;
+		else process.env.CDPATH = saved;
+	}
+});
+
+test("callChanges: with a blind part, source, . or eval in a case arm, a function body or after a redirection still hides names", () => {
+	const ws = "/ws";
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string, powershell = false) => callChanges(tree, tree, ws, { command, cwd: ws, powershell });
+	assert.deepEqual(changes("case $E in p) source x;; esac; echo x > f.ts"), ["f.ts"]);
+	assert.deepEqual(changes("f() { . ./env.sh; }; f; echo x > f.ts"), ["f.ts"]);
+	assert.deepEqual(changes("2>/dev/null . ./env.sh; echo x > f.ts"), ["f.ts"]);
+	assert.deepEqual(changes("./setup.ps1; 'x' > f.ts", true), ["f.ts"], "a PowerShell script may move the caller's location");
+});
+
 test("callChanges: with a blind part, a command that moves the shell has its targets placed from every folder it may reach", () => {
 	const ws = "/ws";
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };

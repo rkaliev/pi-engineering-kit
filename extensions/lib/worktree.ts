@@ -3,12 +3,12 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { type Dirent, existsSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, commandIndex, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, commandIndex, heredocs, MOVES, plainShell, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -24,13 +24,16 @@ export interface Tree {
 	heads?: Record<string, string>;
 	/**
 	 * In a workspace: the parts not fingerprinted in this call, sorted: a repository folder, `""` for the files outside
-	 * the repositories, or a folder symlink the walk met. A part fingerprinted before keeps its last entries and HEAD.
+	 * the repositories, or a symlink the walk met that leads out of the project or to a folder. A part fingerprinted
+	 * before keeps the paths it listed and its HEAD (see `treeFingerprint`).
 	 */
 	blind?: string[];
 	/** In a workspace: the blind parts never fingerprinted, so with no entries to compare (a subset of `blind`). */
 	unseen?: string[];
 	/** In a workspace: the parts that ran out of their share of the time in this call (a subset of `blind`). */
 	late?: string[];
+	/** In a workspace: the blind parts that are symlinks the walk met (a subset of `blind`). */
+	links?: string[];
 }
 
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -63,9 +66,11 @@ const WALK_EXCLUDES = ["**/.DS_Store", "**/Thumbs.db", ".claude/settings.local.j
  * A folder outside git that holds repositories (a workspace, see `projectRepos`) gets each repository's entries under
  * its folder, matched against its own ignore globs by the path inside it and against `ignore` by the workspace path,
  * and every file outside them, against `ignore`. Each part has an equal share of the time left before
- * `limits.deadline`. A part over the limit, failing, out of its share, named in `limits.skip`, or a folder symlink the
- * walk meets is listed in `blind` and keeps its entries and HEAD from `limits.previous`. One over the limit, or out of
- * its share in this call and in `previous` too, is added to `why.slowParts`, for the caller to skip for the session.
+ * `limits.deadline`. A part over the limit, failing, out of its share, named in `limits.skip`, or a symlink the walk
+ * meets that leads out of the project or to a folder is listed in `blind`. A part fingerprinted in `limits.previous`
+ * keeps the paths it listed there and its HEAD: their identity is read again, except for a part in `limits.skip`,
+ * which keeps the stored one. One over the limit, or out of its share in this call and in `previous` too, is added to
+ * `why.slowParts`, for the caller to skip for the session.
  */
 export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean; slowParts?: string[] } = {}, limits: { deadline?: number; maxEntries?: number; skip?: string[]; previous?: Tree } = {}): Tree | undefined {
 	const maxEntries = limits.maxEntries ?? MAX_ENTRIES;
@@ -88,6 +93,7 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 	const heads: Record<string, string> = {};
 	const blind: string[] = [...skip].filter((part) => part === "" || repos.includes(part));
 	const late: string[] = [];
+	const links: string[] = [];
 	const remember = (part: string) => (why.slowParts = [...(why.slowParts ?? []), part]);
 	const missed = (part: string, outcome: "cap" | "late" | "fail") => {
 		blind.push(part);
@@ -103,6 +109,7 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 			if (typeof outside === "string") return missed("", outside);
 			Object.assign(files, outside.files);
 			blind.push(...outside.links);
+			links.push(...outside.links);
 			return;
 		}
 		let tree: Tree | "cap" | "late" | "fail";
@@ -125,11 +132,14 @@ export function treeFingerprint(projectDir: string, ignore: string[], why: { slo
 			unseen.push(part);
 			continue;
 		}
-		// The paths are carried, their identity read now: a change to a listed file still counts in this call.
-		for (const path of Object.keys(previous!.files)) if (partOf(path, parts2) === part) files[path] = identity(join(projectDir, path));
+		// The paths are carried. A part blind in this call has their identity read now, so a change to a listed file
+		// still counts; a part remembered for the session keeps the stored one and costs no I/O.
+		for (const [path, id] of Object.entries(previous!.files)) {
+			if (partOf(path, parts2) === part) files[path] = skip.has(part) ? id : identity(join(projectDir, path));
+		}
 		if (part !== "") heads[part] = previous!.heads![part]!;
 	}
-	return { head: "", files, heads, blind: blind.sort(), unseen: unseen.sort(), late: late.sort() };
+	return { head: "", files, heads, blind: blind.sort(), unseen: unseen.sort(), late: late.sort(), links: links.sort() };
 }
 
 /** The non-repository parts named in `blind` (folder symlinks); `""` is always one. */
@@ -186,9 +196,9 @@ function repoTree(dir: string, label: string, ignore: string[], own: string[], m
 }
 
 /**
- * Every file of a workspace outside its repositories, by content identity, without `.git` or ignored paths; a file
- * symlink counts by what it points to, and a folder symlink is not followed but returned in `links`. `"cap"` over
- * `maxEntries` files, `"late"` past the deadline.
+ * Every file of a workspace outside its repositories, by content identity, without `.git` or ignored paths. A symlink
+ * to a file inside the project counts by that file; one to a folder, or one that leads out of the project, is not
+ * followed but returned in `links`. `"cap"` over `maxEntries` files, `"late"` past the deadline.
  */
 function walkOutside(projectDir: string, repos: string[], ignore: string[], maxEntries: number, deadline: number): { files: Record<string, string>; links: string[] } | "cap" | "late" {
 	const files: Record<string, string> = {};
@@ -207,9 +217,10 @@ function walkOutside(projectDir: string, repos: string[], ignore: string[], maxE
 		for (const entry of entries) {
 			const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
 			if (entry.name === ".git" || (rel === "" && repos.includes(entry.name))) continue;
-			// A symlink is followed only into the project: its target elsewhere may be a mount that hangs on stat.
-			const link = entry.isSymbolicLink() ? linkTarget(join(projectDir, path)) : undefined;
-			if (link !== undefined && !within(resolve(projectDir), link)) {
+			// A symlink is followed only while every hop stays in the project: a target elsewhere may be a mount that
+			// hangs on stat.
+			const link = entry.isSymbolicLink() ? targetInside(projectDir, join(projectDir, path)) : undefined;
+			if (link === null) {
 				if (!isIgnored(path, ignore) && !ignoredFolder(path, ignore)) links.push(path);
 				continue;
 			}
@@ -227,13 +238,39 @@ function walkOutside(projectDir: string, repos: string[], ignore: string[], maxE
 	return { files, links };
 }
 
-/** Where a symlink points, resolved against its folder. */
-function linkTarget(path: string): string {
-	try {
-		return resolve(dirname(path), readlinkSync(path));
-	} catch {
-		return path;
+/**
+ * Where a symlink leads when every hop, and every symlinked folder on the way, stays inside the project; `null` when
+ * one leaves it, can't be read or the chain is too long. Only `lstat` and `readlink` run, never a stat of the target.
+ */
+function targetInside(projectDir: string, link: string): string | null {
+	const root = resolve(projectDir);
+	let path = link;
+	for (let hops = 0; hops < 16; hops++) {
+		// The first component on the way that is a symlink, if any.
+		const rel = relative(root, path);
+		if (rel.startsWith("..") || isAbsolute(rel)) return null;
+		const parts = rel.split(/[\\/]/);
+		let next: string | undefined;
+		for (let i = 1; i <= parts.length; i++) {
+			const at = join(root, ...parts.slice(0, i));
+			let isLink: boolean;
+			try {
+				isLink = lstatSync(at).isSymbolicLink();
+			} catch {
+				return path; // a dangling path: nothing further to follow
+			}
+			if (!isLink) continue;
+			try {
+				next = join(resolve(dirname(at), readlinkSync(at)), ...parts.slice(i));
+			} catch {
+				return null;
+			}
+			break;
+		}
+		if (next === undefined) return path;
+		path = next;
 	}
+	return null;
 }
 
 function isFolder(path: string): boolean {
@@ -279,12 +316,13 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
 
 /**
  * What a call changed: the fingerprints compared, plus the files its text writes inside a part either fingerprint is
- * blind to (a workspace repository, a folder symlink, or `""` for the files outside them). A part never fingerprinted
- * before has no baseline, so its listed files don't count; its text targets do. With a blind part, a command that moves
- * the shell has its targets placed from every folder it may reach; one whose moves can't be followed (a variable,
- * `chdir`, `CDPATH`, a PowerShell move) or that may bind names it doesn't show (`source`, `.` or `eval` as the command)
- * has every text target count. Without
- * both fingerprints, only its text.
+ * blind to (a workspace repository, a symlink the walk met, or `""` for the files outside them). A part never
+ * fingerprinted before has no baseline, so its listed files don't count; its text targets do. With a blind part, a
+ * command that moves the shell has its targets placed from every folder it may reach. One whose moves can't be
+ * followed (a variable, `chdir`, `CDPATH`, any PowerShell command) or that may bind names it doesn't show (`source`,
+ * `.` or `eval` as a plain command's command word, or anywhere in a function body, `case` arm or group) has every text
+ * target count while a repository or the outside files are blind, and those under a symlink while only symlinks are.
+ * Without both fingerprints, only its text.
  */
 export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
 	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);
@@ -297,9 +335,13 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 	let targets: string[] = [];
 	if (after !== undefined) {
 		const where = hidesPlace(after.command, after.powershell) ? placesOf(after.command, after.cwd, after.powershell) : [after.cwd];
+		// Targets that can't be placed all count while a repository or the outside files are blind; with only symlinks
+		// blind, those written under a symlink do.
+		const links = new Set([...(before.links ?? []), ...(now.links ?? [])]);
+		const wide = [...blind].some((part) => !links.has(part));
 		targets =
 			where === undefined
-				? written()
+				? written().filter((p) => wide || blind.has(partOf(p, parts)))
 				: [...new Set(where.flatMap((cwd) => written(cwd)))].filter((p) => blind.has(partOf(p, parts)));
 	}
 	return [...new Set([...paths, ...targets])].sort();
@@ -308,8 +350,10 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 /** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
 function placesOf(command: string, cwd: string, powershell = false): string[] | undefined {
 	if (powershell || /\bcdpath\b/i.test(command) || process.env.CDPATH) return undefined;
-	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration, as the command word only.
-	for (const seg of splitSegments(tokenize(heredocs(command).text))) {
+	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration. In a plain command only as the
+	// command word (`npx eslint .` binds nothing); a function body, a `case` arm or a group may run one anywhere.
+	if (!plainShell(command) && movesOrBinds(splitSegments(tokenize(heredocs(command).text)), false)) return undefined;
+	for (const seg of splitSegments(tokenize(stripRedirects(heredocs(command).text)))) {
 		const words = seg.map((t) => t.replace(/^[({!]+/, "")).filter(Boolean);
 		const at = commandIndex(words);
 		if (at !== -1 && !MOVES.has(words[at]!) && hidesBinding(words[at]!, words.slice(at + 1))) return undefined;
@@ -389,12 +433,18 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 
 /** Whether a command's text moves the shell or may bind names it doesn't show (see `hidesBinding`); in PowerShell, any move word. */
 function hidesPlace(command: string, powershell = false): boolean {
-	if (powershell && /(^|[^\w-])(cd|chdir|sl|set-location|push-location|pushd|pop-location|popd)(?![\w-])/i.test(command)) return true;
+	// PowerShell isn't parsed here, and a script it runs may move the caller's location: never place its targets.
+	if (powershell) return true;
 	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
 }
 
-function movesOrBinds(segments: string[][]): boolean {
-	return segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
+function movesOrBinds(segments: string[][], moves = true): boolean {
+	return segments.some((seg) =>
+		seg.some((t, i) => {
+			const word = t.replace(/^[({!]+/, "");
+			return (moves || !MOVES.has(word)) && hidesBinding(word, seg.slice(i + 1));
+		}),
+	);
 }
 
 /**

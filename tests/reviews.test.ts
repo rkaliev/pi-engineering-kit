@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
@@ -539,13 +539,52 @@ test("in a workspace, a lookup that runs out of time in a repository makes a ver
 	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
-	const { restore } = slowGit(realpathSync(join(ws, "b")), "rev-parse");
+	const { restore } = slowGit(realpathSync(join(ws, "b")), "rev-parse", 8);
 	try {
 		const result = recordVerdict(ws, a.head, "Inconclusive", { promptId: "p1", run: "r1" }, root);
 		assert.match(String((result as { missed?: string }).missed), /in time/);
 	} finally {
 		restore();
 	}
+});
+
+test("in a workspace, one slow repository doesn't keep a verdict from the repositories after it", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	repo(join(ws, "b"), root, "b\n");
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
+	const { restore } = slowGit(realpathSync(join(ws, "b")), "rev-parse", 8);
+	try {
+		recordVerdict(ws, a.head, "No", { promptId: "p1", run: "x" }, root);
+	} finally {
+		restore();
+	}
+	assert.equal(readReviews(join(ws, "c"), root)[0]?.verdict, "No", "c is searched in its own share of the time");
+});
+
+test("holdBack: after a verdict missed a repository, an Inconclusive holds the commit back there, so a parallel Yes can't stand alone", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
+	recordVerdict(ws, a.head, "Yes", { promptId: "p1", run: "y" }, root, { base: a.base });
+	const slow = slowGit(realpathSync(join(ws, "c")), "rev-parse", 8);
+	let missed: string | undefined;
+	try {
+		const result = recordVerdict(ws, a.head, "No", { promptId: "p1", run: "x" }, root);
+		missed = typeof result === "string" ? result : result.missed;
+	} finally {
+		slow.restore();
+	}
+	assert.match(String(missed), /in time/);
+	assert.equal(holdBack(ws, a.head, { promptId: "p1", run: "x-held" }, root), undefined, "the second try reaches it");
+	assert.equal(readReviews(join(ws, "c"), root)[0]?.verdict, "Inconclusive", "the prompt's worst verdict in c");
+});
+
+test("in one repository, a verdict short of Yes whose BASE is no commit is still an error, as in 0.33.0", () => {
+	const { dir, root, head } = repo();
+	assert.match(String(recordReview(dir, report(head, "No", "deadbee0"), { promptId: "p1", run: "r1" }, root)), /Reviewed BASE deadbee0 is not a commit/);
 });
 
 test("in a workspace, a verdict short of Yes reaches a repository where its BASE doesn't resolve, without a range", () => {

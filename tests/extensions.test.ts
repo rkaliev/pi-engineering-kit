@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
-import { readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
+import { readReports, readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
 import guard from "../extensions/guard.ts";
 import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
@@ -1125,6 +1125,38 @@ test("review gate: a reviewer verdict short of Yes that misses a workspace repos
 	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `F1 the finding\nReviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: No` }] }, isError: false }, c);
 	assert.ok(c.notes.some((n) => /missed a repository/.test(n)), c.notes.join("\n"));
 	assert.equal(readReviews(join(dir, "c"), reviewsRoot)[0]?.verdict, "No");
+});
+
+/** A workspace with repository `a`, its clone `c`, `a`'s record store made unwritable, and a guard over it. */
+function partialWorkspace() {
+	const { dir, git } = workspaceProject();
+	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	writeFileSync(reviewsDir(join(dir, "a"), reviewsRoot), "not a folder");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const head = String(git("a", "rev-parse", "HEAD")).trim();
+	const reviewer = (finalOutput: string, c = ctx(dir)) =>
+		g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput }] }, isError: false }, c);
+	return { dir, reviewsRoot, head, reviewer };
+}
+
+test("review gate: a reviewer verdict short of Yes that misses a workspace repository is followed by an Inconclusive that holds the commit back", async () => {
+	const { dir, reviewsRoot, head, reviewer } = partialWorkspace();
+	await reviewer(`Reviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: No`);
+	assert.deepEqual(readReports(join(dir, "c"), head, reviewsRoot).map((r) => [r.run, r.verdict]).sort(), [["c1-0", "No"], ["c1-0-held", "Inconclusive"]]);
+});
+
+test("review gate: a review of unverified edits that misses a workspace repository is noted", async () => {
+	const { head, reviewer, dir } = partialWorkspace();
+	const c = ctx(dir);
+	verifyState.unverified = true;
+	try {
+		await reviewer(`Reviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: Yes`, c);
+	} finally {
+		verifyState.unverified = false;
+	}
+	assert.ok(c.notes.some((n) => /missed a repository/.test(n)), c.notes.join("\n"));
 });
 
 test("review gate: a review of unverified edits that names no commit here falls back to each repository's HEAD", async () => {
