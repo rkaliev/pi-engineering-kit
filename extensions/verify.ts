@@ -15,8 +15,8 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
-import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
-import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
+import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/approvals.ts";
+import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { callChanges, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
@@ -25,6 +25,8 @@ const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
 const MAX_LISTED = 5;
 const MAX_PENDING = 8;
+/** The task-file reminders stop visiting workspace repositories after this long. */
+const TASK_FILE_BUDGET_MS = 3000;
 
 interface CheckResult {
 	command: string;
@@ -49,6 +51,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let gitOff = false;
 	/** Workspace parts over the entry limit or out of their share twice running: not fingerprinted again this session. */
 	let slowParts = new Set<string>();
+	let skippedNoted: string | undefined;
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
@@ -232,21 +235,20 @@ export default function verifyExtension(pi: ExtensionAPI) {
 				if (ctx.hasUI) ctx.ui.notify('Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
 			}
 		}
-		const dirs = workDocDirs(ctx);
-		if (!approvalRemindedThisPrompt) {
-			const files = uncommittedApproved(ctx.cwd, dirs);
-			if (files.length > 0) {
-				approvalRemindedThisPrompt = true;
-				parts.push(approvalReminder(files, onBaseBranch(ctx.cwd)));
-			}
+		const want = { approved: !approvalRemindedThisPrompt, finished: !workDocsRemindedThisPrompt };
+		const due = taskFileReminders(ctx.cwd, (root) => workDocDirs(ctx, root), Date.now() + TASK_FILE_BUDGET_MS, want, [...slowParts]);
+		if (due.approved.length > 0) {
+			approvalRemindedThisPrompt = true;
+			parts.push(approvalReminder(due.approved, due.onBase));
 		}
-		if (!workDocsRemindedThisPrompt) {
-			const files = finishedWorkDocs(ctx.cwd, dirs);
-			if (files.length > 0) {
-				workDocsRemindedThisPrompt = true;
-				parts.push(workDocsReminder(files));
-			}
+		if (due.finished.length > 0) {
+			workDocsRemindedThisPrompt = true;
+			parts.push(workDocsReminder(due.finished));
 		}
+		// Named once per set of skipped repositories, not after every run.
+		const skipped = taskFileWarning(due.skipped);
+		if (skipped && skipped !== skippedNoted && ctx.hasUI) ctx.ui.notify(skipped, "warning");
+		skippedNoted = skipped;
 		if (parts.length === 0) return;
 		pi.sendMessage({ customType: "verify-gate", display: true, content: parts.join("\n\n") }, { triggerTurn: true, deliverAs: "followUp" });
 	});
@@ -291,8 +293,9 @@ function countsAsEdit(path: string, cwd: string): boolean {
 }
 
 /** Task-file folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
-function workDocDirs(ctx: ExtensionContext): string[] {
-	const raw = readProjectJson<{ workDocs: unknown }>(ctx.cwd, "guard").workDocs;
-	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return WORK_DOC_DIRS;
+/** A root's task-file folders; a workspace repository without its own falls back to the session folder's. */
+function workDocDirs(ctx: ExtensionContext, root = ctx.cwd): string[] {
+	const raw = readProjectJson<{ workDocs: unknown }>(root, "guard").workDocs;
+	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return root === ctx.cwd ? WORK_DOC_DIRS : workDocDirs(ctx);
 	return raw.filter((v): v is string => typeof v === "string");
 }

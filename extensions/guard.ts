@@ -11,11 +11,13 @@
  * human rather than blocking.
  */
 import { randomUUID } from "node:crypto";
+import { basename, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readProjectJson } from "./lib/config.ts";
-import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
+import { checkCommand, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr, holdBack } from "./lib/reviews.ts";
+import { guardScope, repoIn, scopedConfig, scopedPath } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
@@ -63,24 +65,29 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 
 	/** The guard's decision for one tool call, or undefined for tools it doesn't check. */
 	function check(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): { decision: GuardDecision; subject: string } | undefined {
-		const config = loadConfig(ctx);
+		// The session folder's config and, in a workspace, each repository's own (lib/scope.ts).
+		const scope = guardScope(ctx.cwd, (root) => loadConfig(ctx, root));
+		const config = scope.config;
 		let decision: GuardDecision;
 		let subject: string;
 
 		if (toolName === "bash" || toolName === "powershell") {
 			subject = String(input.command ?? "");
-			decision = checkCommand(subject, ctx.cwd, config);
+			decision = checkCommand(subject, ctx.cwd, scopedConfig(subject, ctx.cwd, scope), ctx.cwd, process.env, (target) => scopedPath("write", target, scope));
 			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
-			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs) ?? decision;
+			// A workspace repository's own task-file folders, else the session folder's.
+			const workspace = scope.repos.size === 0 ? undefined : { cwd: ctx.cwd, repos: [...scope.repos.keys()].map((dir) => basename(dir)), dirsFor: (repo: string) => scope.repos.get(repo)?.workDocs ?? workDocs };
+			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs, workspace) ?? decision;
 			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
-				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands };
+				const waived = (checkout: string) => scope.repos.get(repoIn(scope, checkout) ?? "")?.reviewGate === false;
+				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands, waived };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				decision = join(decision, review);
 			}
 		} else if (toolName === "read" || toolName === "write" || toolName === "edit") {
 			subject = String(input.path ?? "");
-			decision = checkPath(toolName, subject, ctx.cwd, config);
+			decision = scopedPath(toolName, resolve(ctx.cwd, subject), scope);
 		} else {
 			return undefined;
 		}
@@ -199,8 +206,10 @@ function join(current: GuardDecision, next: GuardDecision | undefined): GuardDec
 	return { action: "confirm", reason: `${next.reason} Also: ${current.reason}` };
 }
 
-function loadConfig(ctx: ExtensionContext): GuardConfig {
-	const raw = readProjectJson<GuardConfig>(ctx.cwd, "guard");
+/** A root's guard config (the session folder's, or a workspace repository's); loosening only in a trusted project. */
+function loadConfig(ctx: ExtensionContext, root = ctx.cwd): GuardConfig {
+	const label = root === ctx.cwd ? ".pi/guard.json" : `${relative(ctx.cwd, root)}/.pi/guard.json`;
+	const raw = readProjectJson<GuardConfig>(root, "guard");
 	if (raw.error && ctx.hasUI) ctx.ui.notify(`Guard config ignored: ${raw.error}`, "warning");
 	const trusted = ctx.isProjectTrusted();
 	const regexes = (value: unknown) =>
@@ -209,7 +218,7 @@ function loadConfig(ctx: ExtensionContext): GuardConfig {
 				new RegExp(source);
 				return true;
 			} catch {
-				if (ctx.hasUI) ctx.ui.notify(`Guard: invalid regex ignored in .pi/guard.json: ${source}`, "warning");
+				if (ctx.hasUI) ctx.ui.notify(`Guard: invalid regex ignored in ${label}: ${source}`, "warning");
 				return false;
 			}
 		});

@@ -155,6 +155,31 @@ test("guard blocks, confirms and allows tool calls", async () => {
 	assert.match((await emit("tool_call", push, ctx(dir, { hasUI: false }))).reason, /unavailable/, "no UI means block");
 });
 
+test("guard: in a workspace, a write of a repository's CI pipeline asks", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	const c = ctx(dir, { confirm: false });
+	const write = await emit("tool_call", { toolName: "write", input: { path: "a/.github/workflows/ci.yml" } }, c);
+	assert.equal(write?.block, true, "the write is asked about");
+	assert.match(write.reason, /CI\/release pipeline/);
+	assert.equal(c.asked.length, 1, "asked, then declined");
+});
+
+test("guard: in a workspace, a repository's restrictions always apply and its loosening only in a trusted project", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ allow: ["npm run deploy"], block: ["make release"] }));
+	const deploy = { toolName: "bash", input: { command: "cd a && npm run deploy" } };
+	assert.equal(await emit("tool_call", deploy, ctx(dir, { trusted: true })), undefined);
+	assert.equal((await emit("tool_call", deploy, ctx(dir, { trusted: false, confirm: false }))).block, true);
+	const release = await emit("tool_call", { toolName: "bash", input: { command: "cd a && make release" } }, ctx(dir, { trusted: false }));
+	assert.equal(release.block, true);
+	assert.match(release.reason, /make release/);
+});
+
 test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {
 	const { pi, emit } = fakePi();
 	guard(pi);
@@ -591,6 +616,18 @@ test("verify: a folder that becomes a git repository mid-session is fingerprinte
 	await bashCall(emit, c, "node gen.js", false, () => writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n"));
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1, "only the fingerprint can see a script's write");
+});
+
+test("verify: in a workspace, the reminder names a repository's approved task file", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-03)\n");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.ok(sent.some((s) => /Approval gate: .*a\/docs\/tasks\/t\.md/.test(String(s.message.content))), JSON.stringify(sent.map((s) => s.message.content)));
 });
 
 test("verify also reminds to commit an approved task file", async () => {
