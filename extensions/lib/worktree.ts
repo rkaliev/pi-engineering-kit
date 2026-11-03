@@ -435,42 +435,63 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 function hidesPlace(command: string, powershell = false): boolean {
 	// PowerShell isn't parsed here, and a script it runs may move the caller's location: never place its targets.
 	if (powershell) return true;
-	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
+	const segments = splitSegments(tokenize(heredocs(command).text));
+	return movesOrBinds(segments) || segments.some(bindsAsCommand);
 }
 
 function movesOrBinds(segments: string[][]): boolean {
-	return segments.some((seg) => seg.some((t, i) => hidesBinding(wordOf(t), seg.slice(i + 1))));
-}
-
-/** A token's word after the last `(` or `{` it holds and any leading `!`: `(source`, `f()(source`, `!eval`. */
-function wordOf(token: string): string {
-	return token.slice(Math.max(token.lastIndexOf("("), token.lastIndexOf("{")) + 1).replace(/^!+/, "");
+	return segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
 }
 
 /** Words that, as a command word, make the next word a command: reserved words and command prefixes. */
 const STARTERS = new Set(["then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 /** Prefixes whose dash options come before the command they run. */
 const OPTION_PREFIXES = new Set(["time", "command", "exec"]);
+/** Tokens that open or close a group, a subshell, a function body or a `case` pattern: a command follows them anywhere. */
+const OPENERS = new Set(["{", "(", "()", ")"]);
 
 /**
  * Whether a segment runs `source`, `.`, `eval` or a declaration of unseen names as a command: its first word, or a word
- * after a reserved word or prefix (and its options), assignments, an opening `(` or `{`, a `name()` header or a `case`
- * pattern's `)`, each of them in a command position itself. A word in an argument position starts nothing.
+ * after a reserved word or prefix (and its options), assignments (to the end of a substitution they open), a
+ * `function NAME` or `name()` header, a `case` pattern, or a lone `{`, `(`, `()` or `)` wherever it stands. Another
+ * word in an argument position starts nothing, so `grep "time" .` and `rg "(A|B)" .` don't bind.
  */
 function bindsAsCommand(seg: string[]): boolean {
 	let start = true;
-	// After `case WORD in` the next word is a pattern; `case` and its word are counted down to it.
-	let toPattern = 0;
+	// After `case WORD`, the words up to `in`; after `in`, the pattern, up to the word that ends it with `)`.
+	let inCase = false;
 	let pattern = false;
 	let prefix: string | undefined;
+	// The function name after `function`, and the open substitutions of an assignment's value.
+	let name = false;
+	let open = 0;
 	for (const [i, token] of seg.entries()) {
-		if (pattern) {
-			pattern = false;
-			start = token.endsWith(")");
+		if (open > 0) {
+			open += depth(token);
 			continue;
 		}
-		if (toPattern > 0) {
-			if (--toPattern === 0) pattern = token === "in";
+		if (OPENERS.has(token)) {
+			// A lone `)` also ends a `case` pattern.
+			if (token === ")") pattern = false;
+			start = true;
+			continue;
+		}
+		if (inCase) {
+			if (token === "in") {
+				inCase = false;
+				pattern = true;
+			}
+			continue;
+		}
+		if (pattern) {
+			if (token.endsWith(")")) {
+				pattern = false;
+				start = true;
+			}
+			continue;
+		}
+		if (name) {
+			name = false;
 			continue;
 		}
 		if (!start) continue;
@@ -480,22 +501,45 @@ function bindsAsCommand(seg: string[]): boolean {
 			continue;
 		}
 		prefix = undefined;
+		if (/^[A-Za-z_]\w*=/.test(token)) {
+			open = Math.max(0, depth(token));
+			continue;
+		}
 		const word = wordOf(token);
 		if (word === "" || /[({)]$/.test(token)) continue;
 		if (STARTERS.has(word)) {
 			if (OPTION_PREFIXES.has(word)) prefix = word;
 			continue;
 		}
-		if (word === "case") {
-			start = false;
-			toPattern = 2;
+		if (word === "function") {
+			name = true;
 			continue;
 		}
-		if (/^[A-Za-z_]\w*=/.test(word)) continue;
+		if (word === "case") {
+			inCase = true;
+			start = false;
+			continue;
+		}
+		if (word === "in") {
+			// `in` that begins a line of a `case` split over lines.
+			pattern = true;
+			continue;
+		}
 		if (!MOVES.has(word) && hidesBinding(word, seg.slice(i + 1))) return true;
 		start = false;
 	}
 	return false;
+}
+
+/** A token's word after the last `(` or `{` it holds and any leading `!`: `(source`, `f()(source`, `!eval`. */
+function wordOf(token: string): string {
+	return token.slice(Math.max(token.lastIndexOf("("), token.lastIndexOf("{")) + 1).replace(/^!+/, "");
+}
+
+/** How many substitutions or groups a token opens and doesn't close: `$(git` 1, `x)` −1, `${PATH}:bin` 0; a backtick toggles. */
+function depth(token: string): number {
+	const count = (c: string) => token.split(c).length - 1;
+	return count("(") - count(")") + count("{") - count("}") + (count("`") % 2);
 }
 
 /**

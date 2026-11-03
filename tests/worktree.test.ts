@@ -321,10 +321,41 @@ test("callChanges: with a blind part, source after a glued function header or a 
 	}
 });
 
+test("callChanges: with a blind part, source in a function or case arm however it is spaced, or after any prefix, counts every target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of [
+		"function f { . ./env; }; f; echo > $S/x",
+		"function f() { . ./env; }; f; echo > $S/x",
+		"f () { . ./env; }; f; echo > $S/x",
+		"case $M in dev ) . ./env;; esac; echo > $S/x",
+		"case $M in\ndev ) . ./env ;;\nesac; echo > $S/x",
+		"X=${Y} . ./env; echo > $S/x",
+		"X=$(pwd -P) . ./env; echo > $S/x",
+		"ROOT=$(git rev-parse --show-toplevel) . ./env; echo > $S/x",
+		"PATH=${PATH}:bin source ./env; echo > $S/x",
+		"X=1 . ./env; echo > $S/x",
+		"! source ./env; echo > $S/x",
+		"while true; do . ./env; done; echo > $S/x",
+		"if false; then true; else . ./env; fi; echo > $S/x",
+		"builtin source ./env; echo > $S/x",
+		"exec . ./env; echo > $S/x",
+	]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("callChanges: with a blind part, a substitution in an argument keeps a known variable's target placed", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	assert.deepEqual(callChanges(tree, tree, "/ws", { command: "OUT=a; echo $(. ./v.sh) > $OUT/x", cwd: "/ws" }), ["a/x"]);
+});
+
 test("callChanges: with a blind part, command -v and STARTERS or ) as arguments don't bind", () => {
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
 	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
-	for (const command of ["command -v source > $S/x", 'grep -rn "time" . > $S/x', 'rg "(A|B)" . > $S/x']) assert.deepEqual(changes(command), [], command);
+	for (const command of ["command -v source > $S/x", "command -V . > $S/x", "command -v source; echo > $S/x", 'grep -rn "time" . > $S/x', 'rg "(A|B)" . > $S/x']) {
+		assert.deepEqual(changes(command), [], command);
+	}
 	for (const command of ["case x in a) . ./env;; esac; echo > $S/x", "case x in a) true;; b) . ./env;; esac; echo > $S/x", "if true; then . ./env; fi; echo > $S/x", '"source" ./env; echo > $S/x']) {
 		assert.deepEqual(changes(command), ["$S/x"], command);
 	}
