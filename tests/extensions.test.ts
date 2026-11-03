@@ -361,6 +361,21 @@ test("verify: a write chained with a check, or made by a failed check, is not ex
 	}
 });
 
+test("verify: run_verification reports output over pi's limit as an output-limit failure, not a timeout", async () => {
+	const { dir } = gitProject(COMMANDS);
+	const f = fakePi();
+	// pi 1.5 stops a check whose output passes its cap: killed, truncated and a nonzero code.
+	f.pi.exec = async () => ({ stdout: "x".repeat(100), stderr: "", code: 1, killed: true, truncated: true });
+	verify(f.pi);
+	const c = ctx(dir);
+	await f.emit("session_start", { reason: "startup" }, c);
+	const result = await f.tools.get("run_verification").execute("id", {}, undefined, undefined, c);
+	const text = result.content.map((p: { text: string }) => p.text).join("\n");
+	assert.equal(result.details.ok, false);
+	assert.match(text, /OUTPUT LIMIT/);
+	assert.doesNotMatch(text, /TIMEOUT/);
+});
+
 test("verify: run_verification counts earlier changes, but not its own", async () => {
 	const failing = gitProject(COMMANDS);
 	const f = fakePi({ "npm test": 1 });
@@ -1113,6 +1128,21 @@ test("review gate: a malformed report in a workspace lands Inconclusive on each 
 	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
 });
 
+test("review gate: the lookups for one reviewer run share one deadline, so a hanging repository holds pi up for at most its length", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);
+	// c answers no lookup: the named commit's, then each HEAD's, would each take a full lookup without the deadline.
+	const slow = slowGit(realpathSync(join(dir, "c")), "rev-parse", 20);
+	const started = Date.now();
+	try {
+		await reviewer("Reviewed HEAD: deadbeef0");
+	} finally {
+		slow.restore();
+	}
+	assert.ok(Date.now() - started < 7500, `took ${Date.now() - started} ms, past the 7 s deadline`);
+	assert.deepEqual(readReviews(join(dir, "a"), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head("a"), "Inconclusive"]]);
+});
+
 test("review gate: a reviewer verdict short of Yes that misses a workspace repository is recorded elsewhere and noted", async () => {
 	const { dir, git } = workspaceProject({});
 	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);
@@ -1169,6 +1199,30 @@ test("review gate: a review of unverified edits that misses a workspace reposito
 	}
 	assert.deepEqual(readReports(join(dir, "c"), head, reviewsRoot).map((r) => [r.run, r.verdict]).sort(), [["c1-0", "Inconclusive"], ["c1-0-held", "Inconclusive"]]);
 });
+
+for (const unverified of [false, true]) {
+	test(`review gate: a ${unverified ? "review of unverified edits" : "report"} naming a commit a hanging repository can't be searched for holds each HEAD back, without a second search`, async () => {
+		const { dir, git } = workspaceProject();
+		const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+		const g = fakePi();
+		guard(g.pi, { reviewsRoot });
+		const head = (repo: string) => String(git(repo, "rev-parse", "HEAD")).trim();
+		const c = ctx(dir);
+		const slow = slowGit(realpathSync(join(dir, "b")), "deadbeef1", 20);
+		verifyState.unverified = unverified;
+		let calls = "";
+		try {
+			await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${head("a")}\nReviewed HEAD: deadbeef1\nReady to merge: No` }] }, isError: false }, c);
+			calls = readFileSync(slow.log, "utf8");
+		} finally {
+			verifyState.unverified = false;
+			slow.restore();
+		}
+		assert.equal(calls.split("\n").filter((l) => l.includes("deadbeef1")).length, 1, "the commit is searched for once");
+		for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
+		assert.ok(c.notes.some((n) => /could not be searched in time/.test(n)), c.notes.join("\n"));
+	});
+}
 
 test("review gate: a review of unverified edits with a bad BASE holds back the commit it names, not HEAD", async () => {
 	const { dir, git } = workspaceProject();

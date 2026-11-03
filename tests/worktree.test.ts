@@ -313,6 +313,96 @@ test("callChanges: with a blind part, source, . or eval count only in a command 
 	assert.deepEqual(changes("f() ( . ./env.sh; echo x > $OUT ); f"), ["$OUT"], "a function whose body is a subshell");
 });
 
+test("callChanges: with a blind part, source after a glued function header or a command prefix's options counts every target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of ["f(){ . ./env; }; echo > $S/x", "f()(source ./env); echo > $S/x", "command -p source ./env; echo > $S/x", "time -p . ./env; echo > $S/x", "command -- eval x; echo > $S/x"]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("callChanges: with a blind part, source in a function or case arm however it is spaced, or after any prefix, counts every target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of [
+		"function f { . ./env; }; f; echo > $S/x",
+		"function f() { . ./env; }; f; echo > $S/x",
+		"f () { . ./env; }; f; echo > $S/x",
+		"case $M in dev ) . ./env;; esac; echo > $S/x",
+		"case $M in\ndev ) . ./env ;;\nesac; echo > $S/x",
+		"X=${Y} . ./env; echo > $S/x",
+		"X=$(pwd -P) . ./env; echo > $S/x",
+		"ROOT=$(git rev-parse --show-toplevel) . ./env; echo > $S/x",
+		"PATH=${PATH}:bin source ./env; echo > $S/x",
+		"X=1 . ./env; echo > $S/x",
+		"! source ./env; echo > $S/x",
+		"while true; do . ./env; done; echo > $S/x",
+		"if false; then true; else . ./env; fi; echo > $S/x",
+		"builtin source ./env; echo > $S/x",
+		"exec . ./env; echo > $S/x",
+		"X=`git rev-parse --show-toplevel` . ./env; echo > $S/x",
+		'X="(" . ./env; echo > $S/x',
+		"(X=1 . ./env; echo > $S/x)",
+		'X=$(echo "(") . ./env; echo > $S/x',
+		"X=$(pwd | sed s/a/b/) . ./env; echo > $S/x",
+		"X=$(. ./env; echo > $S/x)",
+		"if(. ./env); then echo > $S/x; fi",
+		"case x in (a) . ./env;; esac; echo > $S/x",
+		"X=${Y:-$(pwd)} . ./env; echo > $S/x",
+		"builtin -- source ./env; echo > $S/x",
+	]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("callChanges: with a blind part, any command with case counts every target, however its patterns nest", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of [
+		'( load() { case "$1" in dev) . ./env;; esac; }; load dev; echo > $S/x )',
+		'f() { case "$1" in (dev) . ./env;; esac; }; f dev; echo > $S/x',
+		'case $f in *.c) grep -c \\( "$f";; *.sh) . ./env;; esac; echo > $S/x',
+		'case "$ENV" in ci). ./ci.env;; esac; echo > $S/x',
+		"case x in esac; . ./env; echo > $S/x",
+		"f() if . ./env; then echo > $S/x; fi; f",
+		'f() case "$1" in (dev) . ./env;; esac; f dev; echo > $S/x',
+		'coproc case "$1" in (dev) . ./env; echo > $S/x;; esac',
+	]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("case counts every target but doesn't stop a known variable or ~ from being expanded", () => {
+	assert.deepEqual(shellWriteTargets('case "$OSTYPE" in darwin*) echo mac;; esac > ~/os.txt', "/ws", "/ws", { HOME: "/home/u" }), [], "~ is the home folder, outside the project");
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["svc"], links: ["svc"] };
+	assert.deepEqual(callChanges(tree, tree, "/ws", { command: "OUT=svc; case $1 in a) true;; esac; echo > $OUT/x", cwd: "/ws" }), ["svc/x"], "placed under the symlink");
+});
+
+test("callChanges: with a blind part, escaped brackets are data and an escaped quote doesn't hide a placed target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	assert.deepEqual(changes("X=$(echo \\( ) . ./env; echo > $S/x"), ["$S/x"], "an escaped ( opens nothing");
+	assert.deepEqual(changes('node -e "console.log(\\"hi\\")" > $S/red.log'), [], "a quoted bracket beside an escaped quote is data");
+});
+
+test("callChanges: with a blind part, a sourced file's variable is never expanded, so its target counts as written", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	assert.deepEqual(changes("OUT=a; echo $(. ./v.sh) > $OUT/x"), ["$OUT/x"]);
+	assert.deepEqual(changes("f()(. ./ci-env.sh && npm test > $TMPDIR/test.log); f"), ["$TMPDIR/test.log"], "TMPDIR may be set by the sourced file");
+});
+
+test("callChanges: with a blind part, command -v and STARTERS or ) as arguments don't bind", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of ["command -v source > $S/x", "command -V . > $S/x", "command -v source; echo > $S/x", 'grep -rn "time" . > $S/x', 'rg "(A|B)" . > $S/x', 'grep ")" . > $S/x', 'grep -F "(" . > $S/x', 'rg "{" . > $S/x']) {
+		assert.deepEqual(changes(command), [], command);
+	}
+	for (const command of ["case x in a) . ./env;; esac; echo > $S/x", "case x in a) true;; b) . ./env;; esac; echo > $S/x", "if true; then . ./env; fi; echo > $S/x", '"source" ./env; echo > $S/x']) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
 test("treeFingerprint: a symlink whose text climbs out after a symlinked folder is a blind part", () => {
 	const ws = workspace();
 	const outside = mkdtempSync(join(tmpdir(), "linked-"));
