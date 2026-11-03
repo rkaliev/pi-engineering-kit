@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import test from "node:test";
@@ -669,16 +669,26 @@ test("holdBack: given the caller's timed-out lookup, it holds each HEAD back wit
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	const failed = `Reviewed HEAD deadbee0 could not be searched in time in any repository here (a, c)`;
 	const slow = slowGit(realpathSync(join(ws, "c")), "deadbee", 8);
-	const started = Date.now();
 	let still: string | undefined;
+	let calls = "";
 	try {
-		still = holdBack(ws, "deadbee0", { promptId: "p1", run: "x" }, root, Date.now() + 2000, failed);
+		still = holdBack(ws, "deadbee0", { promptId: "p1", run: "x" }, root, Date.now() + 6000, failed);
+		calls = readFileSync(slow.log, "utf8");
 	} finally {
 		slow.restore();
 	}
-	assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+	assert.doesNotMatch(calls, /deadbee/, "the commit isn't searched for again");
 	assert.match(String(still), /in time/);
 	for (const r of ["a", "c"]) assert.equal(readReviews(join(ws, r), root)[0]?.verdict, "Inconclusive", `${r}'s HEAD is held back`);
+});
+
+test("holdBack: given a timed-out lookup and too little time for another, it says so and names the miss", () => {
+	const { dir, root } = repo();
+	const failed = "Reviewed HEAD deadbee0 could not be searched in time in this repository";
+	const still = holdBack(dir, "deadbee0", { promptId: "p1", run: "x" }, root, Date.now() + 800, failed);
+	assert.match(String(still), /could not be searched in time/);
+	assert.match(String(still), /no time was left/);
+	assert.deepEqual(readReviews(dir, root), []);
 });
 
 test("holdBack: with its deadline spent it records nothing more and says so", () => {

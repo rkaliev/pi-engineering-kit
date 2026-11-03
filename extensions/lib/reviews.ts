@@ -157,7 +157,8 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
  * lookup ends by `deadline`. Returns why it could not hold the commit back everywhere, if so.
  */
 export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string, deadline?: number, failed?: string): string | undefined {
-	const late = () => deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS;
+	// A lookup keeps the reserve for the stores: with less than that and a lookup's minimum left, none can answer.
+	const late = () => deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS + STORE_RESERVE_MS;
 	let unsearched: string | undefined;
 	if (rev !== undefined) {
 		let held: RecordResult | string | undefined = failed?.startsWith(`Reviewed HEAD ${rev} `) ? failed : undefined;
@@ -862,17 +863,22 @@ function isAncestor(where: string, ancestor: string, rev: string): boolean {
  * Where a project's review records live: keyed by the repository's git common directory (real path), so the
  * hook, a subfolder and every worktree of the repository agree. Outside a repository, by the folder itself.
  */
-export function reviewsDir(projectDir: string, root = join(tmpdir(), "eng-kit", "reviews")): string {
-	const dir = resolve(projectDir);
-	const common = git(dir, ["rev-parse", "--git-common-dir"]);
-	return join(root, hash(safeRealpath(common ? resolve(dir, common) : dir)));
+export function reviewsDir(projectDir: string, root?: string): string {
+	return storeOf(projectDir, root) ?? join(root ?? DEFAULT_ROOT, hash(safeRealpath(resolve(projectDir))));
 }
 
 /** `reviewsDir` of a repository, resolved by `deadline`: `undefined` when git gave no answer in time. */
-function repoStore(repo: string, root = join(tmpdir(), "eng-kit", "reviews"), deadline?: number): string | undefined {
+function repoStore(repo: string, root?: string, deadline?: number): string | undefined {
 	if (deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS) return undefined;
-	const dir = resolve(repo);
-	const common = git(dir, ["rev-parse", "--git-common-dir"], timeoutBefore(deadline));
+	return storeOf(repo, root, timeoutBefore(deadline));
+}
+
+const DEFAULT_ROOT = join(tmpdir(), "eng-kit", "reviews");
+
+/** The store keyed by a folder's git common directory, or `undefined` when git names none (or no answer in time). */
+function storeOf(folder: string, root = DEFAULT_ROOT, timeout?: number): string | undefined {
+	const dir = resolve(folder);
+	const common = git(dir, ["rev-parse", "--git-common-dir"], timeout);
 	return common ? join(root, hash(safeRealpath(resolve(dir, common)))) : undefined;
 }
 
