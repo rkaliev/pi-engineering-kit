@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
-import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr } from "./lib/reviews.ts";
+import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr, holdBack } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
@@ -105,22 +105,28 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const failed = event.isError || run.exitCode !== 0 || typeof run.finalOutput !== "string" || !!run.error || run.timedOut || run.interrupted || run.stopped;
 			// A review counts only for code that passed the checks: one that ran on unverified edits is Inconclusive.
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
+			// Every lookup for this run shares one deadline, so pi isn't held up for long by a repository that hangs.
+			const deadline = Date.now() + LOOKUP_DEADLINE_MS;
 			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
-				recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput });
+				const held = recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput, deadline });
+				// Not recorded as written (its BASE or HEAD is no commit): the named commit, else each HEAD, so it is never lost.
+				const still = typeof held === "string" ? holdBack(ctx.cwd, parsed.sha, ids, options.reviewsRoot, deadline) : held.missed === undefined ? undefined : holdBack(ctx.cwd, parsed.sha, heldIds(ids), options.reviewsRoot, deadline);
 				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
+				notifyMissed(ctx, typeof held === "string" ? undefined : held.missed, still);
 				return;
 			}
-			const result = failed ? "the reviewer run failed" : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot);
-			if (typeof result === "string") {
-				// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel
-				// reviewer's Yes on that commit can't stand alone; a review of a later commit is unaffected.
-				const named = reviewedHead(run.finalOutput ?? "");
-				// A SHA that isn't a commit here (a typo) falls back to HEAD, so the failure is never lost.
-				if (named === undefined || typeof recordVerdict(ctx.cwd, named, "Inconclusive", ids, options.reviewsRoot) === "string") {
-					recordVerdict(ctx.cwd, "HEAD", "Inconclusive", ids, options.reviewsRoot);
-				}
-				if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
+			const result = failed ? "the reviewer run failed" : recordReview(ctx.cwd, run.finalOutput!, ids, options.reviewsRoot, deadline);
+			if (typeof result !== "string") {
+				// The reviewer's lines were fine: hold the commit back where the verdict may not have reached, keep its report.
+				if (result.missed !== undefined) notifyMissed(ctx, result.missed, holdBack(ctx.cwd, result.sha, heldIds(ids), options.reviewsRoot, deadline));
+				return;
 			}
+			// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel reviewer's Yes on
+			// that commit can't stand alone; a review of a later commit is unaffected. A SHA that isn't a commit here (a
+			// typo) falls back to HEAD, so the failure is never lost.
+			const still = holdBack(ctx.cwd, reviewedHead(run.finalOutput ?? ""), ids, options.reviewsRoot, deadline);
+			if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
+			notifyMissed(ctx, undefined, still);
 		});
 		return undefined;
 	});
@@ -163,6 +169,26 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			// The ledger is optional.
 		}
 	}
+}
+
+/** The run id of the Inconclusive that holds a commit back after a verdict missed a repository (see `holdBack`). */
+function heldIds(ids: { promptId: string; run: string }): { promptId: string; run: string } {
+	return { promptId: ids.promptId, run: `${ids.run}-held` };
+}
+
+/** How long the lookups for one reviewer run may take in all. */
+const LOOKUP_DEADLINE_MS = 7000;
+
+/**
+ * Tells the user when a verdict short of Yes could not be recorded in every repository that has the commit (`missed`),
+ * and when the Inconclusive meant to hold the commit back could not be recorded everywhere either (`still`).
+ */
+function notifyMissed(ctx: ExtensionContext, missed: string | undefined, still: string | undefined): void {
+	if (!ctx.hasUI || (missed === undefined && still === undefined)) return;
+	const verdict = missed === undefined ? "" : `the verdict could not be recorded in every repository that has the commit (${missed})`;
+	if (still === undefined) return ctx.ui.notify(`Review gate: ${verdict}; an Inconclusive now holds the commit back there.`, "warning");
+	const held = `the Inconclusive meant to hold the commit back could not be recorded everywhere either (${still}): a Yes recorded there earlier or in parallel still counts. Review again once it can be recorded.`;
+	ctx.ui.notify(`Review gate: ${verdict === "" ? held.charAt(0).toUpperCase() + held.slice(1) : `${verdict}, and ${held}`}`, "warning");
 }
 
 /** Combine two guard decisions: a block wins; two confirmations become one that names both reasons. */

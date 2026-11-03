@@ -3,11 +3,12 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { isIgnored } from "./commands.ts";
+import { isIgnored, resolveIgnore } from "./commands.ts";
+import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, heredocs, safeRealpath, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -19,19 +20,41 @@ export interface Tree {
 	head: string;
 	/** Project-relative path → `"<size> <mtimeMs>"`, or `"deleted"`. */
 	files: Record<string, string>;
+	/** In a workspace: each repository folder's `HEAD`, or `""` before its first commit. */
+	heads?: Record<string, string>;
+	/**
+	 * In a workspace: the parts not fingerprinted in this call, sorted: a repository folder, `""` for the files outside
+	 * the repositories, or a symlink the walk met that leads out of the project or to a folder. A part fingerprinted
+	 * before keeps the paths it listed and its HEAD (see `treeFingerprint`).
+	 */
+	blind?: string[];
+	/** In a workspace: the blind parts never fingerprinted, so with no entries to compare (a subset of `blind`). */
+	unseen?: string[];
+	/** In a workspace: the parts that ran out of their share of the time in this call (a subset of `blind`). */
+	late?: string[];
+	/** In a workspace: the blind parts that are symlinks the walk met (a subset of `blind`). */
+	links?: string[];
 }
 
 const MAX_BUFFER = 16 * 1024 * 1024;
+/** How long one workspace fingerprint may take, all repositories and the walk together. */
+export const WORKSPACE_BUDGET_MS = 2000;
 
-function git(projectDir: string, args: string[]): string {
+function git(projectDir: string, args: string[], timeout = GIT_TIMEOUT_MS): string {
 	return execFileSync("git", ["--no-optional-locks", ...args], {
 		cwd: projectDir,
 		encoding: "utf8",
-		timeout: GIT_TIMEOUT_MS,
+		timeout,
 		maxBuffer: MAX_BUFFER,
 		stdio: ["ignore", "pipe", "ignore"],
 	});
 }
+
+/**
+ * Files a workspace's own walk never counts, whatever `ignore` says: what the OS, an editor, a dependency install or a
+ * local tool writes on its own. Inside a repository, git's ignore rules do this.
+ */
+const WALK_EXCLUDES = ["**/.DS_Store", "**/Thumbs.db", ".claude/settings.local.json", ".claude/*.lock", ".pi/git/**", ".pi/npm/**", "**/.idea/**", "**/.vscode/**", "**/node_modules/**"];
 
 /**
  * The files `git status` lists under `projectDir` (changed, new or deleted), by content identity only, so staging or
@@ -39,61 +62,329 @@ function git(projectDir: string, args: string[]): string {
  * on an error, after the timeout or over `MAX_ENTRIES` paths, so the caller can fall back to the command's text.
  * `why.slow` says the repository is too big or slow to fingerprint (a timeout or the cap), as opposed to not being a
  * repository (yet).
+ *
+ * A folder outside git that holds repositories (a workspace, see `projectRepos`) gets each repository's entries under
+ * its folder, matched against its own ignore globs by the path inside it and against `ignore` by the workspace path,
+ * and every file outside them, against `ignore`. Each part has an equal share of the time left before
+ * `limits.deadline`. A part over the limit, failing, out of its share, named in `limits.skip`, or a symlink the walk
+ * meets that leads out of the project or to a folder is listed in `blind`. A part fingerprinted in `limits.previous`
+ * keeps the paths it listed there and its HEAD: their identity is read again, except for a part in `limits.skip`,
+ * which keeps the stored one. One over the limit, or out of its share in this call and in `previous` too, is added to
+ * `why.slowParts`, for the caller to skip for the session.
  */
-export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean } = {}): Tree | undefined {
+export function treeFingerprint(projectDir: string, ignore: string[], why: { slow?: boolean; slowParts?: string[] } = {}, limits: { deadline?: number; maxEntries?: number; skip?: string[]; previous?: Tree } = {}): Tree | undefined {
+	const maxEntries = limits.maxEntries ?? MAX_ENTRIES;
 	try {
-		const prefix = git(projectDir, ["rev-parse", "--show-prefix"]).trim();
-		const records = git(projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
-		if (records.length > MAX_ENTRIES + 1) {
+		const tree = repoTree(projectDir, "", ignore, ignore, maxEntries, Number.POSITIVE_INFINITY);
+		if (tree === "cap") why.slow = true;
+		return tree === "cap" ? undefined : tree;
+	} catch (err) {
+		if (timedOut(err)) {
 			why.slow = true;
 			return undefined;
 		}
-		const files: Record<string, string> = {};
-		const add = (repoPath: string) => {
-			if (!repoPath.startsWith(prefix)) return;
-			const path = repoPath.slice(prefix.length);
-			if (!isIgnored(path, ignore)) files[path] = identity(join(projectDir, path));
-		};
-		for (let i = 0; i < records.length; i++) {
-			const record = records[i]!;
-			if (record.length < 4) continue;
-			add(record.slice(3));
-			// A rename or copy (in either column) is followed by its source path: both count.
-			if (/[RC]/.test(record.slice(0, 2))) add(records[++i] ?? "");
+	}
+	const { kind, repos } = projectRepos(projectDir, ignore);
+	if (kind !== "workspace") return undefined;
+	const deadline = limits.deadline ?? Date.now() + WORKSPACE_BUDGET_MS;
+	const skip = new Set(limits.skip ?? []);
+	const previous = limits.previous?.heads !== undefined ? limits.previous : undefined;
+	const files: Record<string, string> = {};
+	const heads: Record<string, string> = {};
+	const blind: string[] = [...skip].filter((part) => part === "" || repos.includes(part));
+	const late: string[] = [];
+	const links: string[] = [];
+	const remember = (part: string) => (why.slowParts = [...(why.slowParts ?? []), part]);
+	const missed = (part: string, outcome: "cap" | "late" | "fail") => {
+		blind.push(part);
+		if (outcome === "late") late.push(part);
+		if (outcome === "cap" || (outcome === "late" && previous?.late?.includes(part))) remember(part);
+	};
+	// Each part gets an equal share of the time left, so one slow repository can't starve the others.
+	const parts = [...repos.filter((r) => !skip.has(r)), ...(skip.has("") ? [] : [""])];
+	parts.forEach((part, i) => {
+		const share = Date.now() + (deadline - Date.now()) / (parts.length - i);
+		if (part === "") {
+			const outside = walkOutside(projectDir, repos, [...ignore, ...WALK_EXCLUDES], maxEntries, share);
+			if (typeof outside === "string") return missed("", outside);
+			Object.assign(files, outside.files);
+			blind.push(...outside.links);
+			links.push(...outside.links);
+			return;
 		}
-		let head = "";
+		let tree: Tree | "cap" | "late" | "fail";
 		try {
-			head = git(projectDir, ["rev-parse", "--verify", "-q", "HEAD"]).trim();
-		} catch {
-			// no commit yet
+			tree = share > Date.now() ? repoTree(join(projectDir, part), `${part}/`, ignore, resolveIgnore(join(projectDir, part)), maxEntries, share) : "late";
+		} catch (err) {
+			tree = timedOut(err) ? "late" : "fail";
 		}
-		return { head, files };
+		if (typeof tree === "string") return missed(part, tree);
+		Object.assign(files, tree.files);
+		heads[part] = tree.head;
+	});
+	// A blind part keeps the paths it listed, so the next comparison measures from a real baseline without noise.
+	const unseen: string[] = [];
+	const parts2 = [...repos, ...outsideParts(repos, blind)];
+	for (const part of blind) {
+		if (part !== "" && !repos.includes(part)) continue;
+		const had = previous !== undefined && !(previous.unseen ?? []).includes(part) && (part === "" || previous.heads![part] !== undefined);
+		if (!had) {
+			unseen.push(part);
+			continue;
+		}
+		// The paths are carried. A part blind in this call has their identity read now, so a change to a listed file
+		// still counts; a part remembered for the session keeps the stored one and costs no I/O.
+		for (const [path, id] of Object.entries(previous!.files)) {
+			if (partOf(path, parts2) === part) files[path] = skip.has(part) ? id : identity(join(projectDir, path));
+		}
+		if (part !== "") heads[part] = previous!.heads![part]!;
+	}
+	return { head: "", files, heads, blind: blind.sort(), unseen: unseen.sort(), late: late.sort(), links: links.sort() };
+}
+
+/** The non-repository parts named in `blind` (folder symlinks); `""` is always one. */
+function outsideParts(repos: string[], blind: string[]): string[] {
+	return blind.filter((p) => p !== "" && !repos.includes(p));
+}
+
+/** The part a workspace path belongs to: the longest part folder it is in, or `""` for none. */
+function partOf(path: string, parts: string[]): string {
+	return parts.filter((r) => r !== "" && (path === r || path.startsWith(`${r}/`))).sort((x, y) => y.length - x.length)[0] ?? "";
+}
+
+function timedOut(err: unknown): boolean {
+	return (err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM";
+}
+
+/** The time a git call may take before `deadline`, at most the usual timeout; throws a timeout once it has passed. */
+function timeLeft(deadline: number): number {
+	const left = Math.floor(Math.min(GIT_TIMEOUT_MS, deadline - Date.now()));
+	if (left <= 0) throw Object.assign(new Error("out of time"), { code: "ETIMEDOUT" });
+	return left;
+}
+
+/**
+ * One repository's listed files, each path prefixed with `label` (its folder in a workspace), left out when `ignore`
+ * matches that path or `own` matches the path inside the repository; throws outside git. In a workspace a HEAD read
+ * that runs out of time throws too, so the repository is blind rather than taken for one without commits.
+ */
+function repoTree(dir: string, label: string, ignore: string[], own: string[], maxEntries: number, deadline: number): Tree | "cap" {
+	const prefix = git(dir, ["rev-parse", "--show-prefix"], timeLeft(deadline)).trim();
+	const records = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], timeLeft(deadline)).split("\0");
+	if (records.length > maxEntries + 1) return "cap";
+	const files: Record<string, string> = {};
+	const add = (repoPath: string) => {
+		if (!repoPath.startsWith(prefix)) return;
+		const path = repoPath.slice(prefix.length);
+		if (!isIgnored(label + path, ignore) && !isIgnored(path, own)) files[label + path] = identity(join(dir, path));
+	};
+	for (let i = 0; i < records.length; i++) {
+		const record = records[i]!;
+		if (record.length < 4) continue;
+		add(record.slice(3));
+		// A rename or copy (in either column) is followed by its source path: both count.
+		if (/[RC]/.test(record.slice(0, 2))) add(records[++i] ?? "");
+	}
+	let head = "";
+	try {
+		head = git(dir, ["rev-parse", "--verify", "-q", "HEAD"], timeLeft(deadline)).trim();
 	} catch (err) {
-		if ((err as { code?: string }).code === "ETIMEDOUT" || (err as { signal?: string }).signal === "SIGTERM") why.slow = true;
-		return undefined;
+		if (label !== "" && timedOut(err)) throw err;
+		// no commit yet
+	}
+	return { head, files };
+}
+
+/**
+ * Every file of a workspace outside its repositories, by content identity, without `.git` or ignored paths. A symlink
+ * to a file inside the project counts by that file; one to a folder, or one that leads out of the project, is not
+ * followed but returned in `links`. `"cap"` over `maxEntries` files, `"late"` past the deadline.
+ */
+function walkOutside(projectDir: string, repos: string[], ignore: string[], maxEntries: number, deadline: number): { files: Record<string, string>; links: string[] } | "cap" | "late" {
+	const files: Record<string, string> = {};
+	const links: string[] = [];
+	let count = 0;
+	const pending = [""];
+	while (pending.length > 0) {
+		if (Date.now() > deadline) return "late";
+		const rel = pending.pop()!;
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(join(projectDir, rel), { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
+			if (entry.name === ".git" || (rel === "" && repos.includes(entry.name))) continue;
+			// A symlink is followed only while every hop stays in the project: a target elsewhere may be a mount that
+			// hangs on stat.
+			const link = entry.isSymbolicLink() ? targetInside(projectDir, join(projectDir, path)) : undefined;
+			if (link === null) {
+				if (!isIgnored(path, ignore) && !ignoredFolder(path, ignore)) links.push(path);
+				continue;
+			}
+			const folder = entry.isDirectory() || (link !== undefined && isFolder(link));
+			if (folder) {
+				if (ignoredFolder(path, ignore)) continue;
+				if (entry.isSymbolicLink()) links.push(path);
+				else pending.push(path);
+			} else if ((entry.isFile() || entry.isSymbolicLink()) && !isIgnored(path, ignore)) {
+				if (++count > maxEntries) return "cap";
+				files[path] = identity(join(projectDir, path));
+			}
+		}
+	}
+	return { files, links };
+}
+
+/**
+ * Where a symlink leads when every hop, and every symlinked folder on the way, stays inside the project; `null` when
+ * one leaves it, can't be read or the chain is too long. Only `lstat` and `readlink` run, never a stat of the target.
+ */
+function targetInside(projectDir: string, link: string): string | null {
+	const root = resolve(projectDir);
+	let path = link;
+	for (let hops = 0; hops < 16; hops++) {
+		// The first component on the way that is a symlink, if any.
+		const rel = relative(root, path);
+		if (rel.startsWith("..") || isAbsolute(rel)) return null;
+		const parts = rel.split(/[\\/]/);
+		let next: string | undefined;
+		for (let i = 1; i <= parts.length; i++) {
+			const at = join(root, ...parts.slice(0, i));
+			let isLink: boolean;
+			try {
+				isLink = lstatSync(at).isSymbolicLink();
+			} catch {
+				return path; // a dangling path: nothing further to follow
+			}
+			if (!isLink) continue;
+			let text: string;
+			try {
+				text = readlinkSync(at);
+			} catch {
+				return null;
+			}
+			// `sub/../x` climbs after `sub`, which may itself be a symlink the text hides: don't fold it lexically.
+			const steps = text.split(/[\\/]/).filter((step) => step !== "" && step !== ".");
+			if (steps.some((step, k) => step === ".." && steps.slice(0, k).some((before) => before !== ".."))) return null;
+			next = join(resolve(dirname(at), text), ...parts.slice(i));
+			break;
+		}
+		if (next === undefined) return path;
+		path = next;
+	}
+	return null;
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
 	}
 }
 
 /**
  * The project files whose content changed between two fingerprints, sorted; empty means nothing changed. A path that
  * left the list (staged and committed, or restored) counts only if its size or time now differ; when `HEAD` moved, the
- * files its commits touched that were clean before count too (an edit committed in the same command, a checkout).
+ * files its commits touched that were clean before count too (an edit committed in the same command, a checkout). In
+ * a workspace that holds per repository, in its folder, and a repository whose commits can't be compared before
+ * `deadline` (default: the workspace budget from now) counts as its folder, `<repo>/`.
  */
-export function changedPaths(before: Tree, after: Tree, projectDir: string, ignore: string[] = []): string[] {
+export function changedPaths(before: Tree, after: Tree, projectDir: string, ignore: string[] = [], deadline?: number): string[] {
 	const changed = new Set<string>();
 	for (const path of new Set([...Object.keys(before.files), ...Object.keys(after.files)])) {
 		const now = after.files[path] ?? identity(join(projectDir, path));
 		if (before.files[path] !== now) changed.add(path);
 	}
-	if (before.head && after.head && before.head !== after.head) {
+	const workspace = before.heads !== undefined && after.heads !== undefined;
+	const until = deadline ?? Date.now() + WORKSPACE_BUDGET_MS;
+	const moved: Array<[string, string, string]> = workspace
+		? Object.entries(after.heads!).flatMap(([repo, head]) => (before.heads![repo] !== undefined ? [[repo, before.heads![repo]!, head] as [string, string, string]] : []))
+		: [["", before.head, after.head]];
+	for (const [repo, from, to] of moved) {
+		if (!from || !to || from === to) continue;
+		const label = repo === "" ? "" : `${repo}/`;
 		try {
-			const touched = git(projectDir, ["diff", "--name-only", "--relative", "-z", before.head, after.head, "--", "."]).split("\0");
-			for (const path of touched) if (path && !(path in before.files) && !isIgnored(path, ignore)) changed.add(path);
-		} catch {
-			// an unreachable commit (a rewritten history): the listed files above still count
+			const touched = git(join(projectDir, repo), ["diff", "--name-only", "--relative", "-z", from, to, "--", "."], workspace ? timeLeft(until) : GIT_TIMEOUT_MS).split("\0");
+			for (const path of touched) if (path && !(label + path in before.files) && !isIgnored(label + path, ignore)) changed.add(label + path);
+		} catch (err) {
+			// An unreachable commit (a rewritten history): the listed files above still count. Out of time in a
+			// workspace: the commits went unread, so the repository itself counts.
+			if (workspace && timedOut(err)) changed.add(label);
 		}
 	}
 	return [...changed].sort();
+}
+
+/**
+ * What a call changed: the fingerprints compared, plus the files its text writes inside a part either fingerprint is
+ * blind to (a workspace repository, a symlink the walk met, or `""` for the files outside them). A part never
+ * fingerprinted before has no baseline, so its listed files don't count; its text targets do. With a blind part, a
+ * command that moves the shell has its targets placed from every folder it may reach. One whose moves can't be
+ * followed (a variable, `chdir`, `CDPATH`, any PowerShell command) or that may bind names it doesn't show (`source`,
+ * `.` or `eval` as a plain command's command word, or anywhere in a function body, `case` arm or group) has every text
+ * target count while a repository or the outside files are blind, and those under a symlink while only symlinks are.
+ * Without both fingerprints, only its text.
+ */
+export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
+	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);
+	if (!before || !now) return written();
+	const blind = new Set([...(before.blind ?? []), ...(now.blind ?? [])]);
+	if (blind.size === 0) return changedPaths(before, now, projectDir);
+	const parts = [...new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind])].filter((r) => r !== "");
+	const unseenBefore = new Set(before.unseen ?? []);
+	const paths = changedPaths(before, now, projectDir).filter((p) => !unseenBefore.has(partOf(p, parts)));
+	let targets: string[] = [];
+	if (after !== undefined) {
+		const where = hidesPlace(after.command, after.powershell) ? placesOf(after.command, after.cwd, after.powershell) : [after.cwd];
+		// Targets that can't be placed all count while a repository or the outside files are blind; with only symlinks
+		// blind, those written under a symlink do.
+		const links = new Set([...(before.links ?? []), ...(now.links ?? [])]);
+		const wide = [...blind].some((part) => !links.has(part));
+		targets =
+			where === undefined
+				? written().filter((p) => wide || blind.has(partOf(p, parts)))
+				: [...new Set(where.flatMap((cwd) => written(cwd)))].filter((p) => blind.has(partOf(p, parts)));
+	}
+	return [...new Set([...paths, ...targets])].sort();
+}
+
+/** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
+function placesOf(command: string, cwd: string, powershell = false): string[] | undefined {
+	if (powershell || /\bcdpath\b/i.test(command) || process.env.CDPATH) return undefined;
+	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration, in a command position only
+	// (`npx eslint .` binds nothing), including inside a group, a subshell, a function body or a `case` arm.
+	for (const seg of splitSegments(tokenize(stripRedirects(heredocs(command).text)))) if (bindsAsCommand(seg)) return undefined;
+	const { dirs, unknown } = reachable(command, cwd);
+	return unknown ? undefined : dirs;
+}
+
+/**
+ * Whether `ignore` excludes a project-relative path: by that path, or, for a file inside a workspace repository, by its
+ * path inside the repository against that repository's own ignore globs, as a session in that repository matches it.
+ */
+export function ignoredPath(projectDir: string, rel: string, ignore: string[]): boolean {
+	return ignoreFilter(projectDir, ignore)(rel);
+}
+
+/** `ignoredPath` for many paths: the workspace's repositories and their globs are read once. */
+export function ignoreFilter(projectDir: string, ignore: string[]): (rel: string) => boolean {
+	let repos: string[] | undefined;
+	const own = new Map<string, string[]>();
+	return (path) => {
+		const rel = path.replaceAll("\\", "/");
+		if (isIgnored(rel, ignore)) return true;
+		const slash = rel.indexOf("/");
+		if (slash < 0 || !existsSync(join(projectDir, rel.slice(0, slash), ".git"))) return false;
+		const repo = rel.slice(0, slash);
+		repos ??= ((r) => (r.kind === "workspace" ? r.repos : []))(projectRepos(projectDir, ignore));
+		if (!repos.includes(repo)) return false;
+		if (!own.has(repo)) own.set(repo, resolveIgnore(join(projectDir, repo)));
+		return isIgnored(rel.slice(slash + 1), own.get(repo)!);
+	};
 }
 
 function identity(file: string): string {
@@ -117,7 +408,7 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that neither
 	// moves nor runs code the text doesn't show (a sourced file or `eval` may bind any name).
 	const found: Array<[string, boolean]> = [];
-	const moves = segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
+	const moves = movesOrBinds(segments);
 	// Operators are found where quotes are blanked out; the target is read from the same place in the real text.
 	for (const m of blankQuoted(text).matchAll(/(&>>?|\d*>[>|&]?)[ \t]*/g)) {
 		const rest = text.slice(m.index + m[0].length);
@@ -140,12 +431,46 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	return [...new Set(inside)];
 }
 
+/** Whether a command's text moves the shell or may bind names it doesn't show (see `hidesBinding`); in PowerShell, any move word. */
+function hidesPlace(command: string, powershell = false): boolean {
+	// PowerShell isn't parsed here, and a script it runs may move the caller's location: never place its targets.
+	if (powershell) return true;
+	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
+}
+
+function movesOrBinds(segments: string[][]): boolean {
+	return segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
+}
+
+/** Words after which the next word is a command: reserved words and command prefixes. */
+const STARTERS = new Set(["{", "(", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec", ";;"]);
+
+/**
+ * Whether a segment runs `source`, `.`, `eval` or a declaration of unseen names as a command: its first word, or a word
+ * after a reserved word, an opening `(` or `{`, a `case` pattern's `)`, a `name()` header or assignments.
+ */
+function bindsAsCommand(seg: string[]): boolean {
+	let start = true;
+	for (const [i, token] of seg.entries()) {
+		const opens = /^[({!]/.test(token);
+		const word = token.replace(/^[({!]+/, "");
+		if (word === "" || STARTERS.has(word)) {
+			start = true;
+			continue;
+		}
+		if ((start || opens) && /^[A-Za-z_]\w*=/.test(word)) continue;
+		if ((start || opens) && !MOVES.has(word) && hidesBinding(word, seg.slice(i + 1))) return true;
+		start = word.endsWith(")");
+	}
+	return false;
+}
+
 /**
  * A word after which the text no longer shows where the shell is or what its names hold, wherever it stands: a move,
  * a sourced file, `eval`, or a declaration of anything but plain `NAME=v` words (`export $(…)`, `local X`).
  */
 function hidesBinding(word: string, rest: string[]): boolean {
-	if (["cd", "pushd", "popd", "source", ".", "eval"].includes(word)) return true;
+	if (MOVES.has(word) || ["source", ".", "eval"].includes(word)) return true;
 	return ["export", "declare", "typeset", "local", "readonly"].includes(word) && !rest.every((w) => /^[A-Za-z_]\w*=/.test(w));
 }
 

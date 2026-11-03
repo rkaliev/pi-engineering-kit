@@ -17,9 +17,9 @@ import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, uncommittedApproved } from "./lib/approvals.ts";
 import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
-import { commandMatches, isIgnored, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { commandMatches, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { changedPaths, shellWriteTargets, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChanges, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -45,6 +45,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let pending = new Map<string, Tree>();
 	/** git timed out or listed too many files once: the command text decides for the rest of the session. */
 	let gitOff = false;
+	/** Workspace parts over the entry limit or out of their share twice running: not fingerprinted again this session. */
+	let slowParts = new Set<string>();
 	/** Project-relative paths changed since the last green run, newest last. */
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
@@ -74,22 +76,23 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * Compares the working tree with the last fingerprint and counts what changed, then keeps the new one. With
 	 * `callId` alone (a shell call starting) it also keeps the tree for that call; with `after` (its result) it compares
 	 * with the tree taken before the call and counts it unless `exempt`, and outside git, without a fingerprint or once
-	 * git has failed, reads the files the command writes from its text. A change between calls (the user's editor, a
+	 * git has failed, reads the files the command writes from its text, as it does inside a workspace part the
+	 * fingerprint is blind to (`callChanges`). A change between calls (the user's editor, a
 	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
 	 * its siblings' writes aren't its own.
 	 */
 	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): string[] => {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
-		const why: { slow?: boolean } = {};
-		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why);
+		const why: { slow?: boolean; slowParts?: string[] } = {};
+		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why, { skip: [...slowParts], previous: tree });
 		if (why.slow) gitOff = true;
+		for (const part of why.slowParts ?? []) slowParts.add(part);
 		// A call's own snapshot (by id; `run_verification` takes the last tree just before it runs).
 		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
 		const before = own ?? tree;
-		let paths: string[] = [];
-		if (now && before) paths = changedPaths(before, now, cwd, ignore);
-		else if (after) paths = shellWriteTargets(after.command, cwd, cwd, process.env, after.powershell).filter((p) => !isIgnored(p, ignore));
+		const ignored = ignoreFilter(cwd, ignore);
+		const paths = callChanges(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }).filter((p) => !ignored(p));
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
 		const counts = after ? !(after.exempt && own) : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];
@@ -151,9 +154,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		notified = false;
 		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
-		const why: { slow?: boolean } = {};
+		const why: { slow?: boolean; slowParts?: string[] } = {};
 		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), why);
 		gitOff = why.slow === true;
+		slowParts = new Set(why.slowParts ?? []);
 		setStatus(ctx);
 	});
 
@@ -273,12 +277,15 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	});
 }
 
-/** Edits outside the project, and of files matching the verify.json `ignore` globs (docs by default), don't need a check run. */
+/**
+ * Edits outside the project, and of files matching the verify.json `ignore` globs (docs by default; in a workspace also
+ * by the path inside the repository), don't need a check run.
+ */
 function countsAsEdit(path: string, cwd: string): boolean {
 	if (!path) return true;
 	const rel = relative(cwd, resolve(cwd, path));
 	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
-	return !isIgnored(rel, resolveIgnore(cwd));
+	return !ignoredPath(cwd, rel, resolveIgnore(cwd));
 }
 
 /** Task-file folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
