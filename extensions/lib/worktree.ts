@@ -450,27 +450,25 @@ const OPTION_PREFIXES = new Set(["time", "command", "exec", "builtin"]);
 const CONTROL = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
- * Whether a command's text runs `source`, `.`, `eval` or a declaration of unseen names as a command. A command word
- * comes first, after a control operator, a reserved word or prefix (with its options), assignments or `function NAME`,
- * inside an opening `(`, `{`, `$(`, `${` or backtick, and after a closing one that has no opening one before it (a
- * `case` pattern) or that ends a pattern after `case … in`. Brackets and backticks count only outside quotes, read from
- * the text with quoted parts blanked, so `rg "(A|B)" .` and `grep ")" .` bind nothing; a closing bracket outside quotes
- * with no opening one starts a command, which fails closed. The whole text is read at once, so a `|` or `;` inside a
- * substitution doesn't lose its brackets.
+ * Whether a command's text runs `source`, `.`, `eval` or a declaration of unseen names as a command, or a `case`,
+ * whose patterns aren't read (any of its arms may). A command word comes first, after a control operator, a reserved
+ * word or prefix (with its options), assignments or `function NAME`, inside an opening `(`, `{`, `$(`, `${` or
+ * backtick, and after a closing one that has no opening one before it. Brackets and backticks count only outside
+ * quotes and unescaped, read from the text with quoted parts and escaped characters blanked, so `rg "(A|B)" .`,
+ * `grep ")" .` and `find \( …` bind nothing; a closing bracket with no opening one starts a command, which fails
+ * closed. The whole text is read at once, so a `|` or `;` inside a substitution doesn't lose its brackets.
  */
 function bindsAsCommand(command: string): boolean {
 	const text = stripRedirects(command);
 	const words = tokenize(text);
-	// The same tokens with quoted text blanked to spaces: a bracket left there is structure, not data.
-	const shapes = tokenize(blankQuoted(text));
+	// The same tokens with quoted text and escaped characters blanked: a bracket left there is structure, not data.
+	const shapes = tokenize(blankQuoted(text).replace(/\\[^\n]/g, "\\ "));
 	if (shapes.length !== words.length) return true;
 	let start = true;
 	let prefix: string | undefined;
 	let name = false;
-	// What `start` was outside each open bracket or backtick, and whether a `case` pattern is being read.
+	// What `start` was outside each open bracket or backtick.
 	const outer: Array<{ start: boolean; tick: boolean }> = [];
-	let inCase = false;
-	let pattern = false;
 	const ticking = () => outer.some((o) => o.tick);
 	for (const [i, token] of words.entries()) {
 		if (CONTROL.has(token)) {
@@ -479,9 +477,9 @@ function bindsAsCommand(command: string): boolean {
 			name = false;
 			continue;
 		}
-		// An escape inside quotes blanks to a different length: with a bracket in such a token, the shape can't be read.
-		if (shapes[i]!.length !== token.length && /[(){}`]/.test(token)) return true;
-		const shape = shapes[i]!.length === token.length ? shapes[i]! : token;
+		// An escape inside quotes blanks to a different length: a bracket left in such a shape can't be placed in the word.
+		if (shapes[i]!.length !== token.length && /[(){}`]/.test(shapes[i]!)) return true;
+		const shape = shapes[i]!.length === token.length ? shapes[i]! : " ".repeat(token.length);
 		let piece = "";
 		let continued = false;
 		const word = (): boolean => {
@@ -512,24 +510,13 @@ function bindsAsCommand(command: string): boolean {
 			const back = outer.pop();
 			// Text glued after a closing bracket continues the same word (`${PATH}:bin`), so it isn't a command.
 			continued = k < shape.length - 1;
-			if (back === undefined || (pattern && outer.length === 0)) {
-				pattern = false;
-				start = true;
-			} else start = back.start;
+			start = back === undefined ? true : back.start;
 		}
 		if (word()) return true;
 	}
 	return false;
 
 	function consider(w: string, rest: string[]): boolean {
-		if (inCase) {
-			if (w === "in") {
-				inCase = false;
-				pattern = true;
-			}
-			return false;
-		}
-		if (pattern) return false;
 		if (name) {
 			name = false;
 			return false;
@@ -551,9 +538,8 @@ function bindsAsCommand(command: string): boolean {
 			name = true;
 			return false;
 		}
-		if (bare === "case") inCase = true;
 		start = false;
-		return !MOVES.has(bare) && hidesBinding(bare, rest);
+		return bare === "case" || (!MOVES.has(bare) && hidesBinding(bare, rest));
 	}
 }
 

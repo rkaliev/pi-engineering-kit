@@ -355,6 +355,27 @@ test("callChanges: with a blind part, source in a function or case arm however i
 	}
 });
 
+test("callChanges: with a blind part, any command with case counts every target, however its patterns nest", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of [
+		'( load() { case "$1" in dev) . ./env;; esac; }; load dev; echo > $S/x )',
+		'f() { case "$1" in (dev) . ./env;; esac; }; f dev; echo > $S/x',
+		'case $f in *.c) grep -c \\( "$f";; *.sh) . ./env;; esac; echo > $S/x',
+		'case "$ENV" in ci). ./ci.env;; esac; echo > $S/x',
+		"case x in esac; . ./env; echo > $S/x",
+	]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("callChanges: with a blind part, escaped brackets are data and an escaped quote doesn't hide a placed target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	assert.deepEqual(changes("X=$(echo \\( ) . ./env; echo > $S/x"), ["$S/x"], "an escaped ( opens nothing");
+	assert.deepEqual(changes('node -e "console.log(\\"hi\\")" > $S/red.log'), [], "a quoted bracket beside an escaped quote is data");
+});
+
 test("callChanges: with a blind part, a sourced file's variable is never expanded, so its target counts as written", () => {
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
 	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
