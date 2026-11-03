@@ -313,6 +313,23 @@ test("callChanges: with a blind part, source, . or eval count only in a command 
 	assert.deepEqual(changes("f() ( . ./env.sh; echo x > $OUT ); f"), ["$OUT"], "a function whose body is a subshell");
 });
 
+test("callChanges: with a blind part, source after a glued function header or a command prefix's options counts every target", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of ["f(){ . ./env; }; echo > $S/x", "f()(source ./env); echo > $S/x", "command -p source ./env; echo > $S/x", "time -p . ./env; echo > $S/x", "command -- eval x; echo > $S/x"]) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
+test("callChanges: with a blind part, command -v and STARTERS or ) as arguments don't bind", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	for (const command of ["command -v source > $S/x", 'grep -rn "time" . > $S/x', 'rg "(A|B)" . > $S/x']) assert.deepEqual(changes(command), [], command);
+	for (const command of ["case x in a) . ./env;; esac; echo > $S/x", "case x in a) true;; b) . ./env;; esac; echo > $S/x", "if true; then . ./env; fi; echo > $S/x", '"source" ./env; echo > $S/x']) {
+		assert.deepEqual(changes(command), ["$S/x"], command);
+	}
+});
+
 test("treeFingerprint: a symlink whose text climbs out after a symlinked folder is a blind part", () => {
 	const ws = workspace();
 	const outside = mkdtempSync(join(tmpdir(), "linked-"));
