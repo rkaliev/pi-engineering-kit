@@ -1113,6 +1113,21 @@ test("review gate: a malformed report in a workspace lands Inconclusive on each 
 	for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
 });
 
+test("review gate: the lookups for one reviewer run share one deadline, so a hanging repository holds pi up for at most its length", async () => {
+	const { dir, reviewsRoot, head, reviewer } = reviewWorkspace();
+	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);
+	// c answers no lookup: the named commit's, then each HEAD's, would each take a full lookup without the deadline.
+	const slow = slowGit(realpathSync(join(dir, "c")), "rev-parse", 20);
+	const started = Date.now();
+	try {
+		await reviewer("Reviewed HEAD: deadbeef0");
+	} finally {
+		slow.restore();
+	}
+	assert.ok(Date.now() - started < 7500, `took ${Date.now() - started} ms, past the 7 s deadline`);
+	assert.deepEqual(readReviews(join(dir, "a"), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head("a"), "Inconclusive"]]);
+});
+
 test("review gate: a reviewer verdict short of Yes that misses a workspace repository is recorded elsewhere and noted", async () => {
 	const { dir, git } = workspaceProject({});
 	assert.equal(spawnSync("git", ["clone", "-q", join(dir, "a"), join(dir, "c")]).status, 0);

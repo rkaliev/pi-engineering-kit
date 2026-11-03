@@ -107,7 +107,8 @@ export function recordReview(projectDir: string, text: string, ids: { promptId: 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
 export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string; deadline?: number } = {}): RecordResult | string {
 	const { found, complete } = lookup(projectDir, rev, extra.deadline);
-	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
+	// A repository that gave no answer may have the commit: that is a miss, not a commit that doesn't exist.
+	if (found.length === 0) return `Reviewed HEAD ${rev} ${complete ? "is not a commit" : "could not be searched in time"} in ${here(projectDir)}`;
 	// A SHA the reviewer wrote names one commit: different commits under one abbreviation get no verdict at all.
 	if (HEX.test(rev) && new Set(found.map((f) => f.sha)).size > 1) return `Reviewed HEAD ${rev} names different commits in different repositories; give the full SHA`;
 	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there.
@@ -121,7 +122,12 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 		// A Yes counts only with its range; a verdict short of Yes holds a landing back without one (a shallow clone).
 		if (extra.base !== undefined && !base && verdict === "Yes") continue;
 		const record: ReviewRecord = { sha, base, verdict, promptId: ids.promptId, at: Date.now(), report: extra.report?.slice(0, MAX_REPORT) };
-		const dir = reviewsDir(repo, root);
+		const dir = repoStore(repo, root, extra.deadline);
+		// The folder's own key is where nothing reads this repository's records: no answer is a miss.
+		if (dir === undefined) {
+			failure ??= `the store of ${repo} could not be resolved in time`;
+			continue;
+		}
 		try {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
 			if (!ownDir(dir)) {
@@ -145,22 +151,30 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 
 /**
  * Hold a commit back where a verdict short of Yes may have missed it: Inconclusive for `rev` (callers pass their own
- * run id, so the reviewer's record keeps its report). Only when `rev` is missing or names no commit here does it fall
- * back to each repository's HEAD, so unrelated repositories keep their verdicts. Every lookup ends by `deadline`.
- * Returns why it could not hold the commit back everywhere, if so.
+ * run id, so the reviewer's record keeps its report). Only when `rev` is missing, names no commit here or couldn't be
+ * searched for in time does it fall back to each repository's HEAD, so unrelated repositories keep their verdicts.
+ * `failed` is the caller's own `recordVerdict` result for `rev`: a lookup that already failed isn't repeated. Every
+ * lookup ends by `deadline`. Returns why it could not hold the commit back everywhere, if so.
  */
-export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string, deadline?: number): string | undefined {
+export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string, deadline?: number, failed?: string): string | undefined {
 	const late = () => deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS;
+	let unsearched: string | undefined;
 	if (rev !== undefined) {
-		if (late()) return "no time was left to hold it back";
-		const held = recordVerdict(projectDir, rev, "Inconclusive", ids, root, { deadline });
+		let held: RecordResult | string | undefined = failed?.startsWith(`Reviewed HEAD ${rev} `) ? failed : undefined;
+		if (held === undefined) {
+			if (late()) return "no time was left to hold it back";
+			held = recordVerdict(projectDir, rev, "Inconclusive", ids, root, { deadline });
+		}
 		if (typeof held !== "string") return held.missed;
 		// A record that couldn't be written is a miss; only a SHA that names no single commit here falls back to HEAD.
 		if (!held.startsWith(`Reviewed HEAD ${rev} `)) return held;
+		// The commit may be in the repository that didn't answer: holding each HEAD back doesn't cover it there.
+		if (held.includes("could not be searched in time")) unsearched = held;
 	}
-	if (late()) return "no time was left to hold each repository's HEAD back";
+	if (late()) return [unsearched, "no time was left to hold each repository's HEAD back"].filter(Boolean).join("; ");
 	const heads = recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root, { deadline });
-	return typeof heads === "string" ? heads : heads.missed;
+	const missed = typeof heads === "string" ? heads : heads.missed;
+	return [unsearched, missed].filter(Boolean).join("; ") || undefined;
 }
 
 /** Below this much time left a lookup isn't started: it couldn't answer and would only delay the warning. */
@@ -175,6 +189,8 @@ function timeoutBefore(deadline: number | undefined): number {
 const HEX = /^[0-9a-f]{4,40}$/i;
 /** How long resolving a commit across a workspace's repositories may take, inside the hook's 10 s. */
 const LOOKUP_BUDGET_MS = 4000;
+/** What a lookup with a deadline leaves of it for resolving the stores it writes to. */
+const STORE_RESERVE_MS = 1000;
 
 /**
  * The commit `rev` names in `dir`, `undefined` when git says there is none, `null` when git gave no answer (a timeout).
@@ -200,7 +216,8 @@ export function commitRepos(projectDir: string, rev: string): Array<{ dir: strin
 function lookup(projectDir: string, rev: string, until?: number): { found: Array<{ dir: string; sha: string }>; complete: boolean } {
 	const { kind, repos } = projectRepos(projectDir);
 	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
-	const deadline = Math.min(Date.now() + LOOKUP_BUDGET_MS, until ?? Number.POSITIVE_INFINITY);
+	// The time after the lookup is left for resolving and writing the stores of what it found.
+	const deadline = Math.min(Date.now() + LOOKUP_BUDGET_MS, (until ?? Number.POSITIVE_INFINITY) - STORE_RESERVE_MS);
 	let complete = true;
 	// Each repository gets an equal share of the time left, so one slow repository can't starve the others.
 	const found = dirs.flatMap((dir, i) => {
@@ -849,6 +866,14 @@ export function reviewsDir(projectDir: string, root = join(tmpdir(), "eng-kit", 
 	const dir = resolve(projectDir);
 	const common = git(dir, ["rev-parse", "--git-common-dir"]);
 	return join(root, hash(safeRealpath(common ? resolve(dir, common) : dir)));
+}
+
+/** `reviewsDir` of a repository, resolved by `deadline`: `undefined` when git gave no answer in time. */
+function repoStore(repo: string, root = join(tmpdir(), "eng-kit", "reviews"), deadline?: number): string | undefined {
+	if (deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS) return undefined;
+	const dir = resolve(repo);
+	const common = git(dir, ["rev-parse", "--git-common-dir"], timeoutBefore(deadline));
+	return common ? join(root, hash(safeRealpath(resolve(dir, common)))) : undefined;
 }
 
 function decision(action: "block" | "confirm", problem: string, options: ReviewGateOptions): GuardDecision {
