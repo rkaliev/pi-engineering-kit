@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { projectRepos } from "../extensions/lib/repos.ts";
+import { projectRepos, repoOf } from "../extensions/lib/repos.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
 
@@ -48,4 +48,14 @@ test("projectRepos: the 32 limit counts ignored repositories too, so callers wit
 	for (let i = 10; i < 43; i++) mkdirSync(join(many, `r${i}`, ".git"), { recursive: true });
 	assert.deepEqual(projectRepos(many, ["r42/**"]), { kind: "none", repos: [] });
 	assert.deepEqual(projectRepos(many), { kind: "none", repos: [] });
+});
+
+test("repoOf: a path is placed in the workspace repository holding it, by whole folder names", () => {
+	const ws = join(tmpdir(), "ws");
+	const repos = ["a", "b"];
+	assert.equal(repoOf(ws, repos, join(ws, "a", "x", "y")), join(ws, "a"));
+	assert.equal(repoOf(ws, repos, join(ws, "a")), join(ws, "a"));
+	assert.equal(repoOf(ws, repos, `${ws}/a/../b/x`), join(ws, "b"), "a path that leaves its repository by ..");
+	assert.equal(repoOf(ws, repos, join(ws, "ab", "x")), undefined, "a folder whose name only starts with a repository's");
+	assert.equal(repoOf(ws, repos, join(ws, "notes", "x")), undefined);
 });

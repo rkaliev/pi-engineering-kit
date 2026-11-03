@@ -5,7 +5,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { tokenize } from "./patterns.ts";
+import { tokenize, unwrapToken } from "./patterns.ts";
 
 /**
  * Writing redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `>& file`) and `tee` make any command a writer;
@@ -497,4 +497,23 @@ export function quotedSubstitutions(command: string): string[] {
 		}
 	}
 	return found;
+}
+
+/**
+ * Each segment of `command`, started in `cwd`, with the folder it runs in: moves followed as the review gate follows
+ * them (Subshells), a git call's `-C` included; undefined where the guard can't tell. `move`: the segment only moves.
+ */
+export function segmentFolders(command: string, cwd: string): Array<{ raw: string[]; dir: string | undefined; move: boolean }> {
+	const shell = new Subshells(cwd, command);
+	return segmentsOf(tokenize(stripRedirects(command))).map(({ raw, alone, before }) => {
+		shell.enter(raw, before);
+		let dir = shell.dir;
+		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
+		const words = raw.map((t) => unwrapToken(t.replace(/^\(+|\)+$/g, ""))).filter(Boolean);
+		const at = words.indexOf("git");
+		for (let i = at + 1; at !== -1 && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
+			if (words[i] === "-C") dir = dir === undefined ? undefined : follow(dir, words[i + 1]);
+		}
+		return { raw, dir, move: shell.move(raw, alone, before) !== undefined };
+	});
 }

@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { repoOf } from "./repos.ts";
+import { segmentFolders } from "./shell.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -33,18 +35,35 @@ const PUSH_VALUE_FLAGS = new Set(["-o", "--push-option", "--repo", "--receive-pa
 /**
  * Block a command that would put working documents on the base branch: opening or merging a PR/MR,
  * merging into the base, pushing to the base, or committing them on the base. Pushing a work branch is fine.
+ * In a workspace (`workspace` given), each landing is judged in the folder it runs in, with that repository's
+ * task-file folders; a landing whose folder the guard can't tell is blocked.
  */
-export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_DOC_DIRS): GuardDecision | undefined {
-	if (dirs.length === 0) return undefined;
-	const landings = splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined);
-	if (landings.length === 0 || git(projectDir, ["rev-parse", "--git-dir"]) === undefined) return undefined;
+export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_DOC_DIRS, workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[] }): GuardDecision | undefined {
+	if (!workspace) return judge(splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined), projectDir, dirs);
+	for (const { raw, dir } of segmentFolders(command, workspace.cwd)) {
+		const l = landing(raw.map((t) => t.replace(/^\(+|\)+$/g, "")));
+		if (!l) continue;
+		if (dir === undefined) {
+			return { action: "block", reason: "Task-file guard: can't tell which repository this command lands in. Run it from the repository's folder (`cd <repo> && …`)." };
+		}
+		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing.
+		const checkout = repoOf(projectDir, workspace.repos, dir) ?? dir;
+		const found = judge([l], checkout, workspace.dirsFor(checkout));
+		if (found) return found;
+	}
+	return undefined;
+}
 
-	const base = baseBranch(projectDir);
-	const onBase = base !== undefined && currentBranch(projectDir) === base;
+/** The landings of one checkout, judged with its task-file folders. */
+function judge(landings: Landing[], checkout: string, dirs: string[]): GuardDecision | undefined {
+	if (dirs.length === 0 || landings.length === 0 || git(checkout, ["rev-parse", "--git-dir"]) === undefined) return undefined;
+
+	const base = baseBranch(checkout);
+	const onBase = base !== undefined && currentBranch(checkout) === base;
 	for (const l of landings) {
 		if (l.kind === "commit") {
 			if (!onBase) continue;
-			const staged = markdown(stagedPaths(projectDir, dirs));
+			const staged = markdown(stagedPaths(checkout, dirs));
 			if (staged.length > 0) {
 				return {
 					action: "block",
@@ -55,7 +74,7 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 		}
 		const refs = l.kind === "pr" ? ["HEAD"] : l.kind === "merge" ? (onBase ? l.refs : []) : pushedToBase(l, base, onBase);
 		for (const ref of refs) {
-			const files = markdown(trackedPaths(projectDir, ref, dirs));
+			const files = markdown(trackedPaths(checkout, ref, dirs));
 			if (files.length > 0) return { action: "block", reason: leakReason(files, base) };
 		}
 	}

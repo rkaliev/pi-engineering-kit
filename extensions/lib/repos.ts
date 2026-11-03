@@ -4,7 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { isIgnored } from "./commands.ts";
 
 /** More first-level repositories than this and the folder is treated as holding none. */
@@ -42,4 +42,10 @@ export function projectRepos(projectDir: string, ignore: string[] = []): Project
 /** A folder a glob names with everything under it (`<folder>/**`); a glob for files never prunes a folder. */
 export function ignoredFolder(rel: string, ignore: string[]): boolean {
 	return ignore.some((g) => g.endsWith("/**") && isIgnored(rel, [g.slice(0, -3)]));
+}
+
+/** The workspace repository (one of `repos`, folder names under `projectDir`) holding `path`, as an absolute folder; undefined outside them. */
+export function repoOf(projectDir: string, repos: string[], path: string): string | undefined {
+	const abs = resolve(path);
+	return repos.map((r) => join(projectDir, r)).find((dir) => abs === dir || abs.startsWith(dir + sep));
 }

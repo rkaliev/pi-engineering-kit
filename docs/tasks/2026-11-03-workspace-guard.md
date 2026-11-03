@@ -1,6 +1,6 @@
 # The guard protects every repository of a workspace as it protects one repository
 
-Status: plan approved (2026-11-03)
+Status: in progress
 Base: ecb93b9 (eng-kit), 4acc4d5 (pi)
 Links: follow-up 1 of `docs/tasks/2026-10-23-workspace-gates.md` (deleted in 4773b06; eng-kit) · FRAMEWORK-SOURCES §11.44 and the 0.34.x entries of both CHANGELOGs
 
@@ -114,13 +114,13 @@ Release 0.35.0 in both editions. Rollback: revert the release; no stored state c
 **Files:** Modify `src_claude/lib/repos.ts`, `src_claude/lib/shell.ts` · Test `src_claude/tests/repos.test.ts`, `src_claude/tests/reviews.test.ts`
 **Interfaces:** Produces `repoOf(projectDir: string, repos: string[], path: string): string | undefined` (absolute folder of the workspace repository holding the resolved `path`, else undefined) · `segmentFolders(command: string, cwd: string): Array<{ raw: string[]; dir: string | undefined; move: boolean }>`
 
-- [ ] Write failing tests with stubs (`repoOf` → undefined, `segmentFolders` → `[]`):
+- [x] Write failing tests with stubs (`repoOf` → undefined, `segmentFolders` → `[]`):
   - repos.test.ts `repoOf places a path in its workspace repository` → workspace `ws` with `a/.git`, `b/.git`: `ws/a/x/y` → `ws/a`; `ws/a` → `ws/a`; `ws/a/../b/x` → `ws/b`; `ws/ab/x` → undefined; `ws/notes/x` → undefined;
   - reviews.test.ts `segmentFolders follows moves and git -C` → in `ws`: `cd a && npm publish` → dirs `[ws, ws/a]`, moves `[true, false]`; `cd a && cd ../b && npm publish` → last dir `ws/b`; `git -C b status` → `[ws/b]`; `echo $(cd b && npm publish)` → every dir undefined.
-- [ ] Run `node --test tests/repos.test.ts tests/reviews.test.ts` → expect FAIL: `undefined !== '<ws>/a'` and `[] deepEqual [...]`
-- [ ] Implement `repoOf`: `resolve(path)`, then the first `r` of `repos` with `abs === join(projectDir, r)` or `abs.startsWith(join(projectDir, r) + sep)`. Implement `segmentFolders` with the review gate's loop (`Subshells`, `segmentsOf(tokenize(stripRedirects(command)))`, `enter` before reading `dir`, `move` after); a segment whose git call has `-C <x>` (git's options scanned as `landing` scans them) gets `follow(dir, x)`.
-- [ ] Run the two files → PASS; `npm test` → all pass
-- [ ] Commit `feat(guard): place a path and each command segment in a workspace repository`
+- [x] Run `node --test tests/repos.test.ts tests/reviews.test.ts` → expect FAIL: `undefined !== '<ws>/a'` and `[] deepEqual [...]`
+- [x] Implement `repoOf`: `resolve(path)`, then the first `r` of `repos` with `abs === join(projectDir, r)` or `abs.startsWith(join(projectDir, r) + sep)`. Implement `segmentFolders` with the review gate's loop (`Subshells`, `segmentsOf(tokenize(stripRedirects(command)))`, `enter` before reading `dir`, `move` after); a segment whose git call has `-C <x>` (git's options scanned as `landing` scans them) gets `follow(dir, x)`.
+- [x] Run the two files → PASS; `npm test` → all pass
+- [x] Commit `feat(guard): place a path and each command segment in a workspace repository`
 
 ### Task 2: the configs in force and how they combine (shared `lib/scope.ts`)
 
@@ -133,90 +133,90 @@ Release 0.35.0 in both editions. Rollback: revert the release; no stored state c
 - `scopedConfig(command: string, cwd: string, scope: GuardScope): GuardConfig` (outside a workspace: `scope.config`; inside: `block`/`confirm` = the workspace's plus those of each repository a segment runs in, all repositories when any `dir` is undefined; `allow` = the workspace's plus the one repository's when every non-move segment runs in that repository and no `dir` is undefined; `protectedPaths`, `workDocs`, `reviewGate` = the workspace's);
 - `checkCommand(…, env, judgeWrite = (target) => checkPath("write", target, cwd, config))` judges a heredoc write target with `judgeWrite`.
 
-- [ ] Write failing tests (stub module returning `scope.config` and `checkPath` from `projectDir` only), each in a temp workspace with repositories `a`, `b` and configs passed through `load`:
+- [x] Write failing tests (stub module returning `scope.config` and `checkPath` from `projectDir` only), each in a temp workspace with repositories `a`, `b` and configs passed through `load`:
   - `a CI pipeline or guard config in a workspace repository asks` → `scopedPath("write", ws/a/.github/workflows/ci.yml)` → `confirm`; `ws/a/.claude/guard.json` → `confirm`; criterion 1;
   - `a repository's protected paths block under it, measured from it` → `a` `{ protectedPaths: ["secret/"] }`: `ws/a/secret/x` → `block`, `ws/b/secret/x` → `allow`; criterion 2;
   - `a repository's rules apply where the command runs` → `a` `{ block: ["npm publish"] }`, through `checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws)`: `cd a && npm publish` → `block`; `cd b && npm publish` → `allow`; `echo $(cd b) && npm publish` → `block`; criterion 2;
   - `a repository's allow applies only when the whole command runs in it` → `a` `{ allow: ["npm run deploy"] }`: `cd a && npm run deploy` → `allow`; `cd b && npm run deploy` → `confirm`; `cd a && npm run deploy && cd ../b && npm run deploy` → `confirm`; workspace `{ allow: ["npm run deploy"] }` → `cd b && npm run deploy` → `allow`; criterion 3;
   - `outside a workspace the scope is the project's config` → a single repository: `scopedConfig` returns `scope.config` unchanged, `scopedPath` equals `checkPath`; criterion 8.
-- [ ] Run `node --test tests/scope.test.ts` → expect FAIL: `'allow' !== 'confirm'` on the CI case
-- [ ] Implement `lib/scope.ts`; `guardScope` uses `projectRepos(projectDir)`.
-- [ ] Run → PASS; `npm test` → all pass (guard.test.ts unchanged)
-- [ ] Commit `feat(guard): combine the workspace's and its repositories' guard configs`
+- [x] Run `node --test tests/scope.test.ts` → expect FAIL: `'allow' !== 'confirm'` on the CI case
+- [x] Implement `lib/scope.ts`; `guardScope` uses `projectRepos(projectDir)`.
+- [x] Run → PASS; `npm test` → all pass (guard.test.ts unchanged)
+- [x] Commit `feat(guard): combine the workspace's and its repositories' guard configs`
 
 ### Task 3: own-branch push from a workspace (`ownBranchPush`)
 
 **Files:** Modify `src_claude/lib/patterns.ts` · Test `src_claude/tests/guard.test.ts`
 **Interfaces:** Consumes `repoOf`, `projectRepos`
 
-- [ ] Write failing test `a plain push of a workspace repository's work branch passes` → helper `pushWorkspace()`: a temp folder holding `pushRepo()`'s setup as `a` (move or build it there); `ask("git -C a push", ws, env, ws)` → `allow`; with `a` on `main` → `confirm`; `ask("git -C a push", ws/a, env, ws)` → `allow`; criterion 6
-- [ ] Run `node --test tests/guard.test.ts` → expect FAIL: `'confirm' !== 'allow'`
-- [ ] Implement: the owner is `project` outside a workspace, else `repoOf(project, repos, dir)`; no owner → false; compare `commonDir(dir)` with `commonDir(owner)`.
-- [ ] Run → PASS; `npm test` → all pass
-- [ ] Commit `fix(guard): a workspace repository's own work branch is pushed without a question`
+- [x] Write failing test `a plain push of a workspace repository's work branch passes` → helper `pushWorkspace()`: a temp folder holding `pushRepo()`'s setup as `a` (move or build it there); `ask("git -C a push", ws, env, ws)` → `allow`; with `a` on `main` → `confirm`; `ask("git -C a push", ws/a, env, ws)` → `allow`; criterion 6
+- [x] Run `node --test tests/guard.test.ts` → expect FAIL: `'confirm' !== 'allow'`
+- [x] Implement: the owner is `project` outside a workspace, else `repoOf(project, repos, dir)`; no owner → false; compare `commonDir(dir)` with `commonDir(owner)`.
+- [x] Run → PASS; `npm test` → all pass
+- [x] Commit `fix(guard): a workspace repository's own work branch is pushed without a question`
 
 ### Task 4: task-file leak guard per landing repository (`checkWorkDocs`)
 
 **Files:** Modify `src_claude/lib/workdocs.ts` · Test `src_claude/tests/workdocs.test.ts`
 **Interfaces:** Consumes `repoOf`, `segmentFolders` · Produces `checkWorkDocs(command, projectDir, dirs = WORK_DOC_DIRS, workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[] })`; without `workspace`, today's behaviour
 
-- [ ] Write failing tests: workspace with `repo()`-style `a` on `feat/x` holding a committed `docs/tasks/t.md`, and a clean `b`; `ws = (cmd, cwd = root) => checkWorkDocs(cmd, root, undefined, { cwd, repos: ["a", "b"], dirsFor: (r) => (r === join(root, "a") ? aDirs : WORK_DOC_DIRS) })?.action ?? "allow"`:
+- [x] Write failing tests: workspace with `repo()`-style `a` on `feat/x` holding a committed `docs/tasks/t.md`, and a clean `b`; `ws = (cmd, cwd = root) => checkWorkDocs(cmd, root, undefined, { cwd, repos: ["a", "b"], dirsFor: (r) => (r === join(root, "a") ? aDirs : WORK_DOC_DIRS) })?.action ?? "allow"`:
   - `cd a && gh pr create` → `block`; `git -C a push origin feat/x:main` → `block`; `gh pr create` with `cwd` = `root/a` → `block` (review focus 3); `cd b && gh pr create` → `allow`; criterion 4;
   - `a repository's workDocs folders decide its task files` → `aDirs = ["plans"]`, `a/plans/p.md` committed: `cd a && gh pr create` → `block` naming `plans/p.md`; with only `docs/tasks/t.md` → `allow`;
   - `a landing whose repository the guard can't tell is blocked` → `cd $D && gh pr create` → `block`, reason matches `/can't tell which repository/`.
-- [ ] Run `node --test tests/workdocs.test.ts` → expect FAIL: `'allow' !== 'block'`
-- [ ] Implement: move today's per-landing body into `judge(landings: Landing[], checkout: string, dirs: string[])`; with `workspace`, each landing segment of `segmentFolders(command, workspace.cwd)` is judged in `repoOf(projectDir, repos, dir)` with `dirsFor(repo)`; an undefined `dir` or no repository → `block` with reason `Task-file guard: can't tell which repository this command lands in. Run it from the repository's folder (\`cd <repo> && …\`).`
-- [ ] Run → PASS; `npm test` → all pass
-- [ ] Commit `fix(guard): task files can't reach a workspace repository's base branch`
+- [x] Run `node --test tests/workdocs.test.ts` → expect FAIL: `'allow' !== 'block'`
+- [x] Implement: move today's per-landing body into `judge(landings: Landing[], checkout: string, dirs: string[])`; with `workspace`, each landing segment of `segmentFolders(command, workspace.cwd)` is judged in `repoOf(projectDir, repos, dir)` with `dirsFor(repo)`; an undefined `dir` or no repository → `block` with reason `Task-file guard: can't tell which repository this command lands in. Run it from the repository's folder (\`cd <repo> && …\`).`
+- [x] Run → PASS; `npm test` → all pass
+- [x] Commit `fix(guard): task files can't reach a workspace repository's base branch`
 
 ### Task 5: review gate waived per repository
 
 **Files:** Modify `src_claude/lib/reviews.ts` · Test `src_claude/tests/reviews.test.ts`
 **Interfaces:** Produces `ReviewGateOptions.waived?: (checkout: string) => boolean`
 
-- [ ] Write failing test `a repository's waiver lifts the gate for its landings only` → `workspaceRepos()`, no reviews recorded, options `{ missing: "block", …, waived: (c) => c === join(ws, "a") }`: `check("cd a && gh pr create", …, ws)` → undefined; `cd b && gh pr create` → `block`; criterion 5
-- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL: the `a` case returns `block`
-- [ ] Implement in `checkSegments`: after the checkout is known to be git, `if (options.waived?.(where)) continue;`. A hidden landing still decides as today.
-- [ ] Run → PASS; `npm test` → all pass
-- [ ] Commit `feat(review-gate): a repository's waiver covers only its own landings`
+- [x] Write failing test `a repository's waiver lifts the gate for its landings only` → `workspaceRepos()`, no reviews recorded, options `{ missing: "block", …, waived: (c) => c === join(ws, "a") }`: `check("cd a && gh pr create", …, ws)` → undefined; `cd b && gh pr create` → `block`; criterion 5
+- [x] Run `node --test tests/reviews.test.ts` → expect FAIL: the `a` case returns `block`
+- [x] Implement in `checkSegments`: after the checkout is known to be git, `if (options.waived?.(where)) continue;`. A hidden landing still decides as today.
+- [x] Run → PASS; `npm test` → all pass
+- [x] Commit `feat(review-gate): a repository's waiver covers only its own landings`
 
 ### Task 6: Claude hooks judge per repository (PreToolUse)
 
 **Files:** Modify `src_claude/lib/hooks.ts` · Test `src_claude/tests/hooks.test.ts`
 **Interfaces:** Consumes Tasks 1–5
 
-- [ ] Write failing hooks tests with `setupWorkspace()` (extend it to write per-repository `.claude/guard.json` when given):
+- [x] Write failing hooks tests with `setupWorkspace()` (extend it to write per-repository `.claude/guard.json` when given):
   - `guard: in a workspace, a Write of a repository's CI pipeline asks` → PreToolUse Write `a/.github/workflows/ci.yml` → `permissionDecision: "ask"`; criterion 1;
   - `guard: a shell write of a repository's guard config asks` → Bash `echo {} > a/.claude/guard.json` → `ask`; criterion 1;
   - `guard: a heredoc write under a repository's protected path is denied` → `a` `{ protectedPaths: ["secret/"] }`, Bash `cat > a/secret/x <<'EOF'` / `x` / `EOF` → `deny`; criterion 2;
   - `guard: the implementer is asked before pushing in a workspace` → `a` with a bare origin and branch `feat/x` set up as `pushRepo()` does, `agent_type: "eng-kit:implementer"`, Bash `git -C a push` → `ask`; the same call from the main agent → no decision; criterion 6;
   - `guard: an invalid repository config warns with its path` → `a/.claude/guard.json` = `{` → stderr warning contains `a/.claude/guard.json`, Write `a/x.ts` → no decision (review focus 4).
-- [ ] Run `node --test tests/hooks.test.ts` → expect FAIL: no `ask` for the CI Write
-- [ ] Implement in `preToolUse`: `const scope = guardScope(env.projectDir, (root) => collect(loadGuardConfig(root)))` (warnings prefixed with the root's relative path); Read/Grep/Write/Edit → `scopedPath`; shell → `checkCommand(command, projectDir, scopedConfig(command, cwd, scope), cwd, process.env, (t) => scopedPath("write", t, scope))`; `checkWorkDocs` with `workspace` when `scope.repos.size > 0` (`dirsFor` = that repository's `workDocs ?? WORK_DOC_DIRS`); `checkGateFiles` for `.claude/guard.json` and each `<repo>/.claude/guard.json`, strictest; `checkReview` with `waived = (c) => scope.repos.get(repoOf(…, c) ?? "")?.reviewGate === false`.
-- [ ] Run → PASS; `npm test` → all pass
-- [ ] Commit `fix(guard): judge each workspace repository's paths and commands by its own rules`
+- [x] Run `node --test tests/hooks.test.ts` → expect FAIL: no `ask` for the CI Write
+- [x] Implement in `preToolUse`: `const scope = guardScope(env.projectDir, (root) => collect(loadGuardConfig(root)))` (warnings prefixed with the root's relative path); Read/Grep/Write/Edit → `scopedPath`; shell → `checkCommand(command, projectDir, scopedConfig(command, cwd, scope), cwd, process.env, (t) => scopedPath("write", t, scope))`; `checkWorkDocs` with `workspace` when `scope.repos.size > 0` (`dirsFor` = that repository's `workDocs ?? WORK_DOC_DIRS`); `checkGateFiles` for `.claude/guard.json` and each `<repo>/.claude/guard.json`, strictest; `checkReview` with `waived = (c) => scope.repos.get(repoOf(…, c) ?? "")?.reviewGate === false`.
+- [x] Run → PASS; `npm test` → all pass
+- [x] Commit `fix(guard): judge each workspace repository's paths and commands by its own rules`
 
 ### Task 7: Stop reminders per repository
 
 **Files:** Modify `src_claude/lib/approvals.ts`, `src_claude/lib/hooks.ts` · Test `src_claude/tests/hooks.test.ts`, `src_claude/tests/workdocs.test.ts`
 **Interfaces:** Produces `taskFileReminders(projectDir: string, dirsFor: (root: string) => string[], deadline: number): { approved: string[]; finished: string[]; onBase: string | undefined; skipped: string[] }` (paths prefixed with the repository name in a workspace; `onBase` is `main` in one repository, `main in a, master in b` in a workspace; `skipped` = repositories not reached before `deadline`)
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - hooks `Stop names a workspace repository's approved and finished task files` → uncommitted `a/docs/tasks/t.md` with `Status: design approved (2026-11-03)`, committed `b/docs/tasks/done.md` whose Plan has only `- [x]` → Stop reason contains `a/docs/tasks/t.md` and `b/docs/tasks/done.md`; criterion 7;
   - workdocs.test.ts `taskFileReminders names the repositories it had no time for` → `deadline = Date.now() - 1` → `skipped` = `["a", "b"]`, nothing else listed; and `taskFileWarning(["a", "b"])` (exported from approvals.ts) → `"Task-file reminders skipped (no time left): a, b"`, `taskFileWarning([])` → undefined; criterion 7.
-- [ ] Run → expect FAIL: the Stop reason lacks `a/docs/tasks/t.md`
-- [ ] Implement `taskFileReminders` (one repository: today's `uncommittedApproved` + `finishedWorkDocs` + `onBaseBranch`; workspace: the session folder's `finishedWorkDocs` first, then each repository until `deadline`); `stopGates` uses it with `Date.now() + TASK_FILE_BUDGET_MS` and returns `taskFileWarning(skipped)` as `warning`.
-- [ ] Run → PASS; `npm test` → all pass
-- [ ] Commit `fix(guard): approval and task-file reminders cover every workspace repository`
+- [x] Run → expect FAIL: the Stop reason lacks `a/docs/tasks/t.md`
+- [x] Implement `taskFileReminders` (one repository: today's `uncommittedApproved` + `finishedWorkDocs` + `onBaseBranch`; workspace: the session folder's `finishedWorkDocs` first, then each repository until `deadline`); `stopGates` uses it with `Date.now() + TASK_FILE_BUDGET_MS` and returns `taskFileWarning(skipped)` as `warning`.
+- [x] Run → PASS; `npm test` → all pass
+- [x] Commit `fix(guard): approval and task-file reminders cover every workspace repository`
 
 ### Task 8: pi edition — shared files and libraries
 
 **Files:** Copy to `src/extensions/lib/`: `repos.ts`, `shell.ts`, `reviews.ts`, `approvals.ts`, `scope.ts` · Modify `src/extensions/lib/patterns.ts`, `src/extensions/lib/workdocs.ts` (Tasks 2–4 changes) · Copy and adapt tests: `src/tests/repos.test.ts`, `reviews.test.ts`, `scope.test.ts` (`.pi/guard.json`), `guard.test.ts`, `workdocs.test.ts`
 
-- [ ] Copy the shared files and their tests (their RED was seen in Tasks 1, 2, 5 and 7); copy Task 3's and Task 4's test cases into pi's `guard.test.ts` and `workdocs.test.ts`; run `node --test tests/guard.test.ts tests/workdocs.test.ts` → expect FAIL: `'confirm' !== 'allow'` (push) and `'allow' !== 'block'` (task file)
-- [ ] Port the `patterns.ts` and `workdocs.ts` changes (pi's `checkPath` still asks for writes outside the project)
-- [ ] Run `npm test --prefix src` → all pass; `for f in repos shell reviews approvals scope; do cmp src_claude/lib/$f.ts src/extensions/lib/$f.ts; done` → no output
-- [ ] Commit `feat(guard): place paths and commands in a workspace repository` (pi)
+- [x] Copy the shared files and their tests (their RED was seen in Tasks 1, 2, 5 and 7); copy Task 3's and Task 4's test cases into pi's `guard.test.ts` and `workdocs.test.ts`; run `node --test tests/guard.test.ts tests/workdocs.test.ts` → expect FAIL: `'confirm' !== 'allow'` (push) and `'allow' !== 'block'` (task file)
+- [x] Port the `patterns.ts` and `workdocs.ts` changes (pi's `checkPath` still asks for writes outside the project)
+- [x] Run `npm test --prefix src` → all pass; `for f in repos shell reviews approvals scope; do cmp src_claude/lib/$f.ts src/extensions/lib/$f.ts; done` → no output
+- [x] Commit `feat(guard): place paths and commands in a workspace repository` (pi)
 
 ### Task 9: pi edition — guard and verify extensions
 
@@ -242,4 +242,12 @@ Release 0.35.0 in both editions. Rollback: revert the release; no stored state c
 
 ## Progress
 
-None yet
+- Baseline 2026-11-03 on eng-kit a6a6bc6 / pi 17b418b: workspace verify 4/4 PASS; eng-kit npm test 617 tests, 606 pass, 11 skipped, 0 fail; pi npm test 578 tests, 567 pass, 11 skipped, 0 fail. Drift since Base: only the plan commit.
+- Task 1: complete (a6a6bc6..feat(guard) commit; RED: repoOf returned undefined, segmentFolders []; GREEN: node --test tests/repos.test.ts tests/reviews.test.ts → 91 pass; npm test → 619 tests: 608 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: the judgeWrite parameter of checkCommand moves to Task 6 — its only test (a heredoc into a repository's protected path) is a hooks test there — cost if wrong: none, the parameter lands with its test. Ruling: the plan's scopedConfig test used npm publish, a built-in confirm, so cd b would ask; the test uses make release — cost if wrong: none. Task 2: complete (74bd222..feat(guard) commit; RED: 5 of 6 scope tests failed on assertions ('allow' !== 'confirm'/'block'); the outside-a-workspace test passes on the stub by design, as criterion 8's guard; GREEN: node --test tests/scope.test.ts → 6 pass; npm test → 625 tests: 614 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: Task 3's workspace is pushRepo()'s own folder (the bare origin.git beside the repository repo), not a new helper — cost if wrong: none. Task 3: complete (ed033f7..fix(guard) commit; RED: 'confirm' !== 'allow' for git -C repo push from the workspace; GREEN: node --test tests/guard.test.ts → 52 pass; npm test → 626 tests: 615 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: in a workspace only a landing whose folder is unknown is blocked; a known folder outside the workspace repositories (the workspace root, a repository elsewhere) is judged as it is, and one that isn't git lands nothing — the design's 'unknown landing folder blocks' read narrowly, so a stray git commit at the root isn't refused with a misleading reason — cost if wrong: a landing from a known non-workspace checkout is judged with the default task-file folders. repo() in workdocs.test.ts takes an optional folder. Task 4: complete (89db477..fix(guard) commit; RED: 3 workspace tests failed ('allow' !== 'block'); GREEN: node --test tests/workdocs.test.ts → 10 pass; npm test → 629 tests: 618 pass, 11 skipped, 0 fail; tsc clean).
+- Task 5: complete (25d0fa3..feat(review-gate) commit; RED: the waived repository's PR returned block ('no reviewer verdict recorded'); GREEN: node --test tests/reviews.test.ts → 87 pass; npm test → 630 tests: 619 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: checkGateFiles is not called per repository — it already asks for any word ending in .claude/guard.json (a/.claude/guard.json, cd a && … > .claude/guard.json); the hooks test for it passed before the change and stays as criterion 1's regression guard — cost if wrong: none, the test pins it. Ruling: the implementer/main-agent push test passed already after Task 3 (it would have failed on Base) — kept as criterion 6's hooks-level guard. Ruling: a repository's task-file folders are its own workDocs, else the session folder's, else the default — cost if wrong: a workspace-wide workDocs: [] doesn't turn off a repository that names its folders. Task 6: complete (bbfd6e4..fix(guard) commit; RED: 4 of 6 workspace hooks tests failed (Write CI: undefined !== 'ask'; heredoc under a's protected path not denied; b's PR waived: 'deny' expected undefined; no warning naming a/.claude/guard.json); GREEN: node --test tests/hooks.test.ts → 80 pass; npm test → 636 tests: 625 pass, 11 skipped, 0 fail; tsc clean).
+- Ruling: taskFileReminders takes want ({ approved, finished }, so already-reminded parts run no git, as before) and slow (the session's slowParts: those repositories are skipped without git and named in the warning) — the existing test 'a workspace repository late twice running is remembered' failed (git status in the remembered repository) until slow was passed; uncommittedApproved takes an optional timeout, bounded by the time left — cost if wrong: a slow repository's task files aren't reminded in that session (the warning names it). Task 7: complete (6b6a753..fix(guard) commit; RED: Stop reason lacked a/docs/tasks/t.md; taskFileReminders returned skipped [] for a past deadline; the slow-skip assertion failed with the condition removed (and the remembered-repository test took 8.2 s, failing); GREEN: npm test → 638 tests: 627 pass, 11 skipped, 0 fail; tsc clean).
+- Task 8: complete (pi 17b418b..feat(guard) commit; the eng-kit test diffs applied with ../extensions/lib/ imports, scope.test.ts with .pi/guard.json; RED: node --test tests/guard.test.ts tests/workdocs.test.ts … → 4 fail ('confirm' !== 'allow' push; 'allow' !== 'block' ×3 task files); GREEN after porting patterns.ts and workdocs.ts: npm test --prefix src → 592 tests: 581 pass, 11 skipped, 0 fail; tsc clean; cmp of repos, shell, reviews, approvals, scope → identical).

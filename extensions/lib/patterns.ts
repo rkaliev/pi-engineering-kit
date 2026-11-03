@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { projectRepos, repoOf } from "./repos.ts";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
@@ -62,8 +63,18 @@ export function isSecretPath(path: string): boolean {
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
 
-/** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
-export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
+/**
+ * Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. `judgeWrite`
+ * judges a heredoc's write target (in a workspace, from the repository it lands in).
+ */
+export function checkCommand(
+	command: string,
+	cwd: string,
+	config: GuardConfig,
+	dir: string = cwd,
+	env: NodeJS.ProcessEnv = process.env,
+	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
+): GuardDecision {
 	// A command that only writes a project file through a quoted heredoc runs nothing from its body: judge its first
 	// line, and its target as a Write would be. A target outside the project (a shell rc file) leaves it judged whole.
 	const heredoc = quotedHeredoc(command);
@@ -85,7 +96,7 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in .pi/guard.json.` };
 		}
 	}
-	const written = target ? checkPath("write", target, cwd, config) : ALLOW;
+	const written = target ? judgeWrite(target) : ALLOW;
 	if (written.action !== "allow") return written;
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
@@ -385,9 +396,12 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	if (positional.length > 2) return false;
 
 	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
-	// Only the project's own repository (or one of its worktrees) is pushed silently.
+	// Only the project's own repository (or one of its worktrees) is pushed silently; in a workspace, the repository
+	// the push runs in.
 	const repoDir = commonDir(dir);
-	if (repoDir === undefined || repoDir !== commonDir(project)) return false;
+	const workspace = projectRepos(project);
+	const owner = workspace.kind === "workspace" ? repoOf(project, workspace.repos, dir) : project;
+	if (repoDir === undefined || owner === undefined || repoDir !== commonDir(owner)) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
 	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;

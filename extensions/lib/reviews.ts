@@ -52,6 +52,8 @@ export interface ReviewGateOptions {
 	waiver: string;
 	/** The project's verification commands: they may run before a landing in the same command. */
 	verify: string[];
+	/** A checkout whose own config waives the gate (a workspace repository's `"reviewGate": false`): its landings pass. */
+	waived?: (checkout: string) => boolean;
 }
 
 const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2, No: 3 };
@@ -514,6 +516,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
 			continue;
 		}
+		if (options.waived?.(where)) continue;
 		const base = baseBranch(where);
 		if (!base) continue;
 		const land = l.kind === "push" ? withDestination(l, where) : l;

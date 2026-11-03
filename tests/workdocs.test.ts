@@ -4,13 +4,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { baseBranch, checkWorkDocs, finishedWorkDocs, landing } from "../extensions/lib/workdocs.ts";
+import { taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
+import { baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
 
 const TASK = "docs/tasks/2026-01-01-a.md";
 
 /** A repo on `main` with one commit; returns a git runner and a file writer. */
-function repo() {
-	const dir = mkdtempSync(join(tmpdir(), "workdocs-"));
+function repo(dir = mkdtempSync(join(tmpdir(), "workdocs-"))) {
+	mkdirSync(dir, { recursive: true });
 	const git = (...args: string[]) => {
 		const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
 		assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
@@ -147,4 +148,50 @@ test("push options that take a separate value don't name the remote or a refspec
 	assert.deepEqual(push("git push -u origin feat/a"), { remote: "origin", refspecs: ["feat/a"] }, "a flag without a value takes nothing");
 	assert.deepEqual(push("git push -o -o origin main"), { remote: "origin", refspecs: ["main"] }, "a value may start with a dash");
 	for (const repo of ["git push --repo origin", "git push --repo=origin"]) assert.deepEqual(push(repo), { remote: "origin", refspecs: [] }, repo);
+});
+
+/** A folder outside git holding `a` on `feat/x` with a committed task file, and `b` on `feat/y` without one. */
+function workspace(aDirs?: string[]) {
+	const root = mkdtempSync(join(tmpdir(), "workdocs-ws-"));
+	const a = repo(join(root, "a"));
+	a.git("switch", "-qc", "feat/x");
+	a.commit({ [TASK]: "# A\n" });
+	const b = repo(join(root, "b"));
+	b.git("switch", "-qc", "feat/y");
+	b.commit({ "src/b.ts": "x\n" });
+	const dirsFor = (r: string) => (r === join(root, "a") && aDirs ? aDirs : WORK_DOC_DIRS);
+	const check = (command: string, cwd = root) => checkWorkDocs(command, root, undefined, { cwd, repos: ["a", "b"], dirsFor });
+	return { root, a, check };
+}
+
+test("in a workspace, a landing is judged in the repository it lands in", () => {
+	const { root, check } = workspace();
+	const act = (command: string, cwd?: string) => check(command, cwd)?.action ?? "allow";
+	assert.equal(act("cd a && gh pr create"), "block");
+	assert.equal(act("git -C a push origin feat/x:main"), "block");
+	assert.equal(act("gh pr create", join(root, "a")), "block", "a command started inside the repository");
+	assert.equal(act("cd b && gh pr create"), "allow");
+});
+
+test("in a workspace, a repository's workDocs folders decide its task files", () => {
+	const { a, check } = workspace(["plans"]);
+	assert.equal(check("cd a && gh pr create")?.action ?? "allow", "allow", "docs/tasks is not a's task-file folder");
+	a.commit({ "plans/p.md": "# P\n" });
+	const pr = check("cd a && gh pr create");
+	assert.equal(pr?.action, "block");
+	assert.match(pr!.reason!, /plans\/p\.md/);
+});
+
+test("in a workspace, a landing whose folder the guard can't tell is blocked", () => {
+	const pr = workspace().check("cd $D && gh pr create");
+	assert.equal(pr?.action, "block");
+	assert.match(pr!.reason!, /can't tell which repository/);
+});
+
+test("taskFileReminders names the workspace repositories it had no time for or found slow", () => {
+	const { root } = workspace();
+	assert.deepEqual(taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() - 1), { approved: [], finished: [], onBase: undefined, skipped: ["a", "b"] });
+	assert.deepEqual(taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 60_000, undefined, ["a"]).skipped, ["a"], "a repository found slow");
+	assert.equal(taskFileWarning(["a", "b"]), "Task-file reminders skipped (no time left, or slow in this session): a, b");
+	assert.equal(taskFileWarning([]), undefined);
 });

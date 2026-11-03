@@ -174,6 +174,16 @@ function pushRepo(withOriginHead = true) {
 // The project is the repository the command runs in, unless a test says otherwise.
 const ask = (cmd: string, dir: string, env: NodeJS.ProcessEnv = process.env, project = dir) => checkCommand(cmd, project, none, dir, env).action;
 
+test("from a workspace folder, a plain push of a repository's own work branch asks nothing; its base still asks", () => {
+	const repo = pushRepo();
+	// pushRepo's folder holds the bare origin and the repository `repo`: a workspace of one repository.
+	const ws = dirname(repo);
+	assert.equal(ask("git -C repo push", ws, process.env, ws), "allow");
+	assert.equal(ask("git push origin feat/x", repo, process.env, ws), "allow", "run from the repository's folder");
+	sh(repo, "switch", "-q", "main");
+	assert.equal(ask("git -C repo push", ws, process.env, ws), "confirm");
+});
+
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();
 	for (const cmd of [

@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { stripRedirects } from "../extensions/lib/shell.ts";
+import { segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
@@ -419,6 +419,13 @@ function workspaceRepos() {
 	const check = (command: string) => checkReview(command, ws, ws, OPTIONS, root);
 	return { ws, root, a, b, ids, check };
 }
+
+test("in a workspace, a repository's waiver lifts the review gate for its landings only", () => {
+	const { ws, root } = workspaceRepos();
+	const options: ReviewGateOptions = { ...OPTIONS, waived: (checkout) => checkout === join(ws, "a") };
+	assert.equal(checkReview("cd a && gh pr create", ws, ws, options, root), undefined);
+	assert.equal(checkReview("cd b && gh pr create", ws, ws, options, root)?.action, "block");
+});
 
 test("a workspace records the verdict in the repository that has the commit", () => {
 	const { ws, root, a, b, ids } = workspaceRepos();
@@ -1250,4 +1257,15 @@ test("highestFindingIds names the highest finding number of each prefix (F, S, T
 	review(`F1 fixed; F4 still open (rounds 1–2).\n- F5 a.ts:4 · w. See SEV-30 and HYG-01.\n- T3 a.test.ts:1 · v\n- C1 a.ts:5 · u\n${report(fixed, "With fixes", head)}`);
 	assert.deepEqual(highestFindingIds(dir, reviewChain(dir, fixed, root), root), { F: 5, S: 2, T: 3, C: 1 });
 	assert.deepEqual(highestFindingIds(dir, [], root), {});
+});
+
+test("segmentFolders: each segment runs where the moves before it and its git -C lead", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
+	const folders = (command: string) => segmentFolders(command, ws).map((s) => [s.dir, s.move]);
+	assert.deepEqual(folders("cd a && npm publish"), [[ws, true], [join(ws, "a"), false]]);
+	assert.deepEqual(folders("cd a && cd ../b && npm publish").at(-1), [join(ws, "b"), false], "two moves");
+	assert.deepEqual(folders("git -C b status"), [[join(ws, "b"), false]]);
+	const hidden = segmentFolders("echo $(cd b && npm publish)", ws);
+	assert.ok(hidden.length > 0 && hidden.every((s) => s.dir === undefined), "a move in a substitution hides every folder");
 });
