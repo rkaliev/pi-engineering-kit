@@ -695,7 +695,7 @@ test("/kit-init asks per file, writes only what was accepted, and offers /onboar
 	await commands.get("kit-init").handler("", accepted);
 	assert.equal(existsSync(join(dir, ".pi/verify.json")), true);
 	assert.ok(accepted.asked.some((q) => /onboard/i.test(q)));
-	assert.deepEqual(sent.at(-1), { message: { user: "/onboard" }, options: { expandPromptTemplates: true } });
+	assert.deepEqual(sent.at(-1), { message: { user: "/onboard" }, options: { expandPromptTemplates: true, deliverAs: "followUp" } });
 });
 
 test("/kit-init without UI and without --yes only reports the plan", async () => {

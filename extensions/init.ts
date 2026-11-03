@@ -54,7 +54,7 @@ export default function initExtension(pi: ExtensionAPI) {
 
 			if (needsOnboard && !yes && ctx.hasUI) {
 				const go = await ctx.ui.confirm("kit-init: run /onboard now?", "The agent maps the repo, proves the commands and proposes AGENTS.md.");
-				if (go) pi.sendUserMessage("/onboard", { expandPromptTemplates: true });
+				if (go) pi.sendUserMessage("/onboard", { expandPromptTemplates: true, deliverAs: "followUp" });
 			}
 		},
 	});

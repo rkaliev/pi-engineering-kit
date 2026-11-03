@@ -57,7 +57,7 @@ bun add -g @earendil-works/pi-coding-agent
 
 ```bash
 npx -y @earendil-works/pi-coding-agent          # latest version
-npx -y @earendil-works/pi-coding-agent@0.87.1   # a specific version
+npx -y @earendil-works/pi-coding-agent@1.5.0   # a specific version
 pnpm dlx @earendil-works/pi-coding-agent        # the same via pnpm
 bunx @earendil-works/pi-coding-agent            # the same via bun
 ```
@@ -70,7 +70,7 @@ bunx @earendil-works/pi-coding-agent            # the same via bun
 ### pi version in the project
 
 ```bash
-npm install -D @earendil-works/pi-coding-agent@0.87.1
+npm install -D @earendil-works/pi-coding-agent@1.5.0
 npx pi
 ```
 
