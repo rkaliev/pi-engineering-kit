@@ -1200,6 +1200,30 @@ test("review gate: a review of unverified edits that misses a workspace reposito
 	assert.deepEqual(readReports(join(dir, "c"), head, reviewsRoot).map((r) => [r.run, r.verdict]).sort(), [["c1-0", "Inconclusive"], ["c1-0-held", "Inconclusive"]]);
 });
 
+for (const unverified of [false, true]) {
+	test(`review gate: a ${unverified ? "review of unverified edits" : "report"} naming a commit a hanging repository can't be searched for holds each HEAD back, without a second search`, async () => {
+		const { dir, git } = workspaceProject();
+		const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+		const g = fakePi();
+		guard(g.pi, { reviewsRoot });
+		const head = (repo: string) => String(git(repo, "rev-parse", "HEAD")).trim();
+		const c = ctx(dir);
+		const slow = slowGit(realpathSync(join(dir, "b")), "deadbeef1", 20);
+		verifyState.unverified = unverified;
+		let calls = "";
+		try {
+			await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: ${head("a")}\nReviewed HEAD: deadbeef1\nReady to merge: No` }] }, isError: false }, c);
+			calls = readFileSync(slow.log, "utf8");
+		} finally {
+			verifyState.unverified = false;
+			slow.restore();
+		}
+		assert.equal(calls.split("\n").filter((l) => l.includes("deadbeef1")).length, 1, "the commit is searched for once");
+		for (const repo of ["a", "b"]) assert.deepEqual(readReviews(join(dir, repo), reviewsRoot).map((r) => [r.sha, r.verdict]), [[head(repo), "Inconclusive"]], repo);
+		assert.ok(c.notes.some((n) => /could not be searched in time/.test(n)), c.notes.join("\n"));
+	});
+}
+
 test("review gate: a review of unverified edits with a bad BASE holds back the commit it names, not HEAD", async () => {
 	const { dir, git } = workspaceProject();
 	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));

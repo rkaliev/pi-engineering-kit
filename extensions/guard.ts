@@ -109,7 +109,8 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const deadline = Date.now() + LOOKUP_DEADLINE_MS;
 			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
 				const held = recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput, deadline });
-				// Not recorded as written (its BASE or HEAD is no commit): the named commit, else each HEAD, so it is never lost.
+				// Not recorded as written (its BASE or HEAD is no commit, or couldn't be searched in time): the named commit, else
+				// each HEAD, so it is never lost; the failed lookup is passed on, not repeated.
 				const still = typeof held === "string" ? holdBack(ctx.cwd, parsed.sha, ids, options.reviewsRoot, deadline, held) : held.missed === undefined ? undefined : holdBack(ctx.cwd, parsed.sha, heldIds(ids), options.reviewsRoot, deadline);
 				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
 				notifyMissed(ctx, typeof held === "string" ? undefined : held.missed, still);
@@ -123,7 +124,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			}
 			// A run with no verdict counts as Inconclusive for the commit it reviewed, so a parallel reviewer's Yes on
 			// that commit can't stand alone; a review of a later commit is unaffected. A SHA that isn't a commit here (a
-			// typo) falls back to HEAD, so the failure is never lost.
+			// typo) or couldn't be searched for in time falls back to HEAD, so the failure is never lost.
 			const still = holdBack(ctx.cwd, reviewedHead(run.finalOutput ?? ""), ids, options.reviewsRoot, deadline, result);
 			if (ctx.hasUI) ctx.ui.notify(`Review gate: no verdict recorded (${result}); this commit's review counts as Inconclusive for this round.`, "warning");
 			notifyMissed(ctx, undefined, still);
