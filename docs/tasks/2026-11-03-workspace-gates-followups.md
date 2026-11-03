@@ -86,6 +86,7 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 
 ## Follow-ups
 
+- Review gate: a store failure for a commit only one repository has makes the result a string, so the guard reports no verdict recorded though the report parsed (as on 0.34.0 for a write failure).
 - Guard in a workspace, with pi S18 (non-Yes verdicts mirrored into the folder store).
 - Token ledger and kit-init command detection in a workspace.
 - Round-5 carried items listed under Out of scope.
@@ -131,3 +132,4 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 - Tasks 1–3: complete (`npm test` → 570 tests, 559 pass, 11 skipped, 0 fail).
 - Task 4: complete (`release.ts check` → ok 0.34.1).
 - Review round 1 (With fixes): the narrowed command position missed `function f {`, `f () {`, a spaced case `)` and an assignment's substitution (fixed, tests added); the timing tests leaned on a sub-second share for a healthy repository (given room; "no second search" proven from the stand-in git's log); the guard's passing of its failed lookup had no test (two tests, failing with it removed); README's hold-back order, the guard comments, the verify rows and `command -V` (fixed). Deferred: a store failure for a commit only one repository has is a string, so the guard reports no verdict for it (pre-existing for a write failure).
+- User ruling (2026-11-03, "Переосмыслить разбор"): after the other edition's round 2 found new misses in the narrowed reader, the shared `bindsAsCommand` reads the whole command, with brackets, `$(`, `${` and backticks taken from the quote-blanked text; copied here byte-identical with its tests.
