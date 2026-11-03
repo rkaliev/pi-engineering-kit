@@ -408,7 +408,8 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 	// Each target, and whether it may be expanded: only a redirection's plain word, in bash, in a command that neither
 	// moves nor runs code the text doesn't show (a sourced file or `eval` may bind any name).
 	const found: Array<[string, boolean]> = [];
-	const moves = movesOrBinds(segments) || bindsAsCommand(text);
+	// A `case` makes every target count (see `placesOf`) but binds no name itself: its targets are still expanded.
+	const moves = movesOrBinds(segments) || bindsAsCommand(text, false);
 	// Operators are found where quotes are blanked out; the target is read from the same place in the real text.
 	for (const m of blankQuoted(text).matchAll(/(&>>?|\d*>[>|&]?)[ \t]*/g)) {
 		const rest = text.slice(m.index + m[0].length);
@@ -444,7 +445,7 @@ function movesOrBinds(segments: string[][]): boolean {
 }
 
 /** Words that, as a command word, make the next word a command: reserved words and command prefixes. */
-const STARTERS = new Set(["then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
+const STARTERS = new Set(["then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec", "coproc"]);
 /** Prefixes whose dash options come before the command they run. */
 const OPTION_PREFIXES = new Set(["time", "command", "exec", "builtin"]);
 const CONTROL = new Set(["&&", "||", ";", "|", "&", "\n"]);
@@ -458,7 +459,7 @@ const CONTROL = new Set(["&&", "||", ";", "|", "&", "\n"]);
  * `grep ")" .` and `find \( …` bind nothing; a closing bracket with no opening one starts a command, which fails
  * closed. The whole text is read at once, so a `|` or `;` inside a substitution doesn't lose its brackets.
  */
-function bindsAsCommand(command: string): boolean {
+function bindsAsCommand(command: string, caseBinds = true): boolean {
 	const text = stripRedirects(command);
 	const words = tokenize(text);
 	// The same tokens with quoted text and escaped characters blanked: a bracket left there is structure, not data.
@@ -469,6 +470,8 @@ function bindsAsCommand(command: string): boolean {
 	let name = false;
 	// What `start` was outside each open bracket or backtick.
 	const outer: Array<{ start: boolean; tick: boolean }> = [];
+	// An opening bracket with nothing read since: closed at once, it is a `name()` header, and a body follows.
+	let empty = false;
 	const ticking = () => outer.some((o) => o.tick);
 	for (const [i, token] of words.entries()) {
 		if (CONTROL.has(token)) {
@@ -486,6 +489,7 @@ function bindsAsCommand(command: string): boolean {
 			const w = piece;
 			piece = "";
 			if (w === "" || continued) return false;
+			empty = false;
 			// A declaration's names are read up to the end of its own simple command.
 			const rest = words.slice(i + 1);
 			const end = rest.findIndex((t) => CONTROL.has(t));
@@ -505,12 +509,14 @@ function bindsAsCommand(command: string): boolean {
 				start = true;
 				prefix = undefined;
 				continued = false;
+				empty = true;
 				continue;
 			}
 			const back = outer.pop();
 			// Text glued after a closing bracket continues the same word (`${PATH}:bin`), so it isn't a command.
 			continued = k < shape.length - 1;
-			start = back === undefined ? true : back.start;
+			start = back === undefined || empty ? true : back.start;
+			empty = false;
 		}
 		if (word()) return true;
 	}
@@ -539,7 +545,7 @@ function bindsAsCommand(command: string): boolean {
 			return false;
 		}
 		start = false;
-		return bare === "case" || (!MOVES.has(bare) && hidesBinding(bare, rest));
+		return (caseBinds && bare === "case") || (!MOVES.has(bare) && hidesBinding(bare, rest));
 	}
 }
 

@@ -364,9 +364,18 @@ test("callChanges: with a blind part, any command with case counts every target,
 		'case $f in *.c) grep -c \\( "$f";; *.sh) . ./env;; esac; echo > $S/x',
 		'case "$ENV" in ci). ./ci.env;; esac; echo > $S/x',
 		"case x in esac; . ./env; echo > $S/x",
+		"f() if . ./env; then echo > $S/x; fi; f",
+		'f() case "$1" in (dev) . ./env;; esac; f dev; echo > $S/x',
+		'coproc case "$1" in (dev) . ./env; echo > $S/x;; esac',
 	]) {
 		assert.deepEqual(changes(command), ["$S/x"], command);
 	}
+});
+
+test("case counts every target but doesn't stop a known variable or ~ from being expanded", () => {
+	assert.deepEqual(shellWriteTargets('case "$OSTYPE" in darwin*) echo mac;; esac > ~/os.txt', "/ws", "/ws", { HOME: "/home/u" }), [], "~ is the home folder, outside the project");
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["svc"], links: ["svc"] };
+	assert.deepEqual(callChanges(tree, tree, "/ws", { command: "OUT=svc; case $1 in a) true;; esac; echo > $OUT/x", cwd: "/ws" }), ["svc/x"], "placed under the symlink");
 });
 
 test("callChanges: with a blind part, escaped brackets are data and an escaped quote doesn't hide a placed target", () => {

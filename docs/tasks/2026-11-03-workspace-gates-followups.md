@@ -86,6 +86,7 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 
 ## Follow-ups
 
+- Shell reading, as on 0.34.0: `heredocs()` drops every line after a `<<WORD` found in the raw text, also inside quotes or `$((1<<2))`; an apostrophe, a lone backtick or a bracket in a `#` comment skews the tokenizer and the reader; `NAME+=value` prefixes aren't read as assignments; quoted control operators (`grep "|" .`) read as separators; a write inside a double-quoted `"$(… > f)"` is no text target.
 - Review gate: a store failure for a commit only one repository has makes the result a string, so the guard reports no verdict recorded though the report parsed (as on 0.34.0 for a write failure).
 - Guard in a workspace, with pi S18 (non-Yes verdicts mirrored into the folder store).
 - Token ledger and kit-init command detection in a workspace.
@@ -134,3 +135,4 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 - Review round 1 (With fixes): the narrowed command position missed `function f {`, `f () {`, a spaced case `)` and an assignment's substitution (fixed, tests added); the timing tests leaned on a sub-second share for a healthy repository (given room; "no second search" proven from the stand-in git's log); the guard's passing of its failed lookup had no test (two tests, failing with it removed); README's hold-back order, the guard comments, the verify rows and `command -V` (fixed). Deferred: a store failure for a commit only one repository has is a string, so the guard reports no verdict for it (pre-existing for a write failure).
 - User ruling (2026-11-03, "Переосмыслить разбор"): after the other edition's round 2 found new misses in the narrowed reader, the shared `bindsAsCommand` reads the whole command, with brackets, `$(`, `${` and backticks taken from the quote-blanked text; copied here byte-identical with its tests.
 - User ruling (2026-11-03, "case → всегда учитывать"): the other edition's round 3 found that a case pattern's `)` inside a function body or group popped the wrong bracket and hid the arm's `source`; instead of reading patterns, a `case` in a command position counts as a binding. Escaped characters outside quotes are blanked in the shape, and a token whose shape differs in length is judged by its shape.
+- User ruling (2026-11-03, "Исправить, раунд 5 последний"): round 4's findings are fixed in the shared reader and the docs; after round 5 every non-Critical finding goes to Follow-ups and the PRs are prepared.
