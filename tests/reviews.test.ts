@@ -497,6 +497,8 @@ test("in a workspace, clones of one history don't share PR branches", () => {
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", "-b", "feat/a", a.dir, join(ws, "b")]).status, 0);
 	a.run(join(ws, "b"), "remote", "set-head", "origin", "main");
+	a.run(join(ws, "b"), "config", "user.email", "t@example.com");
+	a.run(join(ws, "b"), "config", "user.name", "t");
 	recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p1", run: "r1" }, root);
 	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
 	settlePr(ws, "t1", true, root);
