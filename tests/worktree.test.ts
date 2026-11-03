@@ -305,6 +305,23 @@ test("callChanges: with a blind part, a CDPATH in the environment counts every t
 	}
 });
 
+test("callChanges: with a blind part, source, . or eval count only in a command position, also inside compound commands", () => {
+	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };
+	const changes = (command: string) => callChanges(tree, tree, "/ws", { command, cwd: "/ws" });
+	assert.deepEqual(changes("S=$(mktemp -d); npx eslint . > $S/lint.log"), [], "`.` as an argument of a command that isn't plain shell");
+	assert.deepEqual(changes("find . -exec cat {} \\; > $OUT"), []);
+	assert.deepEqual(changes("f() ( . ./env.sh; echo x > $OUT ); f"), ["$OUT"], "a function whose body is a subshell");
+});
+
+test("treeFingerprint: a symlink whose text climbs out after a symlinked folder is a blind part", () => {
+	const ws = workspace();
+	const outside = mkdtempSync(join(tmpdir(), "linked-"));
+	mkdirSync(join(outside, "deep"));
+	symlinkSync(join(outside, "deep"), join(ws, "notes", "sub"));
+	symlinkSync("sub/../x", join(ws, "notes", "l"));
+	assert.ok(fingerprint(ws).blind?.includes("notes/l"));
+});
+
 test("callChanges: with a blind part, source, . or eval in a case arm, a function body or after a redirection still hides names", () => {
 	const ws = "/ws";
 	const tree = { head: "", files: {}, heads: { b: "2" }, blind: ["a"] };

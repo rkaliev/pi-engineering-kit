@@ -147,7 +147,7 @@ const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 const PREFIXES = new Set(["{", "}", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 
 /** Where a segment's command word is: after reserved words, `builtin`-style prefixes and assignments; -1 for none. */
-export function commandIndex(words: string[]): number {
+function commandIndex(words: string[]): number {
 	return words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
 }
 

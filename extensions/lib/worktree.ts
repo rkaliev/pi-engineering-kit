@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
-import { blankQuoted, commandIndex, heredocs, MOVES, plainShell, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
+import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
 /** More listed paths than this and the session falls back to the command text. */
@@ -260,11 +260,16 @@ function targetInside(projectDir: string, link: string): string | null {
 				return path; // a dangling path: nothing further to follow
 			}
 			if (!isLink) continue;
+			let text: string;
 			try {
-				next = join(resolve(dirname(at), readlinkSync(at)), ...parts.slice(i));
+				text = readlinkSync(at);
 			} catch {
 				return null;
 			}
+			// `sub/../x` climbs after `sub`, which may itself be a symlink the text hides: don't fold it lexically.
+			const steps = text.split(/[\\/]/).filter((step) => step !== "" && step !== ".");
+			if (steps.some((step, k) => step === ".." && steps.slice(0, k).some((before) => before !== ".."))) return null;
+			next = join(resolve(dirname(at), text), ...parts.slice(i));
 			break;
 		}
 		if (next === undefined) return path;
@@ -350,14 +355,9 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 /** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
 function placesOf(command: string, cwd: string, powershell = false): string[] | undefined {
 	if (powershell || /\bcdpath\b/i.test(command) || process.env.CDPATH) return undefined;
-	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration. In a plain command only as the
-	// command word (`npx eslint .` binds nothing); a function body, a `case` arm or a group may run one anywhere.
-	if (!plainShell(command) && movesOrBinds(splitSegments(tokenize(heredocs(command).text)), false)) return undefined;
-	for (const seg of splitSegments(tokenize(stripRedirects(heredocs(command).text)))) {
-		const words = seg.map((t) => t.replace(/^[({!]+/, "")).filter(Boolean);
-		const at = commandIndex(words);
-		if (at !== -1 && !MOVES.has(words[at]!) && hidesBinding(words[at]!, words.slice(at + 1))) return undefined;
-	}
+	// Names a command may bind out of sight: `source`, `.`, `eval` or a declaration, in a command position only
+	// (`npx eslint .` binds nothing), including inside a group, a subshell, a function body or a `case` arm.
+	for (const seg of splitSegments(tokenize(stripRedirects(heredocs(command).text)))) if (bindsAsCommand(seg)) return undefined;
 	const { dirs, unknown } = reachable(command, cwd);
 	return unknown ? undefined : dirs;
 }
@@ -438,13 +438,31 @@ function hidesPlace(command: string, powershell = false): boolean {
 	return movesOrBinds(splitSegments(tokenize(heredocs(command).text)));
 }
 
-function movesOrBinds(segments: string[][], moves = true): boolean {
-	return segments.some((seg) =>
-		seg.some((t, i) => {
-			const word = t.replace(/^[({!]+/, "");
-			return (moves || !MOVES.has(word)) && hidesBinding(word, seg.slice(i + 1));
-		}),
-	);
+function movesOrBinds(segments: string[][]): boolean {
+	return segments.some((seg) => seg.some((t, i) => hidesBinding(t.replace(/^[({!]+/, ""), seg.slice(i + 1))));
+}
+
+/** Words after which the next word is a command: reserved words and command prefixes. */
+const STARTERS = new Set(["{", "(", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec", ";;"]);
+
+/**
+ * Whether a segment runs `source`, `.`, `eval` or a declaration of unseen names as a command: its first word, or a word
+ * after a reserved word, an opening `(` or `{`, a `case` pattern's `)`, a `name()` header or assignments.
+ */
+function bindsAsCommand(seg: string[]): boolean {
+	let start = true;
+	for (const [i, token] of seg.entries()) {
+		const opens = /^[({!]/.test(token);
+		const word = token.replace(/^[({!]+/, "");
+		if (word === "" || STARTERS.has(word)) {
+			start = true;
+			continue;
+		}
+		if ((start || opens) && /^[A-Za-z_]\w*=/.test(word)) continue;
+		if ((start || opens) && !MOVES.has(word) && hidesBinding(word, seg.slice(i + 1))) return true;
+		start = word.endsWith(")");
+	}
+	return false;
 }
 
 /**

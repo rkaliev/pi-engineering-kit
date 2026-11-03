@@ -582,6 +582,39 @@ test("holdBack: after a verdict missed a repository, an Inconclusive holds the c
 	assert.equal(readReviews(join(ws, "c"), root)[0]?.verdict, "Inconclusive", "the prompt's worst verdict in c");
 });
 
+test("holdBack: for a commit that was found it holds back only that commit, and names a repository it still missed", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	const b = repo(join(ws, "b"), root, "b\n");
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
+	writeFileSync(reviewsDir(a.dir, root), "not a folder");
+	assert.match(String(holdBack(ws, a.head, { promptId: "p1", run: "x-held" }, root)), /could not write/);
+	assert.deepEqual(readReviews(b.dir, root), [], "an unrelated repository's HEAD is not held back");
+	assert.equal(readReviews(join(ws, "c"), root)[0]?.verdict, "Inconclusive");
+});
+
+test("holdBack: a repository that times out again is named, not taken as held", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const a = repo(join(ws, "a"), root);
+	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
+	const slow = slowGit(realpathSync(join(ws, "c")), "rev-parse", 8);
+	try {
+		assert.match(String(holdBack(ws, a.head, { promptId: "p1", run: "x-held" }, root)), /in time/);
+	} finally {
+		slow.restore();
+	}
+});
+
+test("holdBack: with its deadline spent it records nothing more and says so", () => {
+	const { dir, root, head } = repo();
+	const started = Date.now();
+	assert.match(String(holdBack(dir, head, { promptId: "p1", run: "x-held" }, root, Date.now() - 1)), /no time/);
+	assert.ok(Date.now() - started < 1000);
+	assert.deepEqual(readReviews(dir, root), []);
+});
+
 test("in one repository, a verdict short of Yes whose BASE is no commit is still an error, as in 0.33.0", () => {
 	const { dir, root, head } = repo();
 	assert.match(String(recordReview(dir, report(head, "No", "deadbee0"), { promptId: "p1", run: "r1" }, root)), /Reviewed BASE deadbee0 is not a commit/);

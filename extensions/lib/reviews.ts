@@ -98,20 +98,20 @@ export function reviewedHead(text: string): string | undefined {
  * Record one reviewer run's report. `run` identifies the run (agent id, tool call id), so parallel reviewers
  * never overwrite each other. Returns the record, or why none was written.
  */
-export function recordReview(projectDir: string, text: string, ids: { promptId: string; run: string }, root?: string): RecordResult | string {
+export function recordReview(projectDir: string, text: string, ids: { promptId: string; run: string }, root?: string, deadline?: number): RecordResult | string {
 	const parsed = parseReview(text);
 	if (!parsed) return "the report needs one `Reviewed BASE: <sha>` line, one `Reviewed HEAD: <sha>` line and one `Ready to merge:` verdict";
-	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root, { base: parsed.base, report: text });
+	return recordVerdict(projectDir, parsed.sha, parsed.verdict, ids, root, { base: parsed.base, report: text, deadline });
 }
 
 /** Record a verdict for a commit directly: a reviewer run that failed counts as Inconclusive for the commit it reviewed. */
-export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string } = {}): RecordResult | string {
-	const { found, complete } = lookup(projectDir, rev);
+export function recordVerdict(projectDir: string, rev: string, verdict: Verdict, ids: { promptId: string; run: string }, root?: string, extra: { base?: string; report?: string; deadline?: number } = {}): RecordResult | string {
+	const { found, complete } = lookup(projectDir, rev, extra.deadline);
 	if (found.length === 0) return `Reviewed HEAD ${rev} is not a commit in ${here(projectDir)}`;
 	// A SHA the reviewer wrote names one commit: different commits under one abbreviation get no verdict at all.
 	if (HEX.test(rev) && new Set(found.map((f) => f.sha)).size > 1) return `Reviewed HEAD ${rev} names different commits in different repositories; give the full SHA`;
 	// Each repository that has the commit (clones of one history share it) gets the record, with BASE resolved there.
-	const bases = found.map(({ dir }) => (extra.base === undefined ? undefined : (resolveCommit(dir, extra.base) ?? undefined)));
+	const bases = found.map(({ dir }) => (extra.base === undefined ? undefined : (resolveCommit(dir, extra.base, timeoutBefore(extra.deadline)) ?? undefined)));
 	if (extra.base !== undefined && bases.every((b) => b === undefined)) return `Reviewed BASE ${extra.base} is not a commit in ${here(projectDir)}`;
 	// One store that can't be written doesn't keep the record from the others.
 	let first: ReviewRecord | undefined;
@@ -145,16 +145,30 @@ export function recordVerdict(projectDir: string, rev: string, verdict: Verdict,
 
 /**
  * Hold a commit back where a verdict short of Yes may have missed it: Inconclusive for `rev` (callers pass their own
- * run id, so the reviewer's record keeps its report), else for each repository's HEAD. Returns why that missed a
- * repository too, if it did; then a parallel Yes there could still stand alone.
+ * run id, so the reviewer's record keeps its report). Only when `rev` is missing or names no commit here does it fall
+ * back to each repository's HEAD, so unrelated repositories keep their verdicts. Every lookup ends by `deadline`.
+ * Returns why it could not hold the commit back everywhere, if so.
  */
-export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string): string | undefined {
+export function holdBack(projectDir: string, rev: string | undefined, ids: { promptId: string; run: string }, root?: string, deadline?: number): string | undefined {
+	const late = () => deadline !== undefined && deadline - Date.now() < MIN_LOOKUP_MS;
 	if (rev !== undefined) {
-		const held = recordVerdict(projectDir, rev, "Inconclusive", ids, root);
-		if (typeof held !== "string" && held.missed === undefined) return undefined;
+		if (late()) return "no time was left to hold it back";
+		const held = recordVerdict(projectDir, rev, "Inconclusive", ids, root, { deadline });
+		if (typeof held !== "string") return held.missed;
+		// A record that couldn't be written is a miss; only a SHA that names no single commit here falls back to HEAD.
+		if (!held.startsWith(`Reviewed HEAD ${rev} `)) return held;
 	}
-	const heads = recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root);
+	if (late()) return "no time was left to hold each repository's HEAD back";
+	const heads = recordVerdict(projectDir, "HEAD", "Inconclusive", ids, root, { deadline });
 	return typeof heads === "string" ? heads : heads.missed;
+}
+
+/** Below this much time left a lookup isn't started: it couldn't answer and would only delay the warning. */
+const MIN_LOOKUP_MS = 300;
+
+/** A git timeout that ends by `deadline`, at most the usual one. */
+function timeoutBefore(deadline: number | undefined): number {
+	return deadline === undefined ? GIT_TIMEOUT_MS : Math.max(1, Math.floor(Math.min(GIT_TIMEOUT_MS, deadline - Date.now())));
 }
 
 /** A reviewer's hex abbreviation (or full SHA), as opposed to a ref name such as `HEAD`. */
@@ -183,10 +197,10 @@ export function commitRepos(projectDir: string, rev: string): Array<{ dir: strin
 }
 
 /** `commitRepos`, and whether every repository was searched within the time. */
-function lookup(projectDir: string, rev: string): { found: Array<{ dir: string; sha: string }>; complete: boolean } {
+function lookup(projectDir: string, rev: string, until?: number): { found: Array<{ dir: string; sha: string }>; complete: boolean } {
 	const { kind, repos } = projectRepos(projectDir);
 	const dirs = kind === "repo" ? [projectDir] : repos.map((r) => join(projectDir, r));
-	const deadline = Date.now() + LOOKUP_BUDGET_MS;
+	const deadline = Math.min(Date.now() + LOOKUP_BUDGET_MS, until ?? Number.POSITIVE_INFINITY);
 	let complete = true;
 	// Each repository gets an equal share of the time left, so one slow repository can't starve the others.
 	const found = dirs.flatMap((dir, i) => {

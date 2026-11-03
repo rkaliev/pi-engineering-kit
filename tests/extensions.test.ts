@@ -1123,7 +1123,7 @@ test("review gate: a reviewer verdict short of Yes that misses a workspace repos
 	const head = String(git("a", "rev-parse", "HEAD")).trim();
 	const c = ctx(dir);
 	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `F1 the finding\nReviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: No` }] }, isError: false }, c);
-	assert.ok(c.notes.some((n) => /missed a repository/.test(n)), c.notes.join("\n"));
+	assert.ok(c.notes.some((n) => /could not be recorded in every repository/.test(n)), c.notes.join("\n"));
 	assert.equal(readReviews(join(dir, "c"), reviewsRoot)[0]?.verdict, "No");
 });
 
@@ -1156,7 +1156,36 @@ test("review gate: a review of unverified edits that misses a workspace reposito
 	} finally {
 		verifyState.unverified = false;
 	}
-	assert.ok(c.notes.some((n) => /missed a repository/.test(n)), c.notes.join("\n"));
+	assert.ok(c.notes.some((n) => /could not be recorded in every repository/.test(n)), c.notes.join("\n"));
+});
+
+test("review gate: a review of unverified edits that misses a workspace repository is held back there too", async () => {
+	const { dir, reviewsRoot, head, reviewer } = partialWorkspace();
+	verifyState.unverified = true;
+	try {
+		await reviewer(`Reviewed BASE: ${head}\nReviewed HEAD: ${head}\nReady to merge: Yes`);
+	} finally {
+		verifyState.unverified = false;
+	}
+	assert.deepEqual(readReports(join(dir, "c"), head, reviewsRoot).map((r) => [r.run, r.verdict]).sort(), [["c1-0", "Inconclusive"], ["c1-0-held", "Inconclusive"]]);
+});
+
+test("review gate: a review of unverified edits with a bad BASE holds back the commit it names, not HEAD", async () => {
+	const { dir, git } = workspaceProject();
+	const reviewsRoot = mkdtempSync(join(tmpdir(), "guard-reviews-"));
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot });
+	const named = String(git("a", "rev-parse", "HEAD")).trim();
+	writeFileSync(join(dir, "a", "g.ts"), "export {};\n");
+	git("a", "add", "g.ts");
+	git("a", "commit", "-q", "-m", "g");
+	verifyState.unverified = true;
+	try {
+		await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: `Reviewed BASE: deadbeef0\nReviewed HEAD: ${named}\nReady to merge: Yes` }] }, isError: false }, ctx(dir));
+	} finally {
+		verifyState.unverified = false;
+	}
+	assert.deepEqual(readReviews(join(dir, "a"), reviewsRoot).map((r) => [r.sha, r.verdict]), [[named, "Inconclusive"]]);
 });
 
 test("review gate: a review of unverified edits that names no commit here falls back to each repository's HEAD", async () => {
