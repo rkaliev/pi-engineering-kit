@@ -121,7 +121,7 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 
 ### Task 4: docs and 0.34.1 (criteria 10–11)
 
-- [ ] Post-implementation items; `node .github/release.ts check` → ok 0.34.1. Commit.
+- [x] Post-implementation items; `node .github/release.ts check` → ok 0.34.1. Commit.
 
 ## Progress
 
@@ -129,3 +129,4 @@ Patch release 0.34.1. Rollback: install 0.34.0.
 - Ruling: the ported tests "…times out again is named" and "…recorded there even when another repository uses up the lookup's time" pass on main's shared files. The first pins the miss over `undefined`, the second the store reserve this change adds; both were seen failing by mutation in the other edition on identical code.
 - Ruling: the token ledger item (F36) has no counterpart: pi records subagent usage in-process with no hook timeout.
 - Tasks 1–3: complete (`npm test` → 570 tests, 559 pass, 11 skipped, 0 fail).
+- Task 4: complete (`release.ts check` → ok 0.34.1).
