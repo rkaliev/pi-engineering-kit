@@ -30,6 +30,8 @@ interface CheckResult {
 	command: string;
 	code: number;
 	killed: boolean;
+	/** pi stopped the check because its output passed pi's cap (pi 1.5 and later; older pi has no field). */
+	truncated: boolean;
 	tail: string;
 }
 
@@ -124,7 +126,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			const [shell, args] = process.platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", command]] : ["sh", ["-c", command]];
 			const r = await pi.exec(shell as string, args as string[], { cwd: ctx.cwd, timeout: timeoutSec * 1000, signal });
 			const output = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
-			results.push({ command, code: r.code, killed: r.killed, tail: output.slice(-TAIL_CHARS) });
+			results.push({ command, code: r.code, killed: r.killed, truncated: r.truncated === true, tail: output.slice(-TAIL_CHARS) });
 			if (r.code !== 0) break; // later checks rarely matter while an earlier one fails
 		}
 		const ok = results.length === resolved.commands.length && results.every((r) => r.code === 0);
@@ -132,7 +134,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		track(ctx, undefined, { command: "", exempt: true });
 		if (ok) markGreen(resolved.commands, resolved.commands, ctx);
 
-		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
+		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.truncated ? "OUTPUT LIMIT" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
 		const skipped = resolved.commands.slice(results.length).map((c) => `SKIP  ${c}  (earlier check failed)`);
 		const failed = results.find((r) => r.code !== 0);
 		const report = [

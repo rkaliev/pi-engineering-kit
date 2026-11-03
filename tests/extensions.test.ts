@@ -361,6 +361,21 @@ test("verify: a write chained with a check, or made by a failed check, is not ex
 	}
 });
 
+test("verify: run_verification reports output over pi's limit as an output-limit failure, not a timeout", async () => {
+	const { dir } = gitProject(COMMANDS);
+	const f = fakePi();
+	// pi 1.5 stops a check whose output passes its cap: killed, truncated and a nonzero code.
+	f.pi.exec = async () => ({ stdout: "x".repeat(100), stderr: "", code: 1, killed: true, truncated: true });
+	verify(f.pi);
+	const c = ctx(dir);
+	await f.emit("session_start", { reason: "startup" }, c);
+	const result = await f.tools.get("run_verification").execute("id", {}, undefined, undefined, c);
+	const text = result.content.map((p: { text: string }) => p.text).join("\n");
+	assert.equal(result.details.ok, false);
+	assert.match(text, /OUTPUT LIMIT/);
+	assert.doesNotMatch(text, /TIMEOUT/);
+});
+
 test("verify: run_verification counts earlier changes, but not its own", async () => {
 	const failing = gitProject(COMMANDS);
 	const f = fakePi({ "npm test": 1 });
