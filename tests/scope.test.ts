@@ -85,6 +85,7 @@ test("scopedConfig: a path into a repository adds its restrictions, never its lo
 	assert.equal(command("cd b && npm run deploy --prefix ../a"), "confirm", "b's allow doesn't cover a command reaching into a");
 	assert.equal(command("git -C a status && make docs"), "confirm", "a's confirm through git -C");
 	assert.equal(command("cd b && git -C ../b status && make docs"), "allow", "every segment runs in b");
+	assert.equal(command("git -C b status && make docs"), "confirm", "make docs runs at the workspace root");
 });
 
 test("scopedPath: a repository's rules hold through a symlink and a case-swapped name", () => {
