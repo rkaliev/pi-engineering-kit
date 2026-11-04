@@ -3,13 +3,25 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
 import { guardBaseline, guardScope, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
 
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
+
 /** A folder outside git holding repositories `a` and `b`, each root's config taken from `configs` (by `""`, `a`, `b`). */
 function workspace(configs: Record<string, GuardConfig> = {}) {
-	const ws = mkdtempSync(join(tmpdir(), "scope-"));
+	const ws = temp("scope-");
 	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
 	const scope = guardScope(ws, (root) => configs[root === ws ? "" : root.slice(ws.length + 1)] ?? {}, ".pi/guard.json");
 	const command = (cmd: string, powershell = false) => checkCommand(cmd, ws, scopedConfig(cmd, ws, scope, powershell), ws).action;
@@ -54,7 +66,7 @@ test("strictest: block, then confirm, then allow; a tie keeps the first", () => 
 });
 
 test("guardScope: outside a workspace the scope is the session folder's config alone", () => {
-	const dir = mkdtempSync(join(tmpdir(), "scope-"));
+	const dir = temp("scope-");
 	const config: GuardConfig = { protectedPaths: ["db/"], allow: ["npm run deploy"] };
 	const scope = guardScope(dir, () => config, ".pi/guard.json");
 	assert.equal(scope.repos.size, 0);
@@ -103,7 +115,7 @@ test("a repository's rule names its own config in the reason", () => {
 });
 
 test("guardScope: a repository or a config that appeared after the session started restricts but never loosens", () => {
-	const ws = mkdtempSync(join(tmpdir(), "scope-"));
+	const ws = temp("scope-");
 	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
 	const deploy: GuardConfig = { allow: ["npm run deploy"], block: ["make release"] };
 	mkdirSync(join(ws, "b", ".pi"));
@@ -133,7 +145,7 @@ test("scopedConfig: a segment that runs outside every repository gets every repo
 
 /** A workspace of `a` and `b` (a `.git` folder each), its baseline taken with `configs` (by name) as at the start. */
 function started(configs: Record<string, GuardConfig> = {}) {
-	const ws = mkdtempSync(join(tmpdir(), "scope-"));
+	const ws = temp("scope-");
 	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
 	const load = (root: string) => configs[root === ws ? "" : root.slice(ws.length + 1)] ?? {};
 	const baseline = guardBaseline(ws, ".pi/guard.json", load);
@@ -169,4 +181,39 @@ test("scopedPath: a repository's rules hold for a path written inside it that a 
 	mkdirSync(join(ws, "shared-config"));
 	symlinkSync(join(ws, "shared-config"), join(ws, "a", "shared"));
 	assert.equal(scopedPath("write", join(ws, "a", "shared", "x"), scope).action, "block");
+});
+
+test("scopedConfig: a word that reaches a repository through a symlink, a case-swapped name or an expansion adds its restrictions", () => {
+	const { ws, command } = workspace({ b: { block: ["release"] } });
+	symlinkSync(join(ws, "b"), join(ws, "a", "lnk"));
+	assert.equal(command("cd a && make -C lnk release"), "block", "a symlink in a to b");
+	assert.equal(command("cd a && make -C ../$R release"), "block", "an expansion next to ..");
+	if (existsSync(join(ws, "B"))) assert.equal(command("cd a && make -C ../B release"), "block", "a case-insensitive volume");
+});
+
+test("scopedConfig: a repository's name in a message doesn't take its allow from a command that runs in it", () => {
+	const { command } = workspace({ b: { allow: ["npm run deploy"] } });
+	assert.equal(command('cd b && npm run deploy -- --note "a"'), "allow");
+	assert.equal(command("cd b && npm run deploy --prefix ../a"), "confirm", "a path into a still does");
+});
+
+test("guardScope: a repository whose .git was moved away, or that was renamed, keeps its restrictions from the start", () => {
+	const restricted = { a: { protectedPaths: ["secret/"], block: ["make release"] } };
+	const moved = started(restricted);
+	renameSync(join(moved.ws, "a", ".git"), join(moved.ws, "a", ".git-off"));
+	const scope = guardScope(moved.ws, () => ({}), ".pi/guard.json", moved.baseline);
+	assert.equal(scopedPath("write", join(moved.ws, "a", "secret", "x"), scope).action, "block");
+	assert.equal(scopedPath("write", join(moved.ws, "a", ".github", "workflows", "ci.yml"), scope).action, "confirm");
+	const renamed = started(restricted);
+	renameSync(join(renamed.ws, "a"), join(renamed.ws, "a2"));
+	const after = guardScope(renamed.ws, () => ({}), ".pi/guard.json", renamed.baseline);
+	const cmd = "cd a2 && make release";
+	assert.equal(checkCommand(cmd, renamed.ws, scopedConfig(cmd, renamed.ws, after), renamed.ws).action, "block");
+	assert.deepEqual(after.owners, [join(renamed.ws, "b")], "a renamed repository pushes only with a question");
+});
+
+test("scopedConfig: a rule spelled like an Object property names its own config", () => {
+	const { ws, scope } = workspace({ a: { block: ["constructor"], label: "a/.pi/guard.json" }, "": { label: ".pi/guard.json" } });
+	const cmd = "echo constructor";
+	assert.match(String(checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws).reason), /in a\/\.pi\/guard\.json/);
 });

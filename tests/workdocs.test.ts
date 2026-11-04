@@ -3,10 +3,22 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
 import { slowGit } from "./slow-git.ts";
 import { baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
+
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
 
 const TASK = "docs/tasks/2026-01-01-a.md";
 
@@ -153,7 +165,7 @@ test("push options that take a separate value don't name the remote or a refspec
 
 /** A folder outside git holding `a` on `feat/x` with a committed task file, and `b` on `feat/y` without one. */
 function workspace(aDirs?: string[]) {
-	const root = mkdtempSync(join(tmpdir(), "workdocs-ws-"));
+	const root = temp("workdocs-ws-");
 	const a = repo(join(root, "a"));
 	a.git("switch", "-qc", "feat/x");
 	a.commit({ [TASK]: "# A\n" });
@@ -274,4 +286,23 @@ test("in a workspace, an unplaced commit is judged within a deadline, and a slow
 	} finally {
 		slow.restore();
 	}
+});
+
+test("in a workspace, a landing after a heredoc or a quoted <<, or in a shell's heredoc, is still judged", () => {
+	const { check } = workspace();
+	for (const command of ["bash <<'EOF'\ncd a && gh pr create --fill\nEOF", "echo '<<X'\ncd a && gh pr create --fill", "gh pr create --fill"]) {
+		assert.equal(check(command)?.action, "block", command);
+	}
+});
+
+test("in a workspace, an unplaced commit with no task-file folders anywhere isn't held, even with a slow repository", () => {
+	const { root } = workspace();
+	const off = checkWorkDocs("cd $D && git commit -m x", root, [], { cwd: root, repos: ["a", "b"], dirsFor: () => [], slow: ["a"] });
+	assert.equal(off, undefined);
+});
+
+test("in a workspace, a landing from a checkout nested in another repository's folder can't be placed", () => {
+	const { root, a, check } = workspace();
+	a.git("worktree", "add", "-q", join(root, "b", "wt"), "-b", "feat/w");
+	assert.equal(check("cd b/wt && gh pr create --fill")?.action, "block");
 });

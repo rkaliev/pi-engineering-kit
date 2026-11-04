@@ -99,7 +99,7 @@ export function checkCommand(
 	}
 	for (const source of config.block ?? []) {
 		if (new RegExp(source).test(command)) {
-			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${config.sources?.[source] ?? config.label ?? ".pi/guard.json"}.` };
+			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
 	const written = target ? judgeWrite(target) : ALLOW;
@@ -112,12 +112,17 @@ export function checkCommand(
 		if (re.test(text)) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
-		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${config.sources?.[source] ?? config.label ?? ".pi/guard.json"}.` };
+		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
 	}
 	if (segments.some((segment) => segment.some(isSecretPath))) {
 		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
 	}
 	return ALLOW;
+}
+
+/** The file a rule came from, as its reason names it. */
+function sourceOf(config: GuardConfig, rule: string): string {
+	return (config.sources && Object.hasOwn(config.sources, rule) ? config.sources[rule] : undefined) ?? config.label ?? ".pi/guard.json";
 }
 
 /** CI and release pipelines run with repository credentials, so edits to them need a human look. */
@@ -175,7 +180,7 @@ const INTERPRETER_HEAD = new RegExp(String.raw`^(?:python3?|node)(?:[ \t]+-)?[ \
  * path, a second command on any line, a missing delimiter) returns undefined, and the command is judged whole. So does
  * a carriage return or another control character: some shells (Cygwin's `igncr`) end a heredoc where this wouldn't.
  */
-function quotedHeredoc(command: string): { head: string; target?: string } | undefined {
+export function quotedHeredoc(command: string): { head: string; target?: string } | undefined {
 	if (/[\0-\x08\x0b-\x1f\x7f]/.test(command)) return undefined;
 	const lines = command.split("\n");
 	if (lines.length > 2 && lines[lines.length - 1] === "") lines.pop();
@@ -408,8 +413,9 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	const workspace = projectRepos(project);
 	const owner = workspace.kind === "workspace" ? repoOf(project, workspace.repos, dir) : project;
 	if (repoDir === undefined || owner === undefined || repoDir !== commonDir(owner)) return false;
-	// In a workspace, only a repository that was there when the session started (a clone made since asks).
-	if (workspace.kind === "workspace" && owners !== undefined && !owners.includes(owner)) return false;
+	// Given owners (a workspace session): only a repository that was there when the session started, whatever the
+	// session folder has become since (a clone made since, or a `.git` at the workspace root, asks).
+	if (owners !== undefined && !owners.includes(owner)) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
 	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;

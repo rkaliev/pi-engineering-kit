@@ -191,6 +191,12 @@ test("from a workspace folder, a repository that isn't one of the push owners as
 	assert.equal(checkCommand("git -C repo push", ws, { pushOwners: [repo] }, ws).action, "allow");
 });
 
+test("a push from a repository that isn't one of the given push owners asks, whatever the session folder is", () => {
+	const repo = pushRepo();
+	assert.equal(checkCommand("git push", repo, { pushOwners: [] }, repo).action, "confirm");
+	assert.equal(checkCommand("git push", repo, {}, repo).action, "allow", "no owners given: as before");
+});
+
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();
 	for (const cmd of [

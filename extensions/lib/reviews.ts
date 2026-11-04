@@ -15,7 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
-import { projectRepos } from "./repos.ts";
+import { canonical, projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
@@ -58,6 +58,8 @@ export interface ReviewGateOptions {
 	workspace?: boolean;
 	/** The command is PowerShell, which the guard can't place. */
 	powershell?: boolean;
+	/** In a workspace: the repository folder holding a folder, so a checkout nested in another repository is told apart. */
+	repoOf?: (dir: string) => string | undefined;
 }
 
 const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2, No: 3 };
@@ -518,6 +520,16 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		if (where === undefined || (l.kind === "pr" && l.repo) || (options.workspace && placed[index]?.dir === undefined)) {
 			return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
 		}
+		if (options.workspace) {
+			// A PR naming its repository another way, a folder outside git, or a checkout nested in another repository's
+			// folder: the landing's repository isn't the one this folder belongs to.
+			const named = l.kind === "pr" && (/(^|[\s;&|(])(export\s+)?GH_REPO\b/.test(command) || /^https?:\/\//.test(l.target ?? ""));
+			const top = git(where, ["rev-parse", "--show-toplevel"]);
+			const repo = options.repoOf?.(where);
+			if (named || top === undefined || repo === undefined || safeRealpath(top) !== safeRealpath(repo)) {
+				return decision(options.missing, "can't tell which repository this command lands in (a repository named by GH_REPO or a URL, a folder outside git, or a checkout nested in another repository). Run it from the repository's folder without naming the repository.", options);
+			}
+		}
 		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
 			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
 			continue;
@@ -666,6 +678,9 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
 	// In a command the guard can't read (a comment or heredoc may swallow the next line), no step is read-only.
 	const readable = plainShell(command);
+	// Where redirections and `tee` write, as written.
+	const targets = [...command.matchAll(/(?:&>>?|\d*>>?|\btee(?:\s+-a)?)\s*([^\s;&|()<>]+)/g)].map((m) => m[1]!.replace(/^['"]|['"]$/g, ""));
+	const state = stateDir === undefined ? [] : [stateDir, canonical(stateDir)].map((p) => p.replaceAll("\\", "/"));
 	let ask: GuardDecision | undefined;
 	for (const { full, words, redirected } of moveSegments(command)) {
 		const tokens = full.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -686,9 +701,20 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		const state = stateDir === undefined ? undefined : stateDir.replaceAll("\\", "/");
-		if (state !== undefined && paths.some((p) => p === state || p.startsWith(`${state}/`))) {
-			return { action: "block", reason: "The kit's session state is written only by its hooks." };
+		// The kit's session state, by any spelling of its path or one of its parent folders.
+		if (state.length > 0) {
+			const real = dirs.flatMap((dir) => candidates.map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
+			const shallow = new Set(["/", homedir(), tmpdir(), canonical(tmpdir())].map((p) => p.replaceAll("\\", "/")));
+			if (real.some((p) => state.some((s) => p === s || p.startsWith(`${s}/`) || (s.startsWith(`${p}/`) && !shallow.has(p))))) {
+				return { action: "block", reason: "The kit's session state is written only by its hooks." };
+			}
+		}
+		// `.git` changes through git only: a write into it, or moving or removing it, swaps a repository's history,
+		// hooks or remotes behind the guard.
+		const command0 = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+		const writer = GIT_WRITERS.has(command0.slice(command0.lastIndexOf("/") + 1));
+		if (targets.some((t) => /(^|\/)\.git(\/|$)/.test(t)) || (writer && candidates.some((t) => /(^|\/)\.git(\/|$)/.test(t)))) {
+			return { action: "block", reason: "Never change .git directly from the shell (writing into it, moving or removing it); use git commands." };
 		}
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
@@ -698,6 +724,18 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		}
 	}
 	return ask;
+}
+
+/** Commands that write, move or remove the paths they are given. */
+const GIT_WRITERS = new Set(["rm", "rmdir", "unlink", "mv", "cp", "ln", "install", "rsync", "touch", "tee", "sed", "perl", "chmod", "chown", "truncate", "dd", "mkdir", "tar", "unzip", "patch"]);
+
+/** A word with `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` in front, as the shell would expand it. */
+function expandHome(word: string): string {
+	return word
+		.replace(/^~(?=\/|$)/, homedir())
+		.replace(/^\$\{?HOME\}?(?=\/|$)/, homedir())
+		.replace(/^\$\{?TMPDIR\}?(?=\/|$)/, tmpdir())
+		.replace(/^\$\{?CLAUDE_PLUGIN_DATA\}?(?=\/|$)/, process.env.CLAUDE_PLUGIN_DATA ?? "\0");
 }
 
 /** Whether `path` is `<projectDir>/<one folder>/<guardConfig>`. */

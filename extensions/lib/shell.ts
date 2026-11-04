@@ -530,6 +530,8 @@ function hidesFolder(words: string[]): boolean {
 	const command = words[commandIndex(words)];
 	return words.some((w, i) => {
 		if (/^GIT_(DIR|WORK_TREE)=/.test(w) || w === "eval") return true;
+		// `../$R`, `../a*`: a folder next to `..` that only the shell decides.
+		if (w.includes("..") && /[$`*?[{]/.test(w)) return true;
 		if (/^(ba|z|da|k)?sh$/.test(w.slice(w.lastIndexOf("/") + 1)) && words.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a))) return true;
 		if (w === "env" && words.slice(i + 1).some((a) => a === "-C" || /^--chdir(=|$)/.test(a) || /^-[a-zA-Z]*C/.test(a))) return true;
 		if (/^--(git-dir|work-tree)(=|$)/.test(w) && words.slice(0, i).includes("git")) return true;

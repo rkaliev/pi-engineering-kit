@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
 import { readReports, readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
@@ -12,6 +12,18 @@ import init from "../extensions/init.ts";
 import models from "../extensions/models.ts";
 import verify from "../extensions/verify.ts";
 import { verifyState } from "../extensions/lib/verify-state.ts";
+
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
 
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
@@ -214,7 +226,7 @@ test("guard: in a workspace, a repository cloned after the session started pushe
 	guard(pi);
 	const { dir } = workspaceProject();
 	await emit("session_start", { reason: "startup" }, ctx(dir));
-	const remote = mkdtempSync(join(tmpdir(), "kit-remote-"));
+	const remote = temp("kit-remote-");
 	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
 	const c = join(dir, "c");
 	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
@@ -266,7 +278,7 @@ test("guard: in a workspace, a repository's broken config and its rules name tha
 
 /** A repository `c` cloned into `dir` with a work branch `feat/x` that has a remote: pushing it is an own-branch push. */
 function cloneLater(dir: string) {
-	const remote = mkdtempSync(join(tmpdir(), "kit-remote-"));
+	const remote = temp("kit-remote-");
 	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
 	const c = join(dir, "c");
 	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
@@ -313,6 +325,36 @@ test("guard: in a workspace, the review gate holds a PowerShell landing even wit
 	const pr = await emit("tool_call", { toolName: "powershell", input: { command: "Set-Location a; gh pr create --fill" } }, ctx(dir, { confirm: false }));
 	assert.equal(pr?.block, true);
 	assert.match(pr.reason, /can't tell which checkout/);
+});
+
+test("guard: in a workspace, the review gate holds a PR named by GH_REPO even with task files off", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject({ ...COMMANDS, ".pi/guard.json": JSON.stringify({ workDocs: [] }) });
+	const pr = await emit("tool_call", { toolName: "bash", input: { command: "GH_REPO=org/a gh pr create -H feat/x --fill" } }, ctx(dir, { confirm: false }));
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /can't tell which repository/);
+});
+
+test("guard: a child pi process started in a repository cloned into the workspace pushes only with a question", async () => {
+	const { dir } = workspaceProject();
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		cloneLater(dir);
+		const child = fakePi();
+		guard(child.pi);
+		const c = join(dir, "c");
+		await child.emit("session_start", { reason: "startup" }, ctx(c));
+		assert.equal((await child.emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(c, { confirm: false })))?.block, true);
+		assert.match(String(process.env.ENG_KIT_GUARD_BASELINE), new RegExp(JSON.stringify(dir).slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the child keeps the parent's record");
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
 });
 
 test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {

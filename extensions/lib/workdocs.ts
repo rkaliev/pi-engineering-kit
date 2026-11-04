@@ -5,9 +5,9 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
-import { heredocs, segmentFolders } from "./shell.ts";
+import { safeRealpath, segmentFolders } from "./shell.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -55,16 +55,20 @@ export function checkWorkDocs(
 	};
 	// A GH_REPO set anywhere in the command picks the repository for every gh call after it.
 	const ghRepo = /(^|[\s;&|(])(export\s+)?GH_REPO=/.test(command);
-	// A heredoc body is text, not commands: the review gate asks about a landing one hides.
-	for (const { raw, dir } of segmentFolders(heredocs(command).text, workspace.cwd, workspace.powershell)) {
+	// A heredoc body is text only when the command as a whole just writes it to a file; any other heredoc may run it.
+	const write = quotedHeredoc(command);
+	for (const { raw, dir } of segmentFolders(write?.target !== undefined ? write.head : command, workspace.cwd, workspace.powershell)) {
 		const l = landing(raw.map((t) => t.replace(/^\(+|\)+$/g, "")));
 		if (!l) continue;
 		// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
 		if (l.kind === "commit" && dir === undefined) {
+			if (!watched) continue;
 			const until = Date.now() + UNPLACED_BUDGET_MS;
 			for (const repo of folders) {
+				const own = workspace.dirsFor(repo);
+				if (own.length === 0) continue;
 				if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
-				const found = judgeCommit(repo, workspace.dirsFor(repo), until);
+				const found = judgeCommit(repo, own, until);
 				if (found === "late") return cantTell;
 				if (found) return found;
 			}
@@ -72,9 +76,13 @@ export function checkWorkDocs(
 		}
 		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
 		// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
-		const checkout = dir === undefined ? undefined : (repoOf(projectDir, workspace.repos, dir) ?? dir);
+		const repo = dir === undefined ? undefined : repoOf(projectDir, workspace.repos, dir);
+		const checkout = dir === undefined ? undefined : (repo ?? dir);
 		const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
-		const unplaced = checkout === undefined || selector || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
+		// A checkout nested in a repository's folder (a worktree, a clone) is another repository.
+		const top = dir === undefined || repo === undefined ? undefined : git(dir, ["rev-parse", "--show-toplevel"]);
+		const nested = top !== undefined && safeRealpath(top) !== safeRealpath(repo!);
+		const unplaced = checkout === undefined || selector || nested || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
 		if (unplaced) {
 			if (!watched) continue;
 			return cantTell;

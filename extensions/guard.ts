@@ -11,13 +11,13 @@
  * human rather than blocking.
  */
 import { randomUUID } from "node:crypto";
-import { basename, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr, holdBack } from "./lib/reviews.ts";
-import { guardBaseline, guardScope, isGuardBaseline, repoIn, scopedConfig, scopedPath, type GuardBaseline } from "./lib/scope.ts";
+import { guardBaseline, guardScope, isGuardBaseline, repoIn, scopedConfig, scopedPath, underBaseline, type GuardBaseline } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
@@ -40,13 +40,18 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	const session = randomUUID();
 	let prompt = 0;
 	// The workspace repositories that may loosen the guard: those there when this process, or the pi process that
-	// started it (a subagent), first started a session in this folder (lib/scope.ts).
-	let baseline: GuardBaseline | undefined;
-	const take = (ctx: ExtensionContext): GuardBaseline => {
-		baseline ??= inherited(ctx.cwd) ?? guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root));
-		process.env[BASELINE_ENV] = JSON.stringify({ cwd: ctx.cwd, baseline });
-		verifyState.guardBaseline = baseline;
-		return baseline;
+	// started it (a subagent, in this folder or inside it), first started a session (lib/scope.ts).
+	let record: BaselineRecord | undefined;
+	const take = (ctx: ExtensionContext): BaselineRecord => {
+		if (!record) {
+			const parent = inherited();
+			const inside = parent !== undefined && (parent.cwd === ctx.cwd || within(parent.cwd, ctx.cwd));
+			record = inside ? parent : { cwd: ctx.cwd, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root)) };
+			// A record of another folder stays for the processes this one starts: a grandchild back in the workspace keeps it.
+			if (!inside) process.env[BASELINE_ENV] = JSON.stringify(record);
+		}
+		verifyState.guardBaseline = record.cwd === ctx.cwd ? record.baseline : {};
+		return record;
 	};
 	pi.on("session_start", async (_event, ctx) => {
 		take(ctx);
@@ -79,7 +84,14 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	/** The guard's decision for one tool call, or undefined for tools it doesn't check. */
 	function check(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): { decision: GuardDecision; subject: string } | undefined {
 		// The session folder's config and, in a workspace, each repository's own (lib/scope.ts).
-		const scope = guardScope(ctx.cwd, (root) => loadConfig(ctx, root), GUARD_FILE, baseline ?? take(ctx));
+		const rec = record ?? take(ctx);
+		const scope = guardScope(ctx.cwd, (root) => loadConfig(ctx, root), GUARD_FILE, rec.cwd === ctx.cwd ? rec.baseline : undefined);
+		if (rec.cwd !== ctx.cwd) {
+			// A subagent inside the workspace: its repository loosens and pushes silently only as the session found it.
+			const known = underBaseline(rec.baseline, rec.cwd, ctx.cwd, GUARD_FILE);
+			if (!known.loosens) scope.config = { ...scope.config, allow: [], workDocs: undefined, reviewGate: true };
+			if (!known.owner) scope.config = { ...scope.config, pushOwners: [] };
+		}
 		const config = scope.config;
 		let decision: GuardDecision;
 		let subject: string;
@@ -95,7 +107,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, GUARD_FILE, scope.kind !== "repo"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
 				const waived = (checkout: string) => scope.repos.get(repoIn(scope, checkout) ?? "")?.reviewGate === false;
-				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands, waived, workspace: scope.repos.size > 0, powershell };
+				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands, waived, workspace: scope.repos.size > 0, powershell, repoOf: (dir: string) => repoIn(scope, dir) };
 				const review = checkReview(subject, ctx.cwd, ctx.cwd, gate, options.reviewsRoot);
 				decision = join(decision, review);
 			}
@@ -225,13 +237,25 @@ const GUARD_FILE = ".pi/guard.json";
 /** Where a pi process leaves its guard baseline for the pi processes it starts (subagents in the same folder). */
 const BASELINE_ENV = "ENG_KIT_GUARD_BASELINE";
 
-function inherited(cwd: string): GuardBaseline | undefined {
+/** A pi process's guard baseline and the folder it was taken in. */
+interface BaselineRecord {
+	cwd: string;
+	baseline: GuardBaseline;
+}
+
+/** The record a parent pi process left in the environment, if it has the right shape. */
+function inherited(): BaselineRecord | undefined {
 	try {
 		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; baseline?: unknown };
-		return parsed.cwd === cwd && isGuardBaseline(parsed.baseline) ? parsed.baseline : undefined;
+		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, baseline: parsed.baseline } : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function within(parent: string, child: string): boolean {
+	const rel = relative(parent, child);
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /** A root's guard config (the session folder's, or a workspace repository's); loosening only in a trusted project. */

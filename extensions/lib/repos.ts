@@ -63,14 +63,22 @@ export function placeIn(projectDir: string, repos: string[], path: string, byRea
 	const real = canonical(path);
 	for (const name of repos) {
 		const repo = join(projectDir, name);
-		const root = canonical(repo);
+		const root = rootOf(repo);
 		if (real === root || real.startsWith(root + sep)) return { repo, path: join(repo, relative(root, real)) };
 	}
 	return undefined;
 }
 
+/** A repository folder's real path, resolved once per process: a hook places many words against few roots. */
+const roots = new Map<string, string>();
+function rootOf(repo: string): string {
+	let root = roots.get(repo);
+	if (root === undefined) roots.set(repo, (root = canonical(repo)));
+	return root;
+}
+
 /** The real path of the deepest folder of `path` that exists, with the rest appended as written. */
-function canonical(path: string): string {
+export function canonical(path: string): string {
 	let head = resolve(path);
 	const rest: string[] = [];
 	while (!existsSync(head) && dirname(head) !== head) {
