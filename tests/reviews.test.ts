@@ -1259,6 +1259,18 @@ test("highestFindingIds names the highest finding number of each prefix (F, S, T
 	assert.deepEqual(highestFindingIds(dir, [], root), {});
 });
 
+test("checkGateFiles: with children, a first-level folder's guard config is a gate file in every form", () => {
+	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
+	for (const dir of ["a/.claude", "x/.claude"]) mkdirSync(join(ws, dir), { recursive: true });
+	const check = (command: string) => checkGateFiles(command, ws, ws, ".claude/guard.json", true)?.action ?? "allow";
+	assert.equal(check(`cd a/.claude && echo '{"allow":[".*"]}' > guard.json`), "confirm");
+	assert.equal(check("cd a && cd .claude && sed -i '' s/x/y/ guard.json"), "confirm");
+	assert.equal(check("echo '{}' > a/.claude/./guard.json"), "confirm");
+	assert.equal(check("cd x/.claude && echo '{}' > guard.json"), "confirm", "a folder that isn't a repository yet");
+	assert.equal(check("cd a && echo x > notes.json"), "allow");
+	assert.equal(checkGateFiles("cd a/.claude && echo '{}' > guard.json", ws, ws, ".claude/guard.json"), undefined, "without children, as before");
+});
+
 test("segmentFolders: each segment runs where the moves before it and its git -C lead", () => {
 	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
 	for (const r of ["a", "b"]) mkdirSync(join(ws, r));

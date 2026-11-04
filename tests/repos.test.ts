@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -58,4 +58,13 @@ test("repoOf: a path is placed in the workspace repository holding it, by whole 
 	assert.equal(repoOf(ws, repos, `${ws}/a/../b/x`), join(ws, "b"), "a path that leaves its repository by ..");
 	assert.equal(repoOf(ws, repos, join(ws, "ab", "x")), undefined, "a folder whose name only starts with a repository's");
 	assert.equal(repoOf(ws, repos, join(ws, "notes", "x")), undefined);
+});
+
+test("repoOf: a path is placed by its real location: through a symlink, and by the name's case where the volume ignores it", () => {
+	const ws = mkdtempSync(join(tmpdir(), "repos-"));
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
+	symlinkSync(join(ws, "a"), join(ws, "link"));
+	assert.equal(repoOf(ws, ["a", "b"], join(ws, "link", ".github", "workflows", "ci.yml")), join(ws, "a"));
+	const caseless = existsSync(join(ws, "A"));
+	assert.equal(repoOf(ws, ["a", "b"], join(ws, "A", "x")), caseless ? join(ws, "a") : undefined);
 });

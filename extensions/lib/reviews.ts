@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, posix, resolve } from "node:path";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { projectRepos } from "./repos.ts";
@@ -648,8 +648,10 @@ function inTemp(path: string): boolean {
 /**
  * Commands that write the review gate's own state: a verdict record (block) or the guard config (ask).
  * The path rules cover Edit/Write; this covers the shell, following `cd`. An interpreter one-liner can still hide a path.
+ * `children`: outside git, a first-level folder's `guardConfig` (a workspace repository's, or one made before its
+ * `git init`) is a gate file too.
  */
-export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string): GuardDecision | undefined {
+export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false): GuardDecision | undefined {
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
@@ -678,7 +680,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
+		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
 		if (unknown) {
@@ -686,6 +688,13 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		}
 	}
 	return ask;
+}
+
+/** Whether `path` is `<projectDir>/<one folder>/<guardConfig>`. */
+function childConfig(projectDir: string, path: string, guardConfig: string): boolean {
+	const rel = relative(projectDir, path).replaceAll("\\", "/");
+	const slash = rel.indexOf("/");
+	return slash > 0 && !rel.startsWith("../") && rel.slice(slash + 1) === guardConfig;
 }
 
 function isSafe(tokens: string[], verify: string[]): boolean {

@@ -157,6 +157,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		workDocsRemindedThisPrompt = false;
 		edited = [];
 		notified = false;
+		skippedNoted = undefined;
 		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
 		const why: { slow?: boolean; slowParts?: string[] } = {};
@@ -239,7 +240,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const due = taskFileReminders(ctx.cwd, (root) => workDocDirs(ctx, root), Date.now() + TASK_FILE_BUDGET_MS, want, [...slowParts]);
 		if (due.approved.length > 0) {
 			approvalRemindedThisPrompt = true;
-			parts.push(approvalReminder(due.approved, due.onBase));
+			parts.push(approvalReminder(due.approved, due.onBase, due.workspace));
 		}
 		if (due.finished.length > 0) {
 			workDocsRemindedThisPrompt = true;
@@ -292,8 +293,10 @@ function countsAsEdit(path: string, cwd: string): boolean {
 	return !ignoredPath(cwd, rel, resolveIgnore(cwd));
 }
 
-/** Task-file folders: the kit's defaults, or `workDocs` from `.pi/guard.json` in a trusted project. */
-/** A root's task-file folders; a workspace repository without its own falls back to the session folder's. */
+/**
+ * A root's task-file folders: the kit's defaults, or `workDocs` from its `.pi/guard.json` in a trusted project; a
+ * workspace repository without its own falls back to the session folder's.
+ */
 function workDocDirs(ctx: ExtensionContext, root = ctx.cwd): string[] {
 	const raw = readProjectJson<{ workDocs: unknown }>(root, "guard").workDocs;
 	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return root === ctx.cwd ? WORK_DOC_DIRS : workDocDirs(ctx);

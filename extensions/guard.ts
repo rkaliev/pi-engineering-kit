@@ -17,7 +17,7 @@ import { readProjectJson } from "./lib/config.ts";
 import { checkCommand, type GuardConfig, type GuardDecision } from "./lib/patterns.ts";
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr, holdBack } from "./lib/reviews.ts";
-import { guardScope, repoIn, scopedConfig, scopedPath } from "./lib/scope.ts";
+import { guardBaseline, guardScope, repoIn, scopedConfig, scopedPath, type GuardBaseline } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
@@ -39,6 +39,12 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	// Reviews from one user message combine to the worst verdict; the next message starts a new round.
 	const session = randomUUID();
 	let prompt = 0;
+	// The workspace repositories that may loosen the guard: those there when the session started (lib/scope.ts).
+	let baseline: GuardBaseline | undefined;
+	pi.on("session_start", async (_event, ctx) => {
+		baseline = guardBaseline(ctx.cwd, GUARD_FILE);
+		return undefined;
+	});
 	pi.on("input", async () => {
 		prompt += 1;
 		return undefined;
@@ -66,19 +72,21 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	/** The guard's decision for one tool call, or undefined for tools it doesn't check. */
 	function check(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): { decision: GuardDecision; subject: string } | undefined {
 		// The session folder's config and, in a workspace, each repository's own (lib/scope.ts).
-		const scope = guardScope(ctx.cwd, (root) => loadConfig(ctx, root));
+		baseline ??= guardBaseline(ctx.cwd, GUARD_FILE);
+		const scope = guardScope(ctx.cwd, (root) => loadConfig(ctx, root), GUARD_FILE, baseline);
 		const config = scope.config;
 		let decision: GuardDecision;
 		let subject: string;
 
 		if (toolName === "bash" || toolName === "powershell") {
 			subject = String(input.command ?? "");
-			decision = checkCommand(subject, ctx.cwd, scopedConfig(subject, ctx.cwd, scope), ctx.cwd, process.env, (target) => scopedPath("write", target, scope));
+			const powershell = toolName === "powershell";
+			decision = checkCommand(subject, ctx.cwd, scopedConfig(subject, ctx.cwd, scope, powershell), ctx.cwd, process.env, (target) => scopedPath("write", target, scope));
 			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
 			// A workspace repository's own task-file folders, else the session folder's.
-			const workspace = scope.repos.size === 0 ? undefined : { cwd: ctx.cwd, repos: [...scope.repos.keys()].map((dir) => basename(dir)), dirsFor: (repo: string) => scope.repos.get(repo)?.workDocs ?? workDocs };
+			const workspace = scope.repos.size === 0 ? undefined : { cwd: ctx.cwd, repos: [...scope.repos.keys()].map((dir) => basename(dir)), dirsFor: (repo: string) => scope.repos.get(repo)?.workDocs ?? workDocs, powershell };
 			if (decision.action !== "block") decision = checkWorkDocs(subject, ctx.cwd, workDocs, workspace) ?? decision;
-			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, ".pi/guard.json"));
+			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, ctx.cwd, GUARD_FILE, scope.kind !== "repo"));
 			if (decision.action !== "block" && config.reviewGate !== false) {
 				const waived = (checkout: string) => scope.repos.get(repoIn(scope, checkout) ?? "")?.reviewGate === false;
 				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(ctx.cwd, { detect: false }).commands, waived };
@@ -206,9 +214,11 @@ function join(current: GuardDecision, next: GuardDecision | undefined): GuardDec
 	return { action: "confirm", reason: `${next.reason} Also: ${current.reason}` };
 }
 
+const GUARD_FILE = ".pi/guard.json";
+
 /** A root's guard config (the session folder's, or a workspace repository's); loosening only in a trusted project. */
 function loadConfig(ctx: ExtensionContext, root = ctx.cwd): GuardConfig {
-	const label = root === ctx.cwd ? ".pi/guard.json" : `${relative(ctx.cwd, root)}/.pi/guard.json`;
+	const label = root === ctx.cwd ? GUARD_FILE : `${relative(ctx.cwd, root)}/${GUARD_FILE}`;
 	const raw = readProjectJson<GuardConfig>(root, "guard");
 	if (raw.error && ctx.hasUI) ctx.ui.notify(`Guard config ignored: ${raw.error}`, "warning");
 	const trusted = ctx.isProjectTrusted();
@@ -223,6 +233,7 @@ function loadConfig(ctx: ExtensionContext, root = ctx.cwd): GuardConfig {
 			}
 		});
 	return {
+		label,
 		block: regexes(raw.block),
 		confirm: regexes(raw.confirm),
 		protectedPaths: strings(raw.protectedPaths),

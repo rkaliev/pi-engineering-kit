@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
+import { approvalReminder, taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
+import { slowGit } from "./slow-git.ts";
 import { baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
 
 const TASK = "docs/tasks/2026-01-01-a.md";
@@ -160,8 +161,8 @@ function workspace(aDirs?: string[]) {
 	b.git("switch", "-qc", "feat/y");
 	b.commit({ "src/b.ts": "x\n" });
 	const dirsFor = (r: string) => (r === join(root, "a") && aDirs ? aDirs : WORK_DOC_DIRS);
-	const check = (command: string, cwd = root) => checkWorkDocs(command, root, undefined, { cwd, repos: ["a", "b"], dirsFor });
-	return { root, a, check };
+	const check = (command: string, cwd = root, powershell = false) => checkWorkDocs(command, root, undefined, { cwd, repos: ["a", "b"], dirsFor, powershell });
+	return { root, a, b, check };
 }
 
 test("in a workspace, a landing is judged in the repository it lands in", () => {
@@ -183,6 +184,7 @@ test("in a workspace, a repository's workDocs folders decide its task files", ()
 });
 
 test("in a workspace, a landing whose folder the guard can't tell is blocked", () => {
+	assert.equal(workspace().check("Set-Location a; gh pr create", undefined, true)?.action, "block", "any PowerShell landing");
 	const pr = workspace().check("cd $D && gh pr create");
 	assert.equal(pr?.action, "block");
 	assert.match(pr!.reason!, /can't tell which repository/);
@@ -190,8 +192,57 @@ test("in a workspace, a landing whose folder the guard can't tell is blocked", (
 
 test("taskFileReminders names the workspace repositories it had no time for or found slow", () => {
 	const { root } = workspace();
-	assert.deepEqual(taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() - 1), { approved: [], finished: [], onBase: undefined, skipped: ["a", "b"] });
+	assert.deepEqual(taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() - 1), { approved: [], finished: [], onBase: undefined, workspace: true, skipped: ["a", "b"] });
 	assert.deepEqual(taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 60_000, undefined, ["a"]).skipped, ["a"], "a repository found slow");
 	assert.equal(taskFileWarning(["a", "b"]), "Task-file reminders skipped (no time left, or slow in this session): a, b");
 	assert.equal(taskFileWarning([]), undefined);
+});
+
+test("in a workspace, a PR that names its repository, or starts outside git, can't be placed and is blocked", () => {
+	const { check } = workspace();
+	for (const command of ["gh pr create -R org/a -H feat/x", "GH_REPO=org/a gh pr create -H feat/x", "gh pr merge https://github.com/org/a/pull/12", "cd a && gh pr create -R org/a"]) {
+		assert.equal(check(command)?.action, "block", command);
+	}
+});
+
+test("in a workspace, an unplaced commit is judged in every repository, and no task-file folders anywhere means no block", () => {
+	const { root, b, check } = workspace();
+	assert.equal(check("cd $D && git commit -m x")?.action ?? "allow", "allow", "no repository is on its base with a staged task file");
+	b.git("switch", "-q", "main");
+	b.write({ "docs/tasks/s.md": "# S\n" });
+	b.git("add", "docs/tasks/s.md");
+	assert.equal(check("cd $D && git commit -m x")?.action, "block", "b is on main with a staged task file");
+	const off = checkWorkDocs("cd $D && gh pr create", root, [], { cwd: root, repos: ["a", "b"], dirsFor: () => [] });
+	assert.equal(off, undefined, '"workDocs": [] everywhere turns the rule off');
+});
+
+test("taskFileReminders names a repository whose git ran out of the time left, and its base branch lookup stays within it", () => {
+	const { root, a } = workspace();
+	const status = slowGit(realpathSync(join(root, "a")), "status");
+	try {
+		const started = Date.now();
+		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 1000);
+		assert.ok(due.skipped.includes("a"), JSON.stringify(due));
+		assert.ok(Date.now() - started < 2500, "within the deadline, not git's 4 s hang");
+	} finally {
+		status.restore();
+	}
+	a.write({ "docs/tasks/t.md": "# T\n\nStatus: design approved (2026-11-04)\n" });
+	const base = slowGit(realpathSync(join(root, "a")), ["symbolic-ref", "rev-parse"]);
+	try {
+		const started = Date.now();
+		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 3000);
+		assert.deepEqual(due.approved, ["a/docs/tasks/t.md"]);
+		assert.ok(Date.now() - started < 3800, "the base branch lookup is bounded too: less than one of git's 4 s hangs past the deadline");
+	} finally {
+		base.restore();
+	}
+});
+
+test("approvalReminder: in a workspace, the commit it suggests runs in each repository", () => {
+	const text = approvalReminder(["a/docs/tasks/t.md", "b/docs/tasks/u.md"], "main in a", true);
+	assert.match(text, /git -C a add docs\/tasks\/t\.md && git -C a commit/);
+	assert.match(text, /git -C b add docs\/tasks\/u\.md && git -C b commit/);
+	assert.match(text, /You are on main in a/);
+	assert.match(approvalReminder(["docs/tasks/t.md"]), /git add docs\/tasks\/t\.md && git commit/, "one repository, as before");
 });

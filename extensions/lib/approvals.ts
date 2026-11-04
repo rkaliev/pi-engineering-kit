@@ -12,11 +12,17 @@ const SETTLED = /^\s*(?:\*\*)?Status:(?:\*\*)?\s*(?:design|plan) approved\b/im;
  * committed: new, modified or staged. Returns project-relative paths; empty outside a git repo.
  */
 export function uncommittedApproved(projectDir: string, dirs = WORK_DOC_DIRS, timeout = 5000): string[] {
+	return approvedIn(projectDir, dirs, timeout) ?? [];
+}
+
+/** As uncommittedApproved, but undefined when git didn't answer (killed at `timeout`, or failed to start). */
+function approvedIn(projectDir: string, dirs: string[], timeout: number): string[] | undefined {
 	const r = spawnSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ...dirs], {
 		cwd: projectDir,
 		encoding: "utf8",
 		timeout,
 	});
+	if (r.error || r.signal) return undefined;
 	if (r.status !== 0 || !r.stdout) return [];
 	const files: string[] = [];
 	for (const line of r.stdout.split("\n")) {
@@ -36,9 +42,19 @@ export function uncommittedApproved(projectDir: string, dirs = WORK_DOC_DIRS, ti
 }
 
 /** `onBase` names the base branch when it is checked out: working documents are committed only on a work branch. */
-export function approvalReminder(files: string[], onBase?: string): string {
+export function approvalReminder(files: string[], onBase?: string, workspace = false): string {
 	const where = onBase ? ` You are on ${onBase}, where task files never go: create a work branch first (\`git switch -c <type>/<topic>\`).` : "";
-	return `Approval gate: approved task files are not committed: ${files.join(", ")}. An approval that isn't in git can be lost or silently edited.${where} Commit them now as their own commit (\`git add ${files.join(" ")} && git commit -m "docs: approve …"\`), or tell me why not.`;
+	// In a workspace each path starts with its repository's folder, and each repository commits its own.
+	const groups = new Map<string, string[]>();
+	for (const f of files) {
+		const [repo, path] = workspace ? [f.slice(0, f.indexOf("/")), f.slice(f.indexOf("/") + 1)] : ["", f];
+		groups.set(repo, [...(groups.get(repo) ?? []), path]);
+	}
+	const commits = [...groups].map(([repo, paths]) => {
+		const git = repo ? `git -C ${repo}` : "git";
+		return `\`${git} add ${paths.join(" ")} && ${git} commit -m "docs: approve …"\``;
+	});
+	return `Approval gate: approved task files are not committed: ${files.join(", ")}. An approval that isn't in git can be lost or silently edited.${where} Commit them now as their own commit (${commits.join(", ")}), or tell me why not.`;
 }
 
 /** Task files due a reminder at Stop, as `approvalReminder` and `workDocsReminder` take them. */
@@ -46,6 +62,8 @@ export interface TaskFileReminders {
 	approved: string[];
 	finished: string[];
 	onBase: string | undefined;
+	/** The paths start with their workspace repository's folder. */
+	workspace: boolean;
 	/** Workspace repositories not reached before the deadline, or known to be slow. */
 	skipped: string[];
 }
@@ -60,10 +78,10 @@ export function taskFileReminders(projectDir: string, dirsFor: (root: string) =>
 	const { kind, repos } = projectRepos(projectDir);
 	if (kind !== "workspace") {
 		const approved = want.approved ? uncommittedApproved(projectDir, dirs) : [];
-		return { approved, finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: approved.length > 0 ? onBaseBranch(projectDir) : undefined, skipped: [] };
+		return { approved, finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: approved.length > 0 ? onBaseBranch(projectDir) : undefined, workspace: false, skipped: [] };
 	}
 	// The session folder holds no git: only its finished task files count.
-	const due: TaskFileReminders = { approved: [], finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: undefined, skipped: [] };
+	const due: TaskFileReminders = { approved: [], finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: undefined, workspace: true, skipped: [] };
 	const bases: string[] = [];
 	for (const name of repos) {
 		const left = deadline - Date.now();
@@ -73,13 +91,17 @@ export function taskFileReminders(projectDir: string, dirsFor: (root: string) =>
 		}
 		const dir = join(projectDir, name);
 		const own = dirsFor(dir);
-		if (want.approved) {
-			const files = uncommittedApproved(dir, own, Math.min(5000, left));
-			due.approved.push(...files.map((f) => `${name}/${f}`));
-			const base = files.length > 0 ? onBaseBranch(dir) : undefined;
-			if (base) bases.push(`${base} in ${name}`);
-		}
 		if (want.finished) due.finished.push(...finishedWorkDocs(dir, own).map((f) => `${name}/${f}`));
+		if (!want.approved) continue;
+		const files = approvedIn(dir, own, Math.min(5000, left));
+		// Git that didn't answer in the time left: named, never taken for "nothing approved".
+		if (files === undefined) {
+			due.skipped.push(name);
+			continue;
+		}
+		due.approved.push(...files.map((f) => `${name}/${f}`));
+		const base = files.length > 0 ? onBaseBranch(dir, deadline) : undefined;
+		if (base) bases.push(`${base} in ${name}`);
 	}
 	due.onBase = bases.length > 0 ? bases.join(", ") : undefined;
 	return due;

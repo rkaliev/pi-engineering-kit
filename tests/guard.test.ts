@@ -184,6 +184,13 @@ test("from a workspace folder, a plain push of a repository's own work branch as
 	assert.equal(ask("git -C repo push", ws, process.env, ws), "confirm");
 });
 
+test("from a workspace folder, a repository that isn't one of the push owners asks", () => {
+	const repo = pushRepo();
+	const ws = dirname(repo);
+	assert.equal(checkCommand("git -C repo push", ws, { pushOwners: [] }, ws).action, "confirm");
+	assert.equal(checkCommand("git -C repo push", ws, { pushOwners: [repo] }, ws).action, "allow");
+});
+
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();
 	for (const cmd of [
