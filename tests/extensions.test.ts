@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test, { after } from "node:test";
+import test, { after, beforeEach } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
 import { readReports, readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
@@ -31,6 +31,12 @@ process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 type Handler = (event: any, ctx: any) => unknown;
+
+// The guard's session record lives in the environment and on globalThis: each test starts without one.
+beforeEach(() => {
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	verifyState.guardBaseline = undefined;
+});
 
 function fakePi(execCodes: Record<string, number> = {}, onExec: (command: string) => void = () => {}) {
 	const handlers = new Map<string, Handler[]>();
@@ -860,6 +866,23 @@ test("verify: a repository config that appeared after the session started can't 
 	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
 	await v.emit("agent_end", { messages: [] }, c);
 	assert.match(v.sent.map((m) => String(m.message.content)).join("\n"), /a\/docs\/tasks\/t\.md/);
+});
+
+test("verify: a repository config the session started with decides its task-file folders", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ workDocs: ["plans"] }));
+	mkdirSync(join(dir, "a", "plans"), { recursive: true });
+	writeFileSync(join(dir, "a", "plans", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	const g = fakePi();
+	guard(g.pi);
+	const v = fakePi();
+	verify(v.pi);
+	const c = ctx(dir, { trusted: true });
+	await g.emit("session_start", { reason: "startup" }, c);
+	await v.emit("session_start", { reason: "startup" }, c);
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.match(v.sent.map((m) => String(m.message.content)).join("\n"), /a\/plans\/t\.md/);
 });
 
 test("verify also reminds to commit an approved task file", async () => {
