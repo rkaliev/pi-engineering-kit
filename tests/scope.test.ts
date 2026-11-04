@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -83,7 +84,7 @@ test("scopedConfig: a path into a repository adds its restrictions, never its lo
 	assert.equal(command("npm run release --prefix a"), "block");
 	assert.equal(command("cd b && npm run deploy --prefix ../a"), "confirm", "b's allow doesn't cover a command reaching into a");
 	assert.equal(command("git -C a status && make docs"), "confirm", "a's confirm through git -C");
-	assert.equal(command("git -C b status && make docs"), "allow");
+	assert.equal(command("cd b && git -C ../b status && make docs"), "allow", "every segment runs in b");
 });
 
 test("scopedPath: a repository's rules hold through a symlink and a case-swapped name", () => {
@@ -106,7 +107,7 @@ test("guardScope: a repository or a config that appeared after the session start
 	const deploy: GuardConfig = { allow: ["npm run deploy"], block: ["make release"] };
 	mkdirSync(join(ws, "b", ".pi"));
 	writeFileSync(join(ws, "b", ".pi", "guard.json"), JSON.stringify(deploy));
-	const baseline = guardBaseline(ws, ".pi/guard.json");
+	const baseline = guardBaseline(ws, ".pi/guard.json", (root) => (root === ws ? {} : root.endsWith("b") ? deploy : {}));
 	mkdirSync(join(ws, "a", ".pi"));
 	writeFileSync(join(ws, "a", ".pi", "guard.json"), JSON.stringify(deploy));
 	mkdirSync(join(ws, "c", ".git"), { recursive: true });
@@ -117,4 +118,54 @@ test("guardScope: a repository or a config that appeared after the session start
 	assert.equal(command("cd c && npm run deploy"), "confirm", "c appeared later");
 	assert.equal(command("cd c && make release"), "block", "its restrictions still apply");
 	assert.deepEqual(scopedConfig("ls", ws, scope).pushOwners, [join(ws, "a"), join(ws, "b")], "only repositories there at the start push silently");
+});
+
+test("scopedConfig: a segment that runs outside every repository gets every repository's restrictions, whatever its form", () => {
+	const { command } = workspace({ a: { block: ["make release"] }, b: { allow: ["npm run deploy"] } });
+	for (const cmd of ["fish -c 'cd a; make release'", "python3 -c \"import os; os.chdir('a'); os.system('make release')\"", "echo 'cd a && make release' | sh", "bash <<< 'cd a; make release'"]) {
+		assert.equal(command(cmd), "block", cmd);
+	}
+	assert.equal(command("cd b && fish -c 'cd ../a; make release'"), "block", "inside b, naming a adds a's");
+	assert.equal(command("ls -la"), "allow", "no repository's rule matches");
+	assert.equal(command("cd b && npm run deploy"), "allow", "b's own allow, every segment in b");
+});
+
+/** A workspace of `a` and `b` (a `.git` folder each), its baseline taken with `configs` (by name) as at the start. */
+function started(configs: Record<string, GuardConfig> = {}) {
+	const ws = mkdtempSync(join(tmpdir(), "scope-"));
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
+	const load = (root: string) => configs[root === ws ? "" : root.slice(ws.length + 1)] ?? {};
+	const baseline = guardBaseline(ws, ".pi/guard.json", load);
+	return { ws, load, baseline, scope: () => guardScope(ws, load, ".pi/guard.json", baseline) };
+}
+
+test("guardScope: a later repository named like an Object property, or one cloned in place of another, is no push owner", () => {
+	const { ws, scope } = started();
+	mkdirSync(join(ws, "constructor", ".git"), { recursive: true });
+	renameSync(join(ws, "a"), join(ws, "a.old"));
+	mkdirSync(join(ws, "a", ".git"), { recursive: true });
+	assert.deepEqual(scope().owners, [join(ws, "b")]);
+});
+
+test("guardScope: a repository's restrictions from the session start stay when its config is removed or changed", () => {
+	const { ws, baseline } = started({ a: { block: ["make release"], protectedPaths: ["secret/"] } });
+	const removed = guardScope(ws, () => ({}), ".pi/guard.json", baseline);
+	const cmd = "cd a && make release";
+	assert.equal(checkCommand(cmd, ws, scopedConfig(cmd, ws, removed), ws).action, "block");
+	assert.equal(scopedPath("write", join(ws, "a", "secret", "x"), removed).action, "block");
+});
+
+test("guardScope: git init at the workspace root keeps the repositories of the session start", () => {
+	const { ws, scope } = started();
+	execFileSync("git", ["init", "-q"], { cwd: ws });
+	assert.equal(scope().kind, "workspace");
+	assert.equal(scopedPath("write", join(ws, "a", ".github", "workflows", "ci.yml"), scope()).action, "confirm");
+	rmSync(join(ws, ".git"), { recursive: true });
+});
+
+test("scopedPath: a repository's rules hold for a path written inside it that a symlink leads out of it", () => {
+	const { ws, scope } = workspace({ a: { protectedPaths: ["shared/"] } });
+	mkdirSync(join(ws, "shared-config"));
+	symlinkSync(join(ws, "shared-config"), join(ws, "a", "shared"));
+	assert.equal(scopedPath("write", join(ws, "a", "shared", "x"), scope).action, "block");
 });

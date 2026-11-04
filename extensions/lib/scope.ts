@@ -4,7 +4,7 @@
  * session folder's everywhere, a repository's only for a command that runs in that repository alone.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { checkPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
 import { placeIn, projectRepos, repoOf } from "./repos.ts";
@@ -25,19 +25,27 @@ export interface GuardScope {
 
 /**
  * The session folder's config and, in a workspace, each repository's, read by `load` from that root. With a
- * `baseline`, a repository or a config that wasn't there as it is now when the session started (a clone, a `git init`,
- * an edited config) keeps its restrictions and loses its loosening.
+ * `baseline`, a repository or a config that isn't the one the session started with (a clone, a folder replaced, an
+ * edited config) keeps its restrictions and loses its loosening; what a repository restricted at the start still
+ * holds; and the repositories of the start still count after `git init` at the root or past MAX_REPOS.
  */
 export function guardScope(projectDir: string, load: (root: string) => GuardConfig, guardFile: string, baseline?: GuardBaseline): GuardScope {
-	const { kind, repos } = projectRepos(projectDir);
+	const found = projectRepos(projectDir);
+	const kept = baseline === undefined ? [] : Object.keys(baseline).filter((name) => existsSync(join(projectDir, name, ".git")));
+	const names = [...new Set([...(found.kind === "workspace" ? found.repos : []), ...kept])].sort();
+	const kind = found.kind === "workspace" || kept.length === 0 ? found.kind : "workspace";
 	const configs = new Map<string, GuardConfig>();
 	const owners: string[] = [];
-	for (const name of kind === "workspace" ? repos : []) {
+	for (const name of names) {
 		const dir = join(projectDir, name);
 		const config = load(dir);
-		const known = baseline === undefined || (name in baseline && baseline[name] === configHash(join(dir, guardFile)));
-		configs.set(dir, known ? config : { ...config, allow: [], workDocs: undefined, reviewGate: true });
-		if (baseline === undefined || name in baseline) owners.push(dir);
+		const was = baseline !== undefined && Object.hasOwn(baseline, name) ? baseline[name] : undefined;
+		const same = was !== undefined && was.id !== null && was.id === repoId(dir);
+		const known = baseline === undefined || (same && was.config === configHash(join(dir, guardFile)));
+		const own = known ? config : { ...config, allow: [], workDocs: undefined, reviewGate: true };
+		const union = (now: string[] | undefined, then: string[]) => [...new Set([...(now ?? []), ...then])];
+		configs.set(dir, was === undefined ? own : { ...own, block: union(own.block, was.block), confirm: union(own.confirm, was.confirm), protectedPaths: union(own.protectedPaths, was.protectedPaths) });
+		if (baseline === undefined || same) owners.push(dir);
 	}
 	return { projectDir, kind, guardFile, config: load(projectDir), repos: configs, owners };
 }
@@ -52,8 +60,9 @@ const RANK: Record<GuardDecision["action"], number> = { allow: 0, confirm: 1, bl
 /** A path judged from the session folder with its config and, inside a workspace repository, from it with its own. */
 export function scopedPath(tool: "read" | "write" | "edit", path: string, scope: GuardScope): GuardDecision {
 	const own = checkPath(tool, path, scope.projectDir, scope.config);
-	const inside = placeIn(scope.projectDir, names(scope), path);
-	const placed = inside === undefined ? own : strictest(own, checkPath(tool, inside.path, inside.repo, scope.repos.get(inside.repo)!));
+	// Placed as written and by its real location: a symlink may lead into a repository or out of one.
+	const places = [placeIn(scope.projectDir, names(scope), path, false), placeIn(scope.projectDir, names(scope), path)];
+	const placed = places.reduce((d, inside) => (inside === undefined ? d : strictest(d, checkPath(tool, inside.path, inside.repo, scope.repos.get(inside.repo)!))), own);
 	// Outside git, a first-level folder's guard config is a repository's, or will be one after `git init`.
 	const rel = relative(scope.projectDir, resolve(path)).replaceAll("\\", "/");
 	const slash = rel.indexOf("/");
@@ -62,26 +71,20 @@ export function scopedPath(tool: "read" | "write" | "edit", path: string, scope:
 }
 
 /**
- * The config a shell command is judged by: see the module comment. A repository a segment names by a path (`--prefix a`,
- * `make -C a`, `./a/bin/x`) adds its restrictions, never its loosening. Outside a workspace, the session folder's.
+ * The config a shell command is judged by: see the module comment. A working segment that doesn't run inside one
+ * workspace repository (the workspace root, or a folder the guard can't tell) may reach any of them, so it gets every
+ * repository's restrictions; a repository whose folder name the command text mentions as a path (`--prefix a`,
+ * `../a/x`) adds its restrictions, never its loosening. Outside a workspace, the session folder's.
  */
 export function scopedConfig(command: string, cwd: string, scope: GuardScope, powershell = false): GuardConfig {
 	if (scope.repos.size === 0) return scope.config;
 	const segments = segmentFolders(command, cwd, powershell);
-	const unknown = segments.some((s) => s.dir === undefined);
 	// Where each working segment runs; a move only leads there.
-	const working = segments.filter((s) => !s.move);
-	const ran = working.map((s) => (s.dir === undefined ? undefined : repoIn(scope, s.dir)));
-	const named = new Set<string>();
-	for (const { raw, dir } of working) {
-		if (dir === undefined) continue;
-		for (const word of raw.flatMap((t) => [t, t.slice(t.indexOf("=") + 1)])) {
-			const repo = /[$`]/.test(word) ? undefined : repoIn(scope, resolve(dir, word.replace(/^['"(]+|['")]+$/g, "")));
-			if (repo !== undefined) named.add(repo);
-		}
-	}
-	const touched = unknown ? [...scope.repos.keys()] : [...new Set([...ran.filter((r) => r !== undefined), ...named])];
-	const only = !unknown && ran.length > 0 && ran.every((r) => r !== undefined && r === ran[0]) && [...named].every((r) => r === ran[0]) ? ran[0] : undefined;
+	const ran = segments.filter((s) => !s.move).map((s) => (s.dir === undefined ? undefined : repoIn(scope, s.dir)));
+	const anywhere = ran.some((r) => r === undefined) || segments.some((s) => s.dir === undefined);
+	const named = [...scope.repos.keys()].filter((dir) => mentions(command, basename(dir)));
+	const touched = anywhere ? [...scope.repos.keys()] : [...new Set([...ran.filter((r) => r !== undefined), ...named])];
+	const only = !anywhere && ran.length > 0 && ran.every((r) => r === ran[0]) && named.every((r) => r === ran[0]) ? ran[0] : undefined;
 	const rules = touched.map((dir) => scope.repos.get(dir)!);
 	// Which file each rule came from, for the reason; the session folder's first.
 	const sources: Record<string, string> = {};
@@ -96,6 +99,12 @@ export function scopedConfig(command: string, cwd: string, scope: GuardScope, po
 	};
 }
 
+/** Whether `text` names the folder `name` as a path segment (`a`, `a/x`, `../a`, `--prefix=a`, `-Ca`). */
+function mentions(text: string, name: string): boolean {
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(^|[\\s'"=:/(\`]|-C)${escaped}($|[\\s'"/)\`;|&])`).test(text);
+}
+
 /** The workspace repository holding `path`, as the absolute folder `scope.repos` keys it by. */
 export function repoIn(scope: GuardScope, path: string): string | undefined {
 	return repoOf(scope.projectDir, names(scope), path);
@@ -105,13 +114,48 @@ function names(scope: GuardScope): string[] {
 	return [...scope.repos.keys()].map((dir) => basename(dir));
 }
 
-/** The workspace repositories when the session started, each with its guard config's content hash (null: none). */
-export type GuardBaseline = Record<string, string | null>;
+/** A workspace repository as the session started with it: its `.git` entry's identity, its guard config's hash and restrictions. */
+export interface BaselineRepo {
+	id: string | null;
+	config: string | null;
+	block: string[];
+	confirm: string[];
+	protectedPaths: string[];
+}
 
-/** The workspace repositories now, with their guard configs' hashes: taken when the session starts. */
-export function guardBaseline(projectDir: string, guardFile: string): GuardBaseline {
+/** The workspace repositories when the session started, by folder name. */
+export type GuardBaseline = Record<string, BaselineRepo>;
+
+/** The workspace repositories now, as `guardScope` compares them later: taken once, when the session starts. */
+export function guardBaseline(projectDir: string, guardFile: string, load: (root: string) => GuardConfig): GuardBaseline {
 	const { kind, repos } = projectRepos(projectDir);
-	return Object.fromEntries((kind === "workspace" ? repos : []).map((name) => [name, configHash(join(projectDir, name, guardFile))]));
+	const baseline: GuardBaseline = {};
+	for (const name of kind === "workspace" ? repos : []) {
+		const dir = join(projectDir, name);
+		const config = load(dir);
+		baseline[name] = { id: repoId(dir), config: configHash(join(dir, guardFile)), block: config.block ?? [], confirm: config.confirm ?? [], protectedPaths: config.protectedPaths ?? [] };
+	}
+	return baseline;
+}
+
+/** Whether `value` has a baseline's shape (read back from a session state or a parent process). */
+export function isGuardBaseline(value: unknown): value is GuardBaseline {
+	const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
+	const repo = (v: unknown) => {
+		const r = v as Partial<BaselineRepo> | null;
+		return !!r && typeof r === "object" && (r.id === null || typeof r.id === "string") && (r.config === null || typeof r.config === "string") && strings(r.block) && strings(r.confirm) && strings(r.protectedPaths);
+	};
+	return !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(repo);
+}
+
+/** The identity of a repository's `.git` entry: a folder replaced by a clone under the same name has another. */
+function repoId(dir: string): string | null {
+	try {
+		const stat = lstatSync(join(dir, ".git"));
+		return `${stat.dev}:${stat.ino}`;
+	} catch {
+		return null;
+	}
 }
 
 function configHash(file: string): string | null {

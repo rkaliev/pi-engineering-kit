@@ -43,7 +43,8 @@ function approvedIn(projectDir: string, dirs: string[], timeout: number): string
 
 /** `onBase` names the base branch when it is checked out: working documents are committed only on a work branch. */
 export function approvalReminder(files: string[], onBase?: string, workspace = false): string {
-	const where = onBase ? ` You are on ${onBase}, where task files never go: create a work branch first (\`git switch -c <type>/<topic>\`).` : "";
+	const branch = workspace ? "git -C <repo> switch -c <type>/<topic>" : "git switch -c <type>/<topic>";
+	const where = onBase ? ` You are on ${onBase}, where task files never go: create a work branch first (\`${branch}\`).` : "";
 	// In a workspace each path starts with its repository's folder, and each repository commits its own.
 	const groups = new Map<string, string[]>();
 	for (const f of files) {

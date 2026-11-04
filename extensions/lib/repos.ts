@@ -52,9 +52,14 @@ export function repoOf(projectDir: string, repos: string[], path: string): strin
 /**
  * `path` placed in the workspace repository holding it by its real location (symlinks followed, each name as the
  * volume stores it, so a case-swapped name on a case-insensitive volume counts): the repository's folder, and the path
- * as it is inside that folder. Undefined outside the repositories.
+ * as it is inside that folder. Undefined outside the repositories. `byRealPath: false` places the path as written.
  */
-export function placeIn(projectDir: string, repos: string[], path: string): { repo: string; path: string } | undefined {
+export function placeIn(projectDir: string, repos: string[], path: string, byRealPath = true): { repo: string; path: string } | undefined {
+	if (!byRealPath) {
+		const abs = resolve(path);
+		const repo = repos.map((name) => join(projectDir, name)).find((dir) => abs === dir || abs.startsWith(dir + sep));
+		return repo === undefined ? undefined : { repo, path: abs };
+	}
 	const real = canonical(path);
 	for (const name of repos) {
 		const repo = join(projectDir, name);

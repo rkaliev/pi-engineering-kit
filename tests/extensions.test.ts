@@ -264,6 +264,57 @@ test("guard: in a workspace, a repository's broken config and its rules name tha
 	assert.ok(broken.notes.some((n) => /b[\\/]\.pi[\\/]guard\.json/.test(n)), JSON.stringify(broken.notes));
 });
 
+/** A repository `c` cloned into `dir` with a work branch `feat/x` that has a remote: pushing it is an own-branch push. */
+function cloneLater(dir: string) {
+	const remote = mkdtempSync(join(tmpdir(), "kit-remote-"));
+	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
+	const c = join(dir, "c");
+	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
+	mkdirSync(c);
+	run("init", "-q", "-b", "main");
+	run("commit", "-q", "--allow-empty", "-m", "init");
+	run("remote", "add", "origin", remote);
+	run("push", "-q", "origin", "main");
+	run("switch", "-qc", "feat/x");
+}
+
+test("guard: without a session_start, the baseline is the folder at the first check", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "ls" } }, ctx(dir)), undefined);
+	cloneLater(dir);
+	assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
+});
+
+test("guard: a child pi process in the same folder takes its parent's baseline", async () => {
+	const { dir } = workspaceProject();
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		cloneLater(dir);
+		const child = fakePi();
+		guard(child.pi);
+		await child.emit("session_start", { reason: "startup" }, ctx(dir));
+		assert.equal((await child.emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
+});
+
+test("guard: in a workspace, the review gate holds a PowerShell landing even with task files off", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject({ ...COMMANDS, ".pi/guard.json": JSON.stringify({ workDocs: [] }) });
+	const pr = await emit("tool_call", { toolName: "powershell", input: { command: "Set-Location a; gh pr create --fill" } }, ctx(dir, { confirm: false }));
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /can't tell which checkout/);
+});
+
 test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {
 	const { pi, emit } = fakePi();
 	guard(pi);
@@ -732,6 +783,41 @@ test("verify: the notice of skipped repositories comes again in a new session", 
 	} finally {
 		slow.restore();
 	}
+});
+
+test("verify: in a workspace, the reminders name a repository's finished task file and use each repository's git", async () => {
+	const { dir, git } = workspaceProject();
+	mkdirSync(join(dir, "b", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "b", "docs", "tasks", "done.md"), "# D\n\n## Plan\n\n- [x] one\n\n## Progress\n");
+	git("b", "add", "-A");
+	git("b", "commit", "-qm", "done");
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	const text = sent.map((m) => String(m.message.content)).join("\n");
+	assert.match(text, /Working-docs gate: .*b\/docs\/tasks\/done\.md/);
+	assert.match(text, /git -C a add docs\/tasks\/t\.md/);
+});
+
+test("verify: a repository config that appeared after the session started can't move its task-file folders", async () => {
+	const { dir } = workspaceProject();
+	const g = fakePi();
+	guard(g.pi);
+	const v = fakePi();
+	verify(v.pi);
+	const c = ctx(dir);
+	await g.emit("session_start", { reason: "startup" }, c);
+	await v.emit("session_start", { reason: "startup" }, c);
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ workDocs: ["plans"] }));
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.match(v.sent.map((m) => String(m.message.content)).join("\n"), /a\/docs\/tasks\/t\.md/);
 });
 
 test("verify also reminds to commit an approved task file", async () => {

@@ -507,13 +507,17 @@ export function quotedSubstitutions(command: string): string[] {
  */
 export function segmentFolders(command: string, cwd: string, powershell = false): Array<{ raw: string[]; dir: string | undefined; move: boolean }> {
 	const shell = new Subshells(cwd, command);
+	// `export GIT_DIR=…` (or a bare assignment) moves every git call after it.
+	let exported = false;
 	return segmentsOf(tokenize(stripRedirects(command))).map(({ raw, alone, before }) => {
 		shell.enter(raw, before);
-		let dir = powershell ? undefined : shell.dir;
+		let dir = powershell || exported ? undefined : shell.dir;
 		const words = raw.map((t) => unwrapToken(t.replace(/^\(+|\)+$/g, ""))).filter(Boolean);
 		if (hidesFolder(words)) dir = undefined;
+		const head = words[commandIndex(words)];
+		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
-		const at = words.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+		const at = commandIndex(words);
 		for (let i = at + 1; dir !== undefined && words[at] === "git" && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
 			if (words[i] === "-C") dir = follow(dir, words[i + 1]);
 		}
@@ -523,7 +527,7 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 
 /** Words that run the segment, or a git call in it, somewhere the folder doesn't show. */
 function hidesFolder(words: string[]): boolean {
-	const command = words.find((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+	const command = words[commandIndex(words)];
 	return words.some((w, i) => {
 		if (/^GIT_(DIR|WORK_TREE)=/.test(w) || w === "eval") return true;
 		if (/^(ba|z|da|k)?sh$/.test(w.slice(w.lastIndexOf("/") + 1)) && words.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a))) return true;

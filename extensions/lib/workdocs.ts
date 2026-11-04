@@ -4,10 +4,10 @@
  */
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
-import { segmentFolders } from "./shell.ts";
+import { heredocs, segmentFolders } from "./shell.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -39,18 +39,33 @@ const PUSH_VALUE_FLAGS = new Set(["-o", "--push-option", "--repo", "--receive-pa
  * task-file folders; a PR, merge or push whose repository the guard can't tell is blocked, and a commit it can't place
  * is judged in every repository.
  */
-export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_DOC_DIRS, workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean }): GuardDecision | undefined {
+export function checkWorkDocs(
+	command: string,
+	projectDir: string,
+	dirs = WORK_DOC_DIRS,
+	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
+): GuardDecision | undefined {
 	if (!workspace) return judge(splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined), projectDir, dirs);
 	const folders = workspace.repos.map((name) => join(projectDir, name));
 	// `"workDocs": []` everywhere turns the rule off, even where a landing can't be placed.
 	const watched = folders.some((repo) => workspace.dirsFor(repo).length > 0);
-	for (const { raw, dir } of segmentFolders(command, workspace.cwd, workspace.powershell)) {
+	const cantTell: GuardDecision = {
+		action: "block",
+		reason: `Task-file guard: can't tell which repository this command lands in (a folder the guard can't follow, a repository named by -R, GH_REPO or a URL, a folder outside git, or a repository too slow to check). ${workspace.powershell ? "Run it with the Bash tool from the repository's folder (`cd <repo> && …`)" : "Run it from the repository's folder (`cd <repo> && …`)"} without naming the repository.`,
+	};
+	// A GH_REPO set anywhere in the command picks the repository for every gh call after it.
+	const ghRepo = /(^|[\s;&|(])(export\s+)?GH_REPO=/.test(command);
+	// A heredoc body is text, not commands: the review gate asks about a landing one hides.
+	for (const { raw, dir } of segmentFolders(heredocs(command).text, workspace.cwd, workspace.powershell)) {
 		const l = landing(raw.map((t) => t.replace(/^\(+|\)+$/g, "")));
 		if (!l) continue;
-		// A commit lands where it runs: one that can't be placed is judged in every repository.
+		// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
 		if (l.kind === "commit" && dir === undefined) {
+			const until = Date.now() + UNPLACED_BUDGET_MS;
 			for (const repo of folders) {
-				const found = judge([l], repo, workspace.dirsFor(repo));
+				if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
+				const found = judgeCommit(repo, workspace.dirsFor(repo), until);
+				if (found === "late") return cantTell;
 				if (found) return found;
 			}
 			continue;
@@ -58,19 +73,36 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
 		// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
 		const checkout = dir === undefined ? undefined : (repoOf(projectDir, workspace.repos, dir) ?? dir);
-		const selector = l.kind === "pr" && (l.repo === true || /^https?:\/\//.test(l.target ?? "") || raw.some((t) => /^GH_REPO=/.test(t)));
+		const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
 		const unplaced = checkout === undefined || selector || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
 		if (unplaced) {
 			if (!watched) continue;
-			return {
-				action: "block",
-				reason: "Task-file guard: can't tell which repository this command lands in (a folder the guard can't follow, a repository named by -R, GH_REPO or a URL, or a folder outside git). Run it from the repository's folder (`cd <repo> && …`) without naming the repository.",
-			};
+			return cantTell;
 		}
 		const found = judge([l], checkout, workspace.dirsFor(checkout));
 		if (found) return found;
 	}
 	return undefined;
+}
+
+/** How long a commit the guard can't place may spend checking the workspace repositories. */
+const UNPLACED_BUDGET_MS = 3000;
+
+/** A commit in `checkout`: staged task files first (one git call), then whether it is on its base; "late" past `until`. */
+function judgeCommit(checkout: string, dirs: string[], until: number): GuardDecision | "late" | undefined {
+	if (dirs.length === 0) return undefined;
+	const left = until - Date.now();
+	if (left <= 0) return "late";
+	const r = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...dirs], { cwd: checkout, encoding: "utf8", timeout: Math.min(5000, left) });
+	if (r.error || r.signal) return "late";
+	const staged = markdown(lines(r.status === 0 ? r.stdout.trim() : undefined));
+	if (staged.length === 0) return undefined;
+	const base = onBaseBranch(checkout, until);
+	if (base === undefined) return Date.now() >= until ? "late" : undefined;
+	return {
+		action: "block",
+		reason: `Task files are staged on ${base} in ${basename(checkout)}: ${staged.join(", ")}. Task files are committed only on a work branch: create one (\`git -C ${basename(checkout)} switch -c <type>/<topic>\`) and commit there.`,
+	};
 }
 
 /** The landings of one checkout, judged with its task-file folders. */
@@ -160,7 +192,7 @@ export function landing(raw: string[]): Landing | undefined {
 		const args = tokens.slice(tokens.indexOf(tool) + 1);
 		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
 		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
-		const repo = args.some((t) => t === "-R" || t === "--repo" || t.startsWith("--repo="));
+		const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
 		if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
 		const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
 		const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));

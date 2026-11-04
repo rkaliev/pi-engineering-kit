@@ -161,7 +161,7 @@ function workspace(aDirs?: string[]) {
 	b.git("switch", "-qc", "feat/y");
 	b.commit({ "src/b.ts": "x\n" });
 	const dirsFor = (r: string) => (r === join(root, "a") && aDirs ? aDirs : WORK_DOC_DIRS);
-	const check = (command: string, cwd = root, powershell = false) => checkWorkDocs(command, root, undefined, { cwd, repos: ["a", "b"], dirsFor, powershell });
+	const check = (command: string, cwd = root, powershell = false, slow: string[] = []) => checkWorkDocs(command, root, undefined, { cwd, repos: ["a", "b"], dirsFor, powershell, slow });
 	return { root, a, b, check };
 }
 
@@ -244,5 +244,34 @@ test("approvalReminder: in a workspace, the commit it suggests runs in each repo
 	assert.match(text, /git -C a add docs\/tasks\/t\.md && git -C a commit/);
 	assert.match(text, /git -C b add docs\/tasks\/u\.md && git -C b commit/);
 	assert.match(text, /You are on main in a/);
+	assert.match(text, /git -C <repo> switch -c/, "a work branch is created in the repository, not the workspace folder");
 	assert.match(approvalReminder(["docs/tasks/t.md"]), /git add docs\/tasks\/t\.md && git commit/, "one repository, as before");
+});
+
+test("in a workspace, a PR naming its repository in another spelling, or after an export, can't be placed", () => {
+	const { check } = workspace();
+	for (const command of ["cd b && gh pr create -Rorg/a -H feat/x", "export GH_REPO=org/a; cd b && gh pr create -H feat/x", "export GIT_DIR=a/.git; git push origin feat/x:main"]) {
+		assert.equal(check(command)?.action, "block", command);
+	}
+});
+
+test("in a workspace, a heredoc body that mentions a landing is no landing", () => {
+	assert.equal(workspace().check("cat > notes.md <<'EOF'\nOpen it with gh pr create --fill.\nEOF")?.action ?? "allow", "allow");
+});
+
+test("in a workspace, a PowerShell landing is told to use Bash", () => {
+	assert.match(String(workspace().check("Set-Location a; gh pr create", undefined, true)?.reason), /Bash tool/);
+});
+
+test("in a workspace, an unplaced commit is judged within a deadline, and a slow repository can't be judged", () => {
+	const { root, check } = workspace();
+	assert.equal(check("cd $D && git commit -m x", undefined, false, ["a"])?.action, "block", "a was slow this session");
+	const slow = slowGit(realpathSync(join(root, "a")));
+	try {
+		const started = Date.now();
+		assert.equal(check("cd $D && git commit -m x")?.action, "block");
+		assert.ok(Date.now() - started < 3900, "within the deadline, not git's 4 s hangs");
+	} finally {
+		slow.restore();
+	}
 });

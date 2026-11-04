@@ -18,6 +18,7 @@ import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/approvals.ts";
 import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { guardScope } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { callChanges, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
@@ -93,6 +94,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const now = gitOff ? undefined : treeFingerprint(cwd, ignore, why, { skip: [...slowParts], previous: tree });
 		if (why.slow) gitOff = true;
 		for (const part of why.slowParts ?? []) slowParts.add(part);
+		verifyState.slowParts = [...slowParts];
 		// A call's own snapshot (by id; `run_verification` takes the last tree just before it runs).
 		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
 		const before = own ?? tree;
@@ -164,6 +166,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		tree = treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), why);
 		gitOff = why.slow === true;
 		slowParts = new Set(why.slowParts ?? []);
+		verifyState.slowParts = [...slowParts];
 		setStatus(ctx);
 	});
 
@@ -237,7 +240,11 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			}
 		}
 		const want = { approved: !approvalRemindedThisPrompt, finished: !workDocsRemindedThisPrompt };
-		const due = taskFileReminders(ctx.cwd, (root) => workDocDirs(ctx, root), Date.now() + TASK_FILE_BUDGET_MS, want, [...slowParts]);
+		// A repository's own folders only from the config the session started with (lib/scope.ts).
+		const dirs = workDocDirs(ctx) ?? WORK_DOC_DIRS;
+		const scope = guardScope(ctx.cwd, (root) => ({ workDocs: workDocDirs(ctx, root) }), ".pi/guard.json", verifyState.guardBaseline ?? {});
+		const dirsFor = (root: string) => (root === ctx.cwd ? dirs : (scope.repos.get(root)?.workDocs ?? dirs));
+		const due = taskFileReminders(ctx.cwd, dirsFor, Date.now() + TASK_FILE_BUDGET_MS, want, [...slowParts]);
 		if (due.approved.length > 0) {
 			approvalRemindedThisPrompt = true;
 			parts.push(approvalReminder(due.approved, due.onBase, due.workspace));
@@ -293,12 +300,9 @@ function countsAsEdit(path: string, cwd: string): boolean {
 	return !ignoredPath(cwd, rel, resolveIgnore(cwd));
 }
 
-/**
- * A root's task-file folders: the kit's defaults, or `workDocs` from its `.pi/guard.json` in a trusted project; a
- * workspace repository without its own falls back to the session folder's.
- */
-function workDocDirs(ctx: ExtensionContext, root = ctx.cwd): string[] {
+/** A root's own task-file folders: `workDocs` from its `.pi/guard.json` in a trusted project, else undefined. */
+function workDocDirs(ctx: ExtensionContext, root = ctx.cwd): string[] | undefined {
 	const raw = readProjectJson<{ workDocs: unknown }>(root, "guard").workDocs;
-	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return root === ctx.cwd ? WORK_DOC_DIRS : workDocDirs(ctx);
+	if (!ctx.isProjectTrusted() || !Array.isArray(raw)) return undefined;
 	return raw.filter((v): v is string => typeof v === "string");
 }

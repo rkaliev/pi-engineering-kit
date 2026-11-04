@@ -14,7 +14,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, wri
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
-import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
@@ -54,6 +54,10 @@ export interface ReviewGateOptions {
 	verify: string[];
 	/** A checkout whose own config waives the gate (a workspace repository's `"reviewGate": false`): its landings pass. */
 	waived?: (checkout: string) => boolean;
+	/** In a workspace a landing must be placed (see `segmentFolders`) before a waiver counts. */
+	workspace?: boolean;
+	/** The command is PowerShell, which the guard can't place. */
+	powershell?: boolean;
 }
 
 const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2, No: 3 };
@@ -490,8 +494,10 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 /** The review gate over the landings the command's segments show. */
 function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const shell = new Subshells(cwd, command);
+	// The same segments as below, each with the folder it runs in as far as the guard can place it.
+	const placed = options.workspace ? segmentFolders(command, cwd, options.powershell) : [];
 	let unsafeBefore = false;
-	for (const { raw, alone, before } of segmentsOf(tokenize(stripRedirects(command)))) {
+	for (const [index, { raw, alone, before }] of segmentsOf(tokenize(stripRedirects(command))).entries()) {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
@@ -509,7 +515,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 			continue;
 		}
 		const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
-		if (where === undefined || (l.kind === "pr" && l.repo)) {
+		if (where === undefined || (l.kind === "pr" && l.repo) || (options.workspace && placed[index]?.dir === undefined)) {
 			return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
 		}
 		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
@@ -651,7 +657,7 @@ function inTemp(path: string): boolean {
  * `children`: outside git, a first-level folder's `guardConfig` (a workspace repository's, or one made before its
  * `git init`) is a gate file too.
  */
-export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false): GuardDecision | undefined {
+export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false, stateDir?: string): GuardDecision | undefined {
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
@@ -679,6 +685,10 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(p)));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
+		}
+		const state = stateDir === undefined ? undefined : stateDir.replaceAll("\\", "/");
+		if (state !== undefined && paths.some((p) => p === state || p.startsWith(`${state}/`))) {
+			return { action: "block", reason: "The kit's session state is written only by its hooks." };
 		}
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
