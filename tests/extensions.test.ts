@@ -364,16 +364,16 @@ test("guard: a child pi process started in a repository cloned into the workspac
 });
 
 /** A parent pi session in `parent`, and a child pi process (a subagent) in `child`, sharing the environment record. */
-async function parentAndChild(parent: string, child: string, between: () => void = () => {}) {
+async function parentAndChild(parent: string, child: string, between: () => void = () => {}, trust: { parent?: boolean; child?: boolean } = {}) {
 	const saved = process.env.ENG_KIT_GUARD_BASELINE;
 	delete process.env.ENG_KIT_GUARD_BASELINE;
 	const p = fakePi();
 	guard(p.pi);
-	await p.emit("session_start", { reason: "startup" }, ctx(parent));
+	await p.emit("session_start", { reason: "startup" }, ctx(parent, { trusted: trust.parent ?? true }));
 	between();
 	const c = fakePi();
 	guard(c.pi);
-	await c.emit("session_start", { reason: "startup" }, ctx(child));
+	await c.emit("session_start", { reason: "startup" }, ctx(child, { trusted: trust.child ?? true }));
 	return { emit: c.emit, restore: () => (saved === undefined ? delete process.env.ENG_KIT_GUARD_BASELINE : (process.env.ENG_KIT_GUARD_BASELINE = saved)) };
 }
 
@@ -408,6 +408,59 @@ test("guard: in one repository, a child in a subfolder pushes its own work branc
 	const { emit, restore } = await parentAndChild(r, join(r, "packages", "x"));
 	try {
 		assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(join(r, "packages", "x"), { confirm: false })), undefined);
+	} finally {
+		restore();
+	}
+});
+
+/** A repository `r` in a temp folder with a remote, a committed `.pi/guard.json` and the work branch `feat/x`. */
+function repoWithGuard(guardJson: object, dir = temp("kit-")) {
+	cloneLater(dir, "r");
+	const r = join(dir, "r");
+	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: r, encoding: "utf8" });
+	mkdirSync(join(r, ".pi"));
+	writeFileSync(join(r, ".pi", "guard.json"), JSON.stringify(guardJson));
+	run("add", "-A");
+	run("commit", "-q", "-m", "guard");
+	return { dir, r, run };
+}
+
+test("guard: a child in a worktree below the session keeps its own checkout's CI, protected paths and push", async () => {
+	const { r, run } = repoWithGuard({ protectedPaths: ["db/"] });
+	assert.equal(run("worktree", "add", "-q", join(r, ".worktrees", "x"), "-b", "feat/w").status, 0);
+	const wt = join(r, ".worktrees", "x");
+	const { emit, restore } = await parentAndChild(r, wt);
+	try {
+		assert.match((await emit("tool_call", { toolName: "write", input: { path: "db/m.sql" } }, ctx(wt)))?.reason ?? "", /protected by/, "the worktree's protected path");
+		const asked = ctx(wt, { confirm: false });
+		assert.equal((await emit("tool_call", { toolName: "write", input: { path: ".github/workflows/ci.yml" } }, asked))?.block, true);
+		assert.match(asked.asked[0] ?? "", /CI\/release pipeline/);
+		assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(wt, { confirm: false })), undefined, "its own branch");
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a child in a repository below the folder pi started in is judged by that repository's own config", async () => {
+	// pi started two levels above the repository, so the record's folder holds it without being a workspace of it.
+	const above = temp("kit-");
+	mkdirSync(join(above, "code"));
+	const { r } = repoWithGuard({ block: ["make release"] }, join(above, "code"));
+	const { emit, restore } = await parentAndChild(above, r);
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "make release" } }, ctx(r)))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a trusted child of an untrusted session gets no loosening from the session's config", async () => {
+	const { r } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	mkdirSync(join(r, "packages", "x"), { recursive: true });
+	const child = join(r, "packages", "x");
+	const { emit, restore } = await parentAndChild(r, child, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(child, { trusted: true, hasUI: false })))?.block, true);
 	} finally {
 		restore();
 	}

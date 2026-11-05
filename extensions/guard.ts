@@ -10,6 +10,7 @@
  * `gh pr create` makes later pushes to its branch landings. A check that throws makes pi block the call. A background run may never report back here, so a missing verdict asks the
  * human rather than blocking.
  */
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -47,7 +48,8 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		if (!record) {
 			const parent = inherited();
 			const inside = parent !== undefined && (parent.cwd === ctx.cwd || within(parent.cwd, ctx.cwd));
-			record = inside ? parent : { cwd: ctx.cwd, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root)) };
+			const trusted = ctx.isProjectTrusted();
+			record = inside ? parent : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)) };
 			// A record of another folder stays for the processes this one starts: a grandchild back in the workspace keeps it.
 			if (!inside) process.env[BASELINE_ENV] = JSON.stringify(record);
 		}
@@ -82,42 +84,46 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		return ok ? undefined : { block: true, reason: `Guard: the user declined. ${decision.reason} Ask how to proceed.` };
 	});
 
-	/** The guard's decision for one tool call, or undefined for tools it doesn't check. */
+	/**
+	 * The guard's decision for one tool call, or undefined for tools it doesn't check. A subagent started inside the
+	 * recorded folder is judged as that session started in a subfolder and, when it works in another git checkout
+	 * (a worktree, a repository below the folder pi started in), also as a session started in that checkout; the
+	 * stricter decision wins. Loosening needs this session's trust and, for a subagent, its parent's.
+	 */
 	function check(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): { decision: GuardDecision; subject: string } | undefined {
-		// The session folder's config and, in a workspace, each repository's own (lib/scope.ts). A subagent started
-		// inside the recorded folder is that session in a subfolder: the recorded folder is the project, the child's
-		// own folder only where its commands start.
+		if (toolName !== "bash" && toolName !== "powershell" && toolName !== "read" && toolName !== "write" && toolName !== "edit") return undefined;
+		const subject = String(toolName === "bash" || toolName === "powershell" ? (input.command ?? "") : (input.path ?? ""));
 		const rec = record ?? take(ctx);
-		const project = rec.cwd;
-		const scope = guardScope(project, (root) => loadConfig(ctx, root, project), GUARD_FILE, rec.baseline);
-		const config = scope.config;
-		let decision: GuardDecision;
-		let subject: string;
+		const trusted = ctx.isProjectTrusted() && (rec.cwd === ctx.cwd || rec.trusted);
+		const decision = judge(toolName, subject, ctx, rec.cwd, rec.baseline, trusted);
+		const top = rec.cwd === ctx.cwd ? undefined : toplevel(ctx.cwd);
+		if (top === undefined || canonical(top) === canonical(rec.cwd)) return { decision, subject };
+		return { decision: join(decision, judge(toolName, subject, ctx, top, undefined, trusted)), subject };
+	}
 
-		if (toolName === "bash" || toolName === "powershell") {
-			subject = String(input.command ?? "");
-			const powershell = toolName === "powershell";
-			decision = checkCommand(subject, project, scopedConfig(subject, ctx.cwd, scope, powershell), ctx.cwd, process.env, (target) => scopedPath("write", target, scope));
-			const workDocs = config.workDocs ?? WORK_DOC_DIRS;
-			// A workspace repository's own task-file folders, else the session folder's.
-			const workspace = scope.repos.size === 0 ? undefined : { cwd: ctx.cwd, repos: [...scope.repos.keys()].map((dir) => basename(dir)), dirsFor: (repo: string) => scope.repos.get(repo)?.workDocs ?? workDocs, powershell, slow: verifyState.slowParts };
-			if (decision.action !== "block") decision = checkWorkDocs(subject, project, workDocs, workspace) ?? decision;
-			if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, project, GUARD_FILE, scope.kind !== "repo"));
-			if (decision.action !== "block" && config.reviewGate !== false) {
-				const waived = (checkout: string) => scope.repos.get(repoIn(scope, checkout) ?? "")?.reviewGate === false;
-				const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(project, { detect: false }).commands, waived, workspace: scope.repos.size > 0, powershell, repoOf: (dir: string) => repoIn(scope, dir) };
-				const review = checkReview(subject, ctx.cwd, project, gate, options.reviewsRoot);
-				decision = join(decision, review);
-			}
-		} else if (toolName === "read" || toolName === "write" || toolName === "edit") {
-			subject = String(input.path ?? "");
+	/** One tool call judged as a session whose project is `project`, with the configs in force there (lib/scope.ts). */
+	function judge(toolName: string, subject: string, ctx: ExtensionContext, project: string, baseline: GuardBaseline | undefined, trusted: boolean): GuardDecision {
+		const scope = guardScope(project, (root) => loadConfig(ctx, root, project, trusted), GUARD_FILE, baseline);
+		const config = scope.config;
+		if (toolName !== "bash" && toolName !== "powershell") {
 			// The secret rules also see where the path really leads (a symlink to `.env`).
 			const target = resolve(ctx.cwd, subject);
-			decision = strictest(scopedPath(toolName, target, scope), checkPath(toolName, canonical(target), project, config));
-		} else {
-			return undefined;
+			const tool = toolName as "read" | "write" | "edit";
+			return strictest(scopedPath(tool, target, scope), checkPath(tool, canonical(target), canonical(project), config));
 		}
-		return { decision, subject };
+		const powershell = toolName === "powershell";
+		let decision = checkCommand(subject, project, scopedConfig(subject, ctx.cwd, scope, powershell), ctx.cwd, process.env, (target) => scopedPath("write", target, scope));
+		const workDocs = config.workDocs ?? WORK_DOC_DIRS;
+		// A workspace repository's own task-file folders, else the session folder's.
+		const workspace = scope.repos.size === 0 ? undefined : { cwd: ctx.cwd, repos: [...scope.repos.keys()].map((dir) => basename(dir)), dirsFor: (repo: string) => scope.repos.get(repo)?.workDocs ?? workDocs, powershell, slow: verifyState.slowParts };
+		if (decision.action !== "block") decision = checkWorkDocs(subject, project, workDocs, workspace) ?? decision;
+		if (decision.action !== "block") decision = join(decision, checkGateFiles(subject, ctx.cwd, project, GUARD_FILE, scope.kind !== "repo"));
+		if (decision.action !== "block" && config.reviewGate !== false) {
+			const waived = (checkout: string) => scope.repos.get(repoIn(scope, checkout) ?? "")?.reviewGate === false;
+			const gate = { missing: "confirm" as const, waiver: 'by confirming, or "reviewGate": false in .pi/guard.json', verify: resolveVerifyCommands(project, { detect: false }).commands, waived, workspace: scope.repos.size > 0, powershell, repoOf: (dir: string) => repoIn(scope, dir) };
+			decision = join(decision, checkReview(subject, ctx.cwd, project, gate, options.reviewsRoot));
+		}
+		return decision;
 	}
 
 	pi.on("tool_result", async (event, ctx) => {
@@ -240,17 +246,28 @@ const BASELINE_ENV = "ENG_KIT_GUARD_BASELINE";
 /** A pi process's guard baseline and the folder it was taken in. */
 interface BaselineRecord {
 	cwd: string;
+	/** Whether that session's project was trusted: a subagent's loosening needs it too. */
+	trusted: boolean;
 	baseline: GuardBaseline;
 }
 
 /** The record a parent pi process left in the environment, if it has the right shape. */
 function inherited(): BaselineRecord | undefined {
 	try {
-		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; baseline?: unknown };
-		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, baseline: parsed.baseline } : undefined;
+		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; trusted?: unknown; baseline?: unknown };
+		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, trusted: parsed.trusted === true, baseline: parsed.baseline } : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+/** The top of the git checkout holding `dir`, spelled as `dir` is (git prints the real path), or undefined outside git. */
+function toplevel(dir: string): string | undefined {
+	const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8", timeout: 3000 });
+	if (r.status !== 0) return undefined;
+	const up = relative(r.stdout.trim(), canonical(dir));
+	if (up.startsWith("..") || isAbsolute(up)) return r.stdout.trim();
+	return resolve(dir, up === "" ? "." : up.split(/[\\/]/).map(() => "..").join("/"));
 }
 
 function within(parent: string, child: string): boolean {
@@ -259,11 +276,11 @@ function within(parent: string, child: string): boolean {
 }
 
 /** A root's guard config (the session folder's, or a workspace repository's); loosening only in a trusted project. */
-function loadConfig(ctx: ExtensionContext, root = ctx.cwd, project = ctx.cwd): GuardConfig {
+/** `trusted`: whether loosening counts (this session's trust and, for a subagent, its parent's). */
+function loadConfig(ctx: ExtensionContext, root = ctx.cwd, project = ctx.cwd, trusted = ctx.isProjectTrusted()): GuardConfig {
 	const label = root === project ? GUARD_FILE : `${relative(project, root)}/${GUARD_FILE}`;
 	const raw = readProjectJson<GuardConfig>(root, "guard");
 	if (raw.error && ctx.hasUI) ctx.ui.notify(`Guard config ignored: ${raw.error}`, "warning");
-	const trusted = ctx.isProjectTrusted();
 	const regexes = (value: unknown) =>
 		strings(value).filter((source) => {
 			try {
