@@ -466,6 +466,16 @@ test("guard: a trusted child of an untrusted session gets no loosening from the 
 	}
 });
 
+test("guard: a trusted child in its untrusted parent's own folder gets no loosening from that folder's config", async () => {
+	const { r } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	const { emit, restore } = await parentAndChild(r, r, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(r, { trusted: true, hasUI: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
 test("guard: a read through a symlink to a secret file is blocked", async () => {
 	const { pi, emit } = fakePi();
 	guard(pi);
