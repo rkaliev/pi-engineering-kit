@@ -236,7 +236,7 @@ test("taskFileReminders names a repository whose git ran out of the time left, a
 		const started = Date.now();
 		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 1000);
 		assert.ok(due.skipped.includes("a"), JSON.stringify(due));
-		assert.ok(Date.now() - started < 8000, "within the deadline, not git's 10 s hang");
+		assert.ok(Date.now() - started < 4500, "within the 1 s deadline, under git's own 5 s cap per call");
 	} finally {
 		status.restore();
 	}
@@ -246,7 +246,7 @@ test("taskFileReminders names a repository whose git ran out of the time left, a
 		const started = Date.now();
 		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 3000);
 		assert.deepEqual(due.approved, ["a/docs/tasks/t.md"]);
-		assert.ok(Date.now() - started < 9000, "the base branch lookup is bounded too: less than one of git's 10 s hangs");
+		assert.ok(Date.now() - started < 4800, "the base branch lookup ends by the 3 s deadline, under git's own 5 s cap per call");
 	} finally {
 		base.restore();
 	}
