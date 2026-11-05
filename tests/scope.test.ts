@@ -217,3 +217,19 @@ test("scopedConfig: a rule spelled like an Object property names its own config"
 	const cmd = "echo constructor";
 	assert.match(String(checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws).reason), /in a\/\.pi\/guard\.json/);
 });
+
+test("scopedConfig: a repository named outside quotes takes the allow away; one named in a quoted message doesn't", () => {
+	const { command } = workspace({ a: { confirm: ["release"] }, b: { allow: ["make .*release", "npm run deploy"] } });
+	assert.equal(command("cd b && make -C../a release"), "confirm", "-C glued to a path into a");
+	assert.equal(command('cd b && npm run deploy -- --note "a"'), "allow");
+});
+
+test("guardScope: two repositories that swapped folders keep both entries' restrictions", () => {
+	const { ws, baseline } = started({ a: { block: ["make release"] } });
+	renameSync(join(ws, "a"), join(ws, "t"));
+	renameSync(join(ws, "b"), join(ws, "a"));
+	renameSync(join(ws, "t"), join(ws, "b"));
+	const scope = guardScope(ws, () => ({}), ".pi/guard.json", baseline);
+	const cmd = "cd b && make release";
+	assert.equal(checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws).action, "block", "a's repository now in folder b");
+});

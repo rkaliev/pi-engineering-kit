@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after, beforeEach } from "node:test";
@@ -103,7 +103,7 @@ function ctx(cwd: string, opts: { hasUI?: boolean; confirm?: boolean; trusted?: 
 }
 
 function project(files: Record<string, string>) {
-	const dir = mkdtempSync(join(tmpdir(), "kit-"));
+	const dir = temp("kit-");
 	for (const [name, content] of Object.entries(files)) {
 		mkdirSync(resolve(dir, name, ".."), { recursive: true });
 		writeFileSync(join(dir, name), content);
@@ -283,10 +283,10 @@ test("guard: in a workspace, a repository's broken config and its rules name tha
 });
 
 /** A repository `c` cloned into `dir` with a work branch `feat/x` that has a remote: pushing it is an own-branch push. */
-function cloneLater(dir: string) {
+function cloneLater(dir: string, name = "c") {
 	const remote = temp("kit-remote-");
 	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
-	const c = join(dir, "c");
+	const c = join(dir, name);
 	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
 	mkdirSync(c);
 	run("init", "-q", "-b", "main");
@@ -361,6 +361,65 @@ test("guard: a child pi process started in a repository cloned into the workspac
 		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
 		else process.env.ENG_KIT_GUARD_BASELINE = saved;
 	}
+});
+
+/** A parent pi session in `parent`, and a child pi process (a subagent) in `child`, sharing the environment record. */
+async function parentAndChild(parent: string, child: string, between: () => void = () => {}) {
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	const p = fakePi();
+	guard(p.pi);
+	await p.emit("session_start", { reason: "startup" }, ctx(parent));
+	between();
+	const c = fakePi();
+	guard(c.pi);
+	await c.emit("session_start", { reason: "startup" }, ctx(child));
+	return { emit: c.emit, restore: () => (saved === undefined ? delete process.env.ENG_KIT_GUARD_BASELINE : (process.env.ENG_KIT_GUARD_BASELINE = saved)) };
+}
+
+test("guard: a child below a workspace folder that isn't a repository doesn't push a later clone silently", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "tmp"));
+	const { emit, restore } = await parentAndChild(dir, join(dir, "tmp"), () => cloneLater(join(dir, "tmp")));
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(join(dir, "tmp"), { confirm: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a child in a workspace repository keeps what that repository restricted at the start", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"));
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ block: ["make release"] }));
+	const { emit, restore } = await parentAndChild(dir, join(dir, "a"), () => rmSync(join(dir, "a", ".pi"), { recursive: true }));
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "make release" } }, ctx(join(dir, "a"))))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: in one repository, a child in a subfolder pushes its own work branch without a question", async () => {
+	const dir = temp("kit-");
+	cloneLater(dir, "r");
+	const r = join(dir, "r");
+	mkdirSync(join(r, "packages", "x"), { recursive: true });
+	const { emit, restore } = await parentAndChild(r, join(r, "packages", "x"));
+	try {
+		assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(join(r, "packages", "x"), { confirm: false })), undefined);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a read through a symlink to a secret file is blocked", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	writeFileSync(join(dir, "a", ".env"), "TOKEN=x\n");
+	symlinkSync(join(dir, "a", ".env"), join(dir, "a", "dev.cfg"));
+	assert.equal((await emit("tool_call", { toolName: "read", input: { path: "a/dev.cfg" } }, ctx(dir)))?.block, true);
 });
 
 test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {

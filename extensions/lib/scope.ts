@@ -8,7 +8,7 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { checkPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
 import { placeIn, projectRepos, repoOf } from "./repos.ts";
-import { segmentFolders } from "./shell.ts";
+import { blankQuoted, segmentFolders } from "./shell.ts";
 
 export interface GuardScope {
 	projectDir: string;
@@ -43,8 +43,10 @@ export function guardScope(projectDir: string, load: (root: string) => GuardConf
 		const id = repoId(dir);
 		const byName = baseline !== undefined && Object.hasOwn(baseline, name) ? baseline[name] : undefined;
 		const same = byName !== undefined && byName.id !== null && byName.id === id;
-		// A repository renamed since the start is found by its `.git`: its restrictions follow it, nothing else does.
-		const was = byName ?? (baseline === undefined || id === null ? undefined : Object.values(baseline).find((entry) => entry.id === id));
+		// A repository renamed since the start is found by its `.git`: its restrictions follow it, nothing else does;
+		// after a swap of two folders both entries' restrictions hold.
+		const byId = baseline === undefined || id === null ? undefined : Object.values(baseline).find((entry) => entry.id === id);
+		const was = byName === undefined ? byId : byId === undefined || byId === byName ? byName : { ...byName, block: [...byName.block, ...byId.block], confirm: [...byName.confirm, ...byId.confirm], protectedPaths: [...byName.protectedPaths, ...byId.protectedPaths] };
 		const known = baseline === undefined || (same && byName.config === configHash(join(dir, guardFile)));
 		const own = known ? config : { ...config, allow: [], workDocs: undefined, reviewGate: true };
 		const union = (now: string[] | undefined, then: string[]) => [...new Set([...(now ?? []), ...then])];
@@ -99,7 +101,9 @@ export function scopedConfig(command: string, cwd: string, scope: GuardScope, po
 	// The text match only adds restrictions: a repository's name in a message is no reason to drop the allow.
 	const named = [...scope.repos.keys()].filter((dir) => mentions(command, basename(dir)));
 	const touched = anywhere ? [...scope.repos.keys()] : [...new Set([...ran.filter((r) => r !== undefined), ...reached, ...named])];
-	const only = !anywhere && ran.length > 0 && ran.every((r) => r === ran[0]) && [...reached].every((r) => r === ran[0]) ? ran[0] : undefined;
+	// A repository named outside quotes is a target, so it takes the allow away; a name in a quoted message isn't.
+	const said = [...scope.repos.keys()].filter((dir) => mentions(blankQuoted(command), basename(dir)));
+	const only = !anywhere && ran.length > 0 && ran.every((r) => r === ran[0]) && [...reached, ...said].every((r) => r === ran[0]) ? ran[0] : undefined;
 	const rules = touched.map((dir) => scope.repos.get(dir)!);
 	// Which file each rule came from, for the reason; the session folder's first.
 	const sources: Record<string, string> = {};
@@ -164,19 +168,6 @@ export function guardBaseline(projectDir: string, guardFile: string, load: (root
 	return baseline;
 }
 
-/**
- * For a session started inside a folder of the workspace this baseline records (a subagent sent into a repository):
- * whether that folder's repository is the one the workspace session started with (`owner`), and with the same
- * config (`loosens`). Anything else is new to the session: it restricts, nothing more.
- */
-export function underBaseline(baseline: GuardBaseline, workspace: string, cwd: string, guardFile: string): { owner: boolean; loosens: boolean } {
-	const name = relative(workspace, cwd).split(/[\\/]/)[0] ?? "";
-	const entry = name !== "" && Object.hasOwn(baseline, name) ? baseline[name] : undefined;
-	const dir = join(workspace, name);
-	const owner = entry !== undefined && entry.id !== null && entry.id === repoId(dir);
-	return { owner, loosens: owner && entry.config === configHash(join(dir, guardFile)) };
-}
-
 /** Whether `value` has a baseline's shape (read back from a session state or a parent process). */
 export function isGuardBaseline(value: unknown): value is GuardBaseline {
 	const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -192,7 +183,9 @@ function repoId(dir: string): string | null {
 	try {
 		// The birth time tells a new `.git` from an old one whose freed inode number a file system reused.
 		const stat = lstatSync(join(dir, ".git"));
-		return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+		// Only a real birth time: where it isn't kept, Node reports 0 or the change time, which every git write moves.
+		const born = stat.birthtimeMs > 0 && stat.birthtimeMs !== stat.ctimeMs ? stat.birthtimeMs : "";
+		return `${stat.dev}:${stat.ino}:${born}`;
 	} catch {
 		return null;
 	}

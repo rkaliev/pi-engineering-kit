@@ -54,7 +54,7 @@ export function checkWorkDocs(
 		reason: `Task-file guard: can't tell which repository this command lands in (a folder the guard can't follow, a repository named by -R, GH_REPO or a URL, a folder outside git, or a repository too slow to check). ${workspace.powershell ? "Run it with the Bash tool from the repository's folder (`cd <repo> && …`)" : "Run it from the repository's folder (`cd <repo> && …`)"} without naming the repository.`,
 	};
 	// A GH_REPO set anywhere in the command picks the repository for every gh call after it.
-	const ghRepo = /(^|[\s;&|(])(export\s+)?GH_REPO=/.test(command);
+	const ghRepo = /\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined;
 	// A heredoc body is text only when the command as a whole just writes it to a file; any other heredoc may run it.
 	const write = quotedHeredoc(command);
 	for (const { raw, dir } of segmentFolders(write?.target !== undefined ? write.head : command, workspace.cwd, workspace.powershell)) {
@@ -77,20 +77,27 @@ export function checkWorkDocs(
 		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
 		// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
 		const repo = dir === undefined ? undefined : repoOf(projectDir, workspace.repos, dir);
-		const checkout = dir === undefined ? undefined : (repo ?? dir);
 		const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
-		// A checkout nested in a repository's folder (a worktree, a clone) is another repository.
+		// A checkout in a repository's folder is that repository when it shares its git common dir (its own worktree,
+		// judged in the worktree) and another one otherwise (a clone, another repository's worktree).
 		const top = dir === undefined || repo === undefined ? undefined : git(dir, ["rev-parse", "--show-toplevel"]);
-		const nested = top !== undefined && safeRealpath(top) !== safeRealpath(repo!);
+		const nested = top !== undefined && commonOf(top) !== commonOf(repo!);
+		const checkout = dir === undefined ? undefined : repo === undefined ? dir : (top ?? repo);
 		const unplaced = checkout === undefined || selector || nested || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
 		if (unplaced) {
 			if (!watched) continue;
 			return cantTell;
 		}
-		const found = judge([l], checkout, workspace.dirsFor(checkout));
+		const found = judge([l], checkout!, workspace.dirsFor(repo ?? checkout!));
 		if (found) return found;
 	}
 	return undefined;
+}
+
+/** The real path of a checkout's git common dir: a repository and its worktrees share it. */
+function commonOf(dir: string): string | undefined {
+	const out = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	return out === undefined ? undefined : safeRealpath(out);
 }
 
 /** How long a commit the guard can't place may spend checking the workspace repositories. */

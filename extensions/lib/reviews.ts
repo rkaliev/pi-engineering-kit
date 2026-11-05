@@ -523,10 +523,12 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		if (options.workspace) {
 			// A PR naming its repository another way, a folder outside git, or a checkout nested in another repository's
 			// folder: the landing's repository isn't the one this folder belongs to.
-			const named = l.kind === "pr" && (/(^|[\s;&|(])(export\s+)?GH_REPO\b/.test(command) || /^https?:\/\//.test(l.target ?? ""));
+			const named = l.kind === "pr" && (/\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined || /^https?:\/\//.test(l.target ?? ""));
 			const top = git(where, ["rev-parse", "--show-toplevel"]);
 			const repo = options.repoOf?.(where);
-			if (named || top === undefined || repo === undefined || safeRealpath(top) !== safeRealpath(repo)) {
+			// A checkout sharing the repository's git common dir is the repository (its own worktree); any other is not.
+			const common = (dir: string) => ((out) => (out === undefined ? undefined : safeRealpath(out)))(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+			if (named || top === undefined || repo === undefined || common(top) !== common(repo)) {
 				return decision(options.missing, "can't tell which repository this command lands in (a repository named by GH_REPO or a URL, a folder outside git, or a checkout nested in another repository). Run it from the repository's folder without naming the repository.", options);
 			}
 		}
@@ -678,8 +680,6 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
 	// In a command the guard can't read (a comment or heredoc may swallow the next line), no step is read-only.
 	const readable = plainShell(command);
-	// Where redirections and `tee` write, as written.
-	const targets = [...command.matchAll(/(?:&>>?|\d*>>?|\btee(?:\s+-a)?)\s*([^\s;&|()<>]+)/g)].map((m) => m[1]!.replace(/^['"]|['"]$/g, ""));
 	const state = stateDir === undefined ? [] : [stateDir, canonical(stateDir)].map((p) => p.replaceAll("\\", "/"));
 	let ask: GuardDecision | undefined;
 	for (const { full, words, redirected } of moveSegments(command)) {
@@ -701,20 +701,16 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		// The kit's session state, by any spelling of its path or one of its parent folders.
+		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
+		// `$CLAUDE_PLUGIN_DATA` word; a parent folder only when the command removes or moves it.
 		if (state.length > 0) {
-			const real = dirs.flatMap((dir) => candidates.map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
+			const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
 			const shallow = new Set(["/", homedir(), tmpdir(), canonical(tmpdir())].map((p) => p.replaceAll("\\", "/")));
-			if (real.some((p) => state.some((s) => p === s || p.startsWith(`${s}/`) || (s.startsWith(`${p}/`) && !shallow.has(p))))) {
+			const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+			const removes = ["rm", "rmdir", "mv", "unlink"].includes(head.slice(head.lastIndexOf("/") + 1));
+			if (real.some((p) => state.some((s) => p === s || p.startsWith(`${s}/`) || (removes && s.startsWith(`${p}/`) && !shallow.has(p))))) {
 				return { action: "block", reason: "The kit's session state is written only by its hooks." };
 			}
-		}
-		// `.git` changes through git only: a write into it, or moving or removing it, swaps a repository's history,
-		// hooks or remotes behind the guard.
-		const command0 = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
-		const writer = GIT_WRITERS.has(command0.slice(command0.lastIndexOf("/") + 1));
-		if (targets.some((t) => /(^|\/)\.git(\/|$)/.test(t)) || (writer && candidates.some((t) => /(^|\/)\.git(\/|$)/.test(t)))) {
-			return { action: "block", reason: "Never change .git directly from the shell (writing into it, moving or removing it); use git commands." };
 		}
 		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
@@ -726,15 +722,14 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	return ask;
 }
 
-/** Commands that write, move or remove the paths they are given. */
-const GIT_WRITERS = new Set(["rm", "rmdir", "unlink", "mv", "cp", "ln", "install", "rsync", "touch", "tee", "sed", "perl", "chmod", "chown", "truncate", "dd", "mkdir", "tar", "unzip", "patch"]);
-
 /** A word with `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` in front, as the shell would expand it. */
 function expandHome(word: string): string {
 	return word
 		.replace(/^~(?=\/|$)/, homedir())
 		.replace(/^\$\{?HOME\}?(?=\/|$)/, homedir())
 		.replace(/^\$\{?TMPDIR\}?(?=\/|$)/, tmpdir())
+		// The shell's TMPDIR may end in `/`, so `${TMPDIR}eng-kit` is a path in it.
+		.replace(/^\$\{TMPDIR\}(?=[^/])/, `${tmpdir()}/`)
 		.replace(/^\$\{?CLAUDE_PLUGIN_DATA\}?(?=\/|$)/, process.env.CLAUDE_PLUGIN_DATA ?? "\0");
 }
 

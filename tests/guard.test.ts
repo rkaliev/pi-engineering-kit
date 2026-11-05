@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
+
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
 
 const cwd = "/work/app";
 const none: GuardConfig = {};
@@ -152,7 +164,7 @@ function sh(cwd: string, ...args: string[]) {
 
 /** A clone of a bare origin with origin/HEAD -> main, checked out on `feat/x`. */
 function pushRepo(withOriginHead = true) {
-	const root = mkdtempSync(join(tmpdir(), "push-"));
+	const root = temp("push-");
 	const origin = join(root, "origin.git");
 	const repo = join(root, "repo");
 	mkdirSync(repo);

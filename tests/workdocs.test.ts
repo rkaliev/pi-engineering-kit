@@ -230,22 +230,23 @@ test("in a workspace, an unplaced commit is judged in every repository, and no t
 
 test("taskFileReminders names a repository whose git ran out of the time left, and its base branch lookup stays within it", () => {
 	const { root, a } = workspace();
-	const status = slowGit(realpathSync(join(root, "a")), "status");
+	// git hangs 10 s, far past the deadlines below, so a lookup that waits for it can't pass on a loaded machine either.
+	const status = slowGit(realpathSync(join(root, "a")), "status", 10);
 	try {
 		const started = Date.now();
 		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 1000);
 		assert.ok(due.skipped.includes("a"), JSON.stringify(due));
-		assert.ok(Date.now() - started < 2500, "within the deadline, not git's 4 s hang");
+		assert.ok(Date.now() - started < 8000, "within the deadline, not git's 10 s hang");
 	} finally {
 		status.restore();
 	}
 	a.write({ "docs/tasks/t.md": "# T\n\nStatus: design approved (2026-11-04)\n" });
-	const base = slowGit(realpathSync(join(root, "a")), ["symbolic-ref", "rev-parse"]);
+	const base = slowGit(realpathSync(join(root, "a")), ["symbolic-ref", "rev-parse"], 10);
 	try {
 		const started = Date.now();
 		const due = taskFileReminders(root, () => WORK_DOC_DIRS, Date.now() + 3000);
 		assert.deepEqual(due.approved, ["a/docs/tasks/t.md"]);
-		assert.ok(Date.now() - started < 3800, "the base branch lookup is bounded too: less than one of git's 4 s hangs past the deadline");
+		assert.ok(Date.now() - started < 9000, "the base branch lookup is bounded too: less than one of git's 10 s hangs");
 	} finally {
 		base.restore();
 	}
@@ -305,4 +306,16 @@ test("in a workspace, a landing from a checkout nested in another repository's f
 	const { root, a, check } = workspace();
 	a.git("worktree", "add", "-q", join(root, "b", "wt"), "-b", "feat/w");
 	assert.equal(check("cd b/wt && gh pr create --fill")?.action, "block");
+});
+
+test("in a workspace, a repository's own worktree inside its folder is that repository", () => {
+	const { root, a, check } = workspace();
+	a.git("worktree", "add", "-q", join(root, "a", ".worktrees", "x"), "-b", "feat/w");
+	assert.equal(check("cd a/.worktrees/x && git commit -m x")?.action ?? "allow", "allow", "a commit on its work branch");
+	assert.match(String(check("cd a/.worktrees/x && gh pr create --fill")?.reason), /Task files would reach/, "judged in the worktree, by a's folders");
+});
+
+test("in a workspace, a quoted argument with .. and glob characters doesn't hide the folder", () => {
+	const { check } = workspace();
+	assert.match(String(check('cd a && gh pr create --title "handle ../ paths [WIP]"')?.reason), /Task files would reach/);
 });

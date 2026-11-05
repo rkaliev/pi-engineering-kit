@@ -509,11 +509,14 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 	const shell = new Subshells(cwd, command);
 	// `export GIT_DIR=…` (or a bare assignment) moves every git call after it.
 	let exported = false;
+	const open = blankQuoted(command);
 	return segmentsOf(tokenize(stripRedirects(command))).map(({ raw, alone, before }) => {
 		shell.enter(raw, before);
 		let dir = powershell || exported ? undefined : shell.dir;
 		const words = raw.map((t) => unwrapToken(t.replace(/^\(+|\)+$/g, ""))).filter(Boolean);
-		if (hidesFolder(words)) dir = undefined;
+		// A quoted word keeps its glob characters literal: the tokens lose the quotes, the blanked text still shows them.
+		const literal = words.map((w) => !open.includes(w));
+		if (hidesFolder(words, literal)) dir = undefined;
 		const head = words[commandIndex(words)];
 		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
@@ -526,12 +529,12 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 }
 
 /** Words that run the segment, or a git call in it, somewhere the folder doesn't show. */
-function hidesFolder(words: string[]): boolean {
+function hidesFolder(words: string[], literal: boolean[] = []): boolean {
 	const command = words[commandIndex(words)];
 	return words.some((w, i) => {
 		if (/^GIT_(DIR|WORK_TREE)=/.test(w) || w === "eval") return true;
 		// `../$R`, `../a*`: a folder next to `..` that only the shell decides.
-		if (w.includes("..") && /[$`*?[{]/.test(w)) return true;
+		if (!literal[i] && w.includes("..") && /[$`*?[{]/.test(w)) return true;
 		if (/^(ba|z|da|k)?sh$/.test(w.slice(w.lastIndexOf("/") + 1)) && words.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a))) return true;
 		if (w === "env" && words.slice(i + 1).some((a) => a === "-C" || /^--chdir(=|$)/.test(a) || /^-[a-zA-Z]*C/.test(a))) return true;
 		if (/^--(git-dir|work-tree)(=|$)/.test(w) && words.slice(0, i).includes("git")) return true;
