@@ -10,7 +10,7 @@ A published document is a view of Markdown kept in the repo, built by one comman
 ## The source stays Markdown in the repo
 
 - **Project docs for outsiders:** choose chapters of `docs/`, never copy them. `--docs` takes every chapter in `docs/README.md`'s order; listing files takes only those, in your order.
-- **A report or proposal:** `docs/publish/<doc>.md` with frontmatter (`title`, `subtitle`, `audience`, `version`, `date`, `lang`, `author`), committed like any doc.
+- **A report or proposal:** `docs/publish/<doc>.md` with frontmatter (`title`, `subtitle`, `audience`, `version`, `date`, `lang`, `author`), committed like any doc. Write it in English unless the user asks for another language, and set `lang` to match.
 - **Client release notes:** `--changelog <version>`. Where the entries are written for developers, write the client's version as `docs/publish/release-<version>.md` instead.
 
 A copy edited for one reader drifts from the docs. When a chapter must differ for an audience, leave it out, or give that audience its own document in `docs/publish/`.
