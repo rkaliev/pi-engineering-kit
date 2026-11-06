@@ -2,7 +2,7 @@
 
 ## 0.35.1
 
-- **Docs for people are in English by default.** using-skills' language line read "docs for people the user requests in their language", which could pass for any doc meant for people. It now says the agent talks in the user's language and writes files in English, docs for people included; another language only when the user asks for it. publishing-documents says the same for a report or proposal and its `lang`, and ARCHITECTURE's principle 6 is reworded to match. The install pins move to v0.35.1.
+- **Docs for people are in English by default.** using-skills' language line read "docs for people the user requests in their language", which could pass for any doc meant for people. It now says the agent talks in the user's language and writes files in English, docs for people included; a doc for people is in another language only when the user explicitly asks for one. publishing-documents says the same for a report or proposal and its `lang`, and ARCHITECTURE's principle 6 is reworded to match. The install pins move to v0.35.1.
 
 ## 0.35.0
 
