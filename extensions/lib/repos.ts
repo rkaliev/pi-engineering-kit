@@ -3,8 +3,8 @@
  * repositories side by side (a polyrepo workspace), each of them. The gates fingerprint and record per repository.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { isIgnored } from "./commands.ts";
 
 /** More first-level repositories than this and the folder is treated as holding none. */
@@ -42,4 +42,53 @@ export function projectRepos(projectDir: string, ignore: string[] = []): Project
 /** A folder a glob names with everything under it (`<folder>/**`); a glob for files never prunes a folder. */
 export function ignoredFolder(rel: string, ignore: string[]): boolean {
 	return ignore.some((g) => g.endsWith("/**") && isIgnored(rel, [g.slice(0, -3)]));
+}
+
+/** The workspace repository (one of `repos`, folder names under `projectDir`) holding `path`, as an absolute folder; undefined outside them. */
+export function repoOf(projectDir: string, repos: string[], path: string): string | undefined {
+	return placeIn(projectDir, repos, path)?.repo;
+}
+
+/**
+ * `path` placed in the workspace repository holding it by its real location (symlinks followed, each name as the
+ * volume stores it, so a case-swapped name on a case-insensitive volume counts): the repository's folder, and the path
+ * as it is inside that folder. Undefined outside the repositories. `byRealPath: false` places the path as written.
+ */
+export function placeIn(projectDir: string, repos: string[], path: string, byRealPath = true): { repo: string; path: string } | undefined {
+	if (!byRealPath) {
+		const abs = resolve(path);
+		const repo = repos.map((name) => join(projectDir, name)).find((dir) => abs === dir || abs.startsWith(dir + sep));
+		return repo === undefined ? undefined : { repo, path: abs };
+	}
+	const real = canonical(path);
+	for (const name of repos) {
+		const repo = join(projectDir, name);
+		const root = rootOf(repo);
+		if (real === root || real.startsWith(root + sep)) return { repo, path: join(repo, relative(root, real)) };
+	}
+	return undefined;
+}
+
+/** A repository folder's real path, resolved once per process: a hook places many words against few roots. */
+const roots = new Map<string, string>();
+function rootOf(repo: string): string {
+	let root = roots.get(repo);
+	if (root === undefined) roots.set(repo, (root = canonical(repo)));
+	return root;
+}
+
+/** The real path of the deepest folder of `path` that exists, with the rest appended as written. */
+export function canonical(path: string): string {
+	let head = resolve(path);
+	const rest: string[] = [];
+	while (!existsSync(head) && dirname(head) !== head) {
+		rest.unshift(basename(head));
+		head = dirname(head);
+	}
+	try {
+		head = realpathSync.native(head);
+	} catch {
+		// unreadable: as written
+	}
+	return join(head, ...rest);
 }

@@ -3,17 +3,29 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { stripRedirects } from "../extensions/lib/shell.ts";
+import { segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
+
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
 
 const OPTIONS: ReviewGateOptions = { missing: "block", waiver: "reviewGate: false", verify: ["npm test", "npm run lint"] };
 
 /** A repo with a remote: `main` pushed, then a work branch with one code commit and a task file. */
-function repo(dir = mkdtempSync(join(tmpdir(), "reviews-")), root = mkdtempSync(join(tmpdir(), "reviews-records-")), readme = "x\n") {
+function repo(dir = temp("reviews-"), root = temp("reviews-records-"), readme = "x\n") {
 	mkdirSync(dir, { recursive: true });
-	const remote = mkdtempSync(join(tmpdir(), "reviews-remote-"));
+	const remote = temp("reviews-remote-");
 	const run = (cwd: string, ...args: string[]) => {
 		const r = spawnSync("git", args, { cwd, encoding: "utf8" });
 		assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
@@ -411,14 +423,61 @@ test("after the agent opens a PR, pushing a new unreviewed commit to its branch 
 
 /** A folder outside git holding two `repo()` repositories, `a` and `b`, that share one record store. */
 function workspaceRepos() {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	const b = repo(join(ws, "b"), root, "b\n");
 	const ids = { promptId: "p1", run: "r1" };
 	const check = (command: string) => checkReview(command, ws, ws, OPTIONS, root);
 	return { ws, root, a, b, ids, check };
 }
+
+test("in a workspace, a repository's waiver lifts the review gate for its landings only", () => {
+	const { ws, root } = workspaceRepos();
+	const options: ReviewGateOptions = { ...OPTIONS, waived: (checkout) => checkout === join(ws, "a") };
+	assert.equal(checkReview("cd a && gh pr create", ws, ws, options, root), undefined);
+	assert.equal(checkReview("cd b && gh pr create", ws, ws, options, root)?.action, "block");
+});
+
+test("in a workspace, a landing whose folder the guard can't tell is held before any waiver", () => {
+	const { ws, root } = workspaceRepos();
+	const repoOf = (dir: string) => [join(ws, "a"), join(ws, "b")].find((r) => dir === r || dir.startsWith(`${r}/`));
+	const options: ReviewGateOptions = { ...OPTIONS, workspace: true, repoOf, waived: (checkout) => checkout === join(ws, "b") };
+	assert.equal(checkReview("Set-Location a; gh pr create --fill", ws, ws, { ...options, powershell: true }, root)?.action, "block");
+	const reason = checkReview("cd b && GIT_DIR=../a/.git gh pr create -H feat/a", ws, ws, options, root)?.reason;
+	assert.match(String(reason), /can't tell which checkout/);
+	assert.equal(checkReview("cd b && gh pr create --fill", ws, ws, options, root), undefined, "b's own waiver still holds");
+});
+
+test("in a workspace, the review gate holds a PR that names its repository, starts outside git, or runs in a nested checkout", () => {
+	const { ws, root, a } = workspaceRepos();
+	const repoOf = (dir: string) => [join(ws, "a"), join(ws, "b")].find((r) => dir === r || dir.startsWith(`${r}/`));
+	const options: ReviewGateOptions = { ...OPTIONS, workspace: true, repoOf, waived: (checkout) => checkout.startsWith(join(ws, "b")) };
+	const held = (command: string) => checkReview(command, ws, ws, options, root)?.action;
+	assert.equal(held("GH_REPO=org/a gh pr create -H feat/a --fill"), "block", "from the workspace folder");
+	assert.equal(held("gh pr merge https://github.com/org/a/pull/7 --squash"), "block");
+	assert.equal(held("cd b && GH_REPO=org/a gh pr create -H feat/a --fill"), "block", "b's waiver doesn't cover a");
+	assert.equal(spawnSync("git", ["-C", a.dir, "worktree", "add", "-q", join(ws, "b", "wt"), "-b", "feat/w"], { encoding: "utf8" }).status, 0);
+	assert.equal(held("cd b/wt && gh pr create --fill"), "block", "a worktree of a inside b isn't b");
+	assert.equal(held("cd b && gh pr create --fill"), undefined, "b's own PR, waived");
+	assert.equal(spawnSync("git", ["-C", join(ws, "b"), "worktree", "add", "-q", join(ws, "b", ".worktrees", "x"), "-b", "feat/bx"], { encoding: "utf8" }).status, 0);
+	assert.equal(held("cd b/.worktrees/x && gh pr create --fill"), undefined, "b's own worktree is b: waived");
+});
+
+test("in a workspace, GH_REPO in quotes or in the guard's environment holds a PR", () => {
+	const { ws, root } = workspaceRepos();
+	const repoOf = (dir: string) => [join(ws, "a"), join(ws, "b")].find((r) => dir === r || dir.startsWith(`${r}/`));
+	const options: ReviewGateOptions = { ...OPTIONS, workspace: true, repoOf, waived: (checkout) => checkout.startsWith(join(ws, "b")) };
+	assert.equal(checkReview('cd b && env "GH_REPO=org/a" gh pr create -H feat/a --fill', ws, ws, options, root)?.action, "block");
+	const saved = process.env.GH_REPO;
+	process.env.GH_REPO = "org/a";
+	try {
+		assert.equal(checkReview("cd b && gh pr create --fill", ws, ws, options, root)?.action, "block");
+	} finally {
+		if (saved === undefined) delete process.env.GH_REPO;
+		else process.env.GH_REPO = saved;
+	}
+});
 
 test("a workspace records the verdict in the repository that has the commit", () => {
 	const { ws, root, a, b, ids } = workspaceRepos();
@@ -428,8 +487,8 @@ test("a workspace records the verdict in the repository that has the commit", ()
 });
 
 test("in a workspace, clones of one history both record the verdict", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
 	assert.equal(typeof recordReview(ws, report(a.head, "Yes", a.base), { promptId: "p1", run: "r1" }, root), "object");
@@ -492,8 +551,8 @@ test("in a workspace, a PR branch registered in the folder's own store (0.33.0) 
 });
 
 test("in a workspace, clones of one history don't share PR branches", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", "-b", "feat/a", a.dir, join(ws, "b")]).status, 0);
 	a.run(join(ws, "b"), "remote", "set-head", "origin", "main");
@@ -515,8 +574,8 @@ test("in a workspace, a short SHA names the commit it abbreviates, not a ref of 
 });
 
 test("in a workspace, a store that can't be written doesn't stop the others", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
 	writeFileSync(reviewsDir(a.dir, root), "not a folder");
@@ -525,8 +584,8 @@ test("in a workspace, a store that can't be written doesn't stop the others", ()
 });
 
 test("in a workspace, a verdict short of Yes that misses a repository is recorded where it can and names the miss", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
 	writeFileSync(reviewsDir(a.dir, root), "not a folder");
@@ -537,8 +596,8 @@ test("in a workspace, a verdict short of Yes that misses a repository is recorde
 });
 
 test("in a workspace, a lookup that runs out of time in a repository makes a verdict short of Yes name the miss", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "b")]).status, 0);
 	const { restore } = slowGit(realpathSync(join(ws, "b")), "rev-parse", 8);
@@ -551,8 +610,8 @@ test("in a workspace, a lookup that runs out of time in a repository makes a ver
 });
 
 test("in a workspace, one slow repository doesn't keep a verdict from the repositories after it", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	repo(join(ws, "b"), root, "b\n");
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
@@ -566,8 +625,8 @@ test("in a workspace, one slow repository doesn't keep a verdict from the reposi
 });
 
 test("holdBack: after a verdict missed a repository, an Inconclusive holds the commit back there, so a parallel Yes can't stand alone", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	recordVerdict(ws, a.head, "Yes", { promptId: "p1", run: "y" }, root, { base: a.base });
@@ -585,8 +644,8 @@ test("holdBack: after a verdict missed a repository, an Inconclusive holds the c
 });
 
 test("holdBack: for a commit that was found it holds back only that commit, and names a repository it still missed", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	const b = repo(join(ws, "b"), root, "b\n");
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
@@ -597,8 +656,8 @@ test("holdBack: for a commit that was found it holds back only that commit, and 
 });
 
 test("holdBack: a repository that times out again is named, not taken as held", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	// Only the commit's lookup hangs: c answers everything else, so nothing but the timeout can keep it unheld.
@@ -613,8 +672,8 @@ test("holdBack: a repository that times out again is named, not taken as held", 
 });
 
 test("recordVerdict: a commit found in one repository is recorded there even when another repository uses up the lookup's time", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	const slow = slowGit(realpathSync(join(ws, "c")), a.head, 8);
@@ -629,8 +688,8 @@ test("recordVerdict: a commit found in one repository is recorded there even whe
 });
 
 test("recordVerdict: a repository whose store can't be resolved in time is a miss, not a write to a folder-keyed store", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	const slow = slowGit(realpathSync(join(ws, "c")), "--git-common-dir", 8);
@@ -647,8 +706,8 @@ test("recordVerdict: a repository whose store can't be resolved in time is a mis
 });
 
 test("recordVerdict: a commit not found because a repository didn't answer in time says so, not that it is no commit", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	const slow = slowGit(realpathSync(join(ws, "c")), "deadbee", 8);
@@ -663,8 +722,8 @@ test("recordVerdict: a commit not found because a repository didn't answer in ti
 });
 
 test("holdBack: given the caller's timed-out lookup, it holds each HEAD back without searching again, and reports the miss", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", a.dir, join(ws, "c")]).status, 0);
 	const failed = `Reviewed HEAD deadbee0 could not be searched in time in any repository here (a, c)`;
@@ -705,8 +764,8 @@ test("in one repository, a verdict short of Yes whose BASE is no commit is still
 });
 
 test("in a workspace, a verdict short of Yes reaches a repository where its BASE doesn't resolve, without a range", () => {
-	const ws = mkdtempSync(join(tmpdir(), "reviews-ws-"));
-	const root = mkdtempSync(join(tmpdir(), "reviews-records-"));
+	const ws = temp("reviews-ws-");
+	const root = temp("reviews-records-");
 	const a = repo(join(ws, "a"), root);
 	assert.equal(spawnSync("git", ["clone", "-q", "--depth", "1", "-b", "feat/a", `file://${a.dir}`, join(ws, "b")]).status, 0);
 	recordReview(ws, report(a.head, "No", a.base), { promptId: "p1", run: "r1" }, root);
@@ -1250,4 +1309,35 @@ test("highestFindingIds names the highest finding number of each prefix (F, S, T
 	review(`F1 fixed; F4 still open (rounds 1–2).\n- F5 a.ts:4 · w. See SEV-30 and HYG-01.\n- T3 a.test.ts:1 · v\n- C1 a.ts:5 · u\n${report(fixed, "With fixes", head)}`);
 	assert.deepEqual(highestFindingIds(dir, reviewChain(dir, fixed, root), root), { F: 5, S: 2, T: 3, C: 1 });
 	assert.deepEqual(highestFindingIds(dir, [], root), {});
+});
+
+test("segmentFolders: git's -C counts after a prefix or reserved word in command position", () => {
+	const ws = temp("reviews-ws-");
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
+	assert.equal(segmentFolders("time git -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("command git -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("if true; then git -C b status; fi", ws)[1]!.dir, join(ws, "b"));
+});
+
+test("checkGateFiles: with children, a first-level folder's guard config is a gate file in every form", () => {
+	const ws = temp("reviews-ws-");
+	for (const dir of ["a/.claude", "x/.claude"]) mkdirSync(join(ws, dir), { recursive: true });
+	const check = (command: string) => checkGateFiles(command, ws, ws, ".claude/guard.json", true)?.action ?? "allow";
+	assert.equal(check(`cd a/.claude && echo '{"allow":[".*"]}' > guard.json`), "confirm");
+	assert.equal(check("cd a && cd .claude && sed -i '' s/x/y/ guard.json"), "confirm");
+	assert.equal(check("echo '{}' > a/.claude/./guard.json"), "confirm");
+	assert.equal(check("cd x/.claude && echo '{}' > guard.json"), "confirm", "a folder that isn't a repository yet");
+	assert.equal(check("cd a && echo x > notes.json"), "allow");
+	assert.equal(checkGateFiles("cd a/.claude && echo '{}' > guard.json", ws, ws, ".claude/guard.json"), undefined, "without children, as before");
+});
+
+test("segmentFolders: each segment runs where the moves before it and its git -C lead", () => {
+	const ws = temp("reviews-ws-");
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
+	const folders = (command: string) => segmentFolders(command, ws).map((s) => [s.dir, s.move]);
+	assert.deepEqual(folders("cd a && npm publish"), [[ws, true], [join(ws, "a"), false]]);
+	assert.deepEqual(folders("cd a && cd ../b && npm publish").at(-1), [join(ws, "b"), false], "two moves");
+	assert.deepEqual(folders("git -C b status"), [[join(ws, "b"), false]]);
+	const hidden = segmentFolders("echo $(cd b && npm publish)", ws);
+	assert.ok(hidden.length > 0 && hidden.every((s) => s.dir === undefined), "a move in a substitution hides every folder");
 });

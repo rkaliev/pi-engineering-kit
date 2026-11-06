@@ -4,8 +4,10 @@
  */
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { basename, join } from "node:path";
+import { quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { repoOf } from "./repos.ts";
+import { safeRealpath, segmentFolders } from "./shell.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -33,18 +35,101 @@ const PUSH_VALUE_FLAGS = new Set(["-o", "--push-option", "--repo", "--receive-pa
 /**
  * Block a command that would put working documents on the base branch: opening or merging a PR/MR,
  * merging into the base, pushing to the base, or committing them on the base. Pushing a work branch is fine.
+ * In a workspace (`workspace` given), each landing is judged in the folder it runs in, with that repository's
+ * task-file folders; a PR, merge or push whose repository the guard can't tell is blocked, and a commit it can't place
+ * is judged in every repository.
  */
-export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_DOC_DIRS): GuardDecision | undefined {
-	if (dirs.length === 0) return undefined;
-	const landings = splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined);
-	if (landings.length === 0 || git(projectDir, ["rev-parse", "--git-dir"]) === undefined) return undefined;
+export function checkWorkDocs(
+	command: string,
+	projectDir: string,
+	dirs = WORK_DOC_DIRS,
+	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
+): GuardDecision | undefined {
+	if (!workspace) return judge(splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined), projectDir, dirs);
+	const folders = workspace.repos.map((name) => join(projectDir, name));
+	// `"workDocs": []` everywhere turns the rule off, even where a landing can't be placed.
+	const watched = folders.some((repo) => workspace.dirsFor(repo).length > 0);
+	const cantTell: GuardDecision = {
+		action: "block",
+		reason: `Task-file guard: can't tell which repository this command lands in (a folder the guard can't follow, a repository named by -R, GH_REPO or a URL, a folder outside git, or a repository too slow to check). ${workspace.powershell ? "Run it with the Bash tool from the repository's folder (`cd <repo> && …`)" : "Run it from the repository's folder (`cd <repo> && …`)"} without naming the repository.`,
+	};
+	// A GH_REPO set anywhere in the command picks the repository for every gh call after it.
+	const ghRepo = /\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined;
+	// A heredoc body is text only when the command as a whole just writes it to a file; any other heredoc may run it.
+	const write = quotedHeredoc(command);
+	for (const { raw, dir } of segmentFolders(write?.target !== undefined ? write.head : command, workspace.cwd, workspace.powershell)) {
+		const l = landing(raw.map((t) => t.replace(/^\(+|\)+$/g, "")));
+		if (!l) continue;
+		// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
+		if (l.kind === "commit" && dir === undefined) {
+			if (!watched) continue;
+			const until = Date.now() + UNPLACED_BUDGET_MS;
+			for (const repo of folders) {
+				const own = workspace.dirsFor(repo);
+				if (own.length === 0) continue;
+				if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
+				const found = judgeCommit(repo, own, until);
+				if (found === "late") return cantTell;
+				if (found) return found;
+			}
+			continue;
+		}
+		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
+		// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
+		const repo = dir === undefined ? undefined : repoOf(projectDir, workspace.repos, dir);
+		const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
+		// A checkout in a repository's folder is that repository when it shares its git common dir (its own worktree,
+		// judged in the worktree) and another one otherwise (a clone, another repository's worktree).
+		const top = dir === undefined || repo === undefined ? undefined : git(dir, ["rev-parse", "--show-toplevel"]);
+		const nested = top !== undefined && commonOf(top) !== commonOf(repo!);
+		const checkout = dir === undefined ? undefined : repo === undefined ? dir : (top ?? repo);
+		const unplaced = checkout === undefined || selector || nested || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
+		if (unplaced) {
+			if (!watched) continue;
+			return cantTell;
+		}
+		const found = judge([l], checkout!, workspace.dirsFor(repo ?? checkout!));
+		if (found) return found;
+	}
+	return undefined;
+}
 
-	const base = baseBranch(projectDir);
-	const onBase = base !== undefined && currentBranch(projectDir) === base;
+/** The real path of a checkout's git common dir: a repository and its worktrees share it. */
+function commonOf(dir: string): string | undefined {
+	const out = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	return out === undefined ? undefined : safeRealpath(out);
+}
+
+/** How long a commit the guard can't place may spend checking the workspace repositories. */
+const UNPLACED_BUDGET_MS = 3000;
+
+/** A commit in `checkout`: staged task files first (one git call), then whether it is on its base; "late" past `until`. */
+function judgeCommit(checkout: string, dirs: string[], until: number): GuardDecision | "late" | undefined {
+	if (dirs.length === 0) return undefined;
+	const left = until - Date.now();
+	if (left <= 0) return "late";
+	const r = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...dirs], { cwd: checkout, encoding: "utf8", timeout: Math.min(5000, left) });
+	if (r.error || r.signal) return "late";
+	const staged = markdown(lines(r.status === 0 ? r.stdout.trim() : undefined));
+	if (staged.length === 0) return undefined;
+	const base = onBaseBranch(checkout, until);
+	if (base === undefined) return Date.now() >= until ? "late" : undefined;
+	return {
+		action: "block",
+		reason: `Task files are staged on ${base} in ${basename(checkout)}: ${staged.join(", ")}. Task files are committed only on a work branch: create one (\`git -C ${basename(checkout)} switch -c <type>/<topic>\`) and commit there.`,
+	};
+}
+
+/** The landings of one checkout, judged with its task-file folders. */
+function judge(landings: Landing[], checkout: string, dirs: string[]): GuardDecision | undefined {
+	if (dirs.length === 0 || landings.length === 0 || git(checkout, ["rev-parse", "--git-dir"]) === undefined) return undefined;
+
+	const base = baseBranch(checkout);
+	const onBase = base !== undefined && currentBranch(checkout) === base;
 	for (const l of landings) {
 		if (l.kind === "commit") {
 			if (!onBase) continue;
-			const staged = markdown(stagedPaths(projectDir, dirs));
+			const staged = markdown(stagedPaths(checkout, dirs));
 			if (staged.length > 0) {
 				return {
 					action: "block",
@@ -55,7 +140,7 @@ export function checkWorkDocs(command: string, projectDir: string, dirs = WORK_D
 		}
 		const refs = l.kind === "pr" ? ["HEAD"] : l.kind === "merge" ? (onBase ? l.refs : []) : pushedToBase(l, base, onBase);
 		for (const ref of refs) {
-			const files = markdown(trackedPaths(projectDir, ref, dirs));
+			const files = markdown(trackedPaths(checkout, ref, dirs));
 			if (files.length > 0) return { action: "block", reason: leakReason(files, base) };
 		}
 	}
@@ -89,21 +174,27 @@ export function workDocsReminder(files: string[]): string {
 	return `Working-docs gate: implemented task files are still in the tree: ${files.join(", ")}. Move what lasts into the topic chapter (docs/NN-topic.md) and docs/decisions/, show the user each file's Follow-ups, then delete the files in one commit (\`git rm …\`). Opening a PR or landing on the base branch is blocked while they exist.`;
 }
 
-/** The branch work lands on: `origin/HEAD`, else an existing `main` or `master`. */
-export function baseBranch(projectDir: string): string | undefined {
-	const remote = git(projectDir, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+/** The branch work lands on: `origin/HEAD`, else an existing `main` or `master`. Its git calls end by `until` (epoch ms). */
+export function baseBranch(projectDir: string, until?: number): string | undefined {
+	const run = (args: string[]) => {
+		const left = until === undefined ? 5000 : Math.min(5000, until - Date.now());
+		return left > 0 ? git(projectDir, args, left) : undefined;
+	};
+	const remote = run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
 	if (remote) return remote.replace(/^origin\//, "");
-	return ["main", "master"].find((b) => git(projectDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${b}`]) !== undefined);
+	return ["main", "master"].find((b) => run(["rev-parse", "--verify", "--quiet", `refs/heads/${b}`]) !== undefined);
 }
 
-/** The base branch's name when it is checked out, else undefined. */
-export function onBaseBranch(projectDir: string): string | undefined {
-	const base = baseBranch(projectDir);
-	return base !== undefined && currentBranch(projectDir) === base ? base : undefined;
+/** The base branch's name when it is checked out, else undefined. Its git calls end by `until` (epoch ms). */
+export function onBaseBranch(projectDir: string, until?: number): string | undefined {
+	const base = baseBranch(projectDir, until);
+	const left = until === undefined ? undefined : until - Date.now();
+	if (base === undefined || (left !== undefined && left <= 0)) return undefined;
+	return currentBranch(projectDir, left === undefined ? undefined : Math.min(5000, left)) === base ? base : undefined;
 }
 
-export function currentBranch(projectDir: string): string | undefined {
-	return git(projectDir, ["branch", "--show-current"]) || undefined;
+export function currentBranch(projectDir: string, timeout?: number): string | undefined {
+	return git(projectDir, ["branch", "--show-current"], timeout) || undefined;
 }
 
 export function landing(raw: string[]): Landing | undefined {
@@ -116,7 +207,7 @@ export function landing(raw: string[]): Landing | undefined {
 		const args = tokens.slice(tokens.indexOf(tool) + 1);
 		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
 		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
-		const repo = args.some((t) => t === "-R" || t === "--repo" || t.startsWith("--repo="));
+		const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
 		if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
 		const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
 		const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));
@@ -208,7 +299,7 @@ function lines(out: string | undefined): string[] {
 	return (out ?? "").split("\n").filter(Boolean);
 }
 
-function git(cwd: string, args: string[]): string | undefined {
-	const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5000 });
+function git(cwd: string, args: string[], timeout = 5000): string | undefined {
+	const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout });
 	return r.status === 0 ? r.stdout.trim() : undefined;
 }

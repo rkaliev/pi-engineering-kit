@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { projectRepos, repoOf } from "./repos.ts";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
@@ -24,6 +25,12 @@ export interface GuardConfig {
 	workDocs?: string[];
 	/** Code reaches the base branch only with a passing reviewer verdict for it. `false` turns the check off. */
 	reviewGate?: boolean;
+	/** The file this config was read from, as the reasons name it (default `.pi/guard.json`). */
+	label?: string;
+	/** For a combined config (lib/scope.ts): the file each `block`/`confirm` rule came from. */
+	sources?: Record<string, string>;
+	/** In a workspace: the repositories whose own work branch a plain push sends without a question (lib/scope.ts). */
+	pushOwners?: string[];
 }
 
 const ALLOW: GuardDecision = { action: "allow" };
@@ -62,8 +69,18 @@ export function isSecretPath(path: string): boolean {
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
 
-/** Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. */
-export function checkCommand(command: string, cwd: string, config: GuardConfig, dir: string = cwd, env: NodeJS.ProcessEnv = process.env): GuardDecision {
+/**
+ * Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. `judgeWrite`
+ * judges a heredoc's write target (in a workspace, from the repository it lands in).
+ */
+export function checkCommand(
+	command: string,
+	cwd: string,
+	config: GuardConfig,
+	dir: string = cwd,
+	env: NodeJS.ProcessEnv = process.env,
+	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
+): GuardDecision {
 	// A command that only writes a project file through a quoted heredoc runs nothing from its body: judge its first
 	// line, and its target as a Write would be. A target outside the project (a shell rc file) leaves it judged whole.
 	const heredoc = quotedHeredoc(command);
@@ -82,25 +99,30 @@ export function checkCommand(command: string, cwd: string, config: GuardConfig, 
 	}
 	for (const source of config.block ?? []) {
 		if (new RegExp(source).test(command)) {
-			return { action: "block", reason: `Blocked by project guard rule /${source}/ in .pi/guard.json.` };
+			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
-	const written = target ? checkPath("write", target, cwd, config) : ALLOW;
+	const written = target ? judgeWrite(target) : ALLOW;
 	if (written.action !== "allow") return written;
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env);
+	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env, config.pushOwners);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
 		if (re.test(text)) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
-		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/.` };
+		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
 	}
 	if (segments.some((segment) => segment.some(isSecretPath))) {
 		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
 	}
 	return ALLOW;
+}
+
+/** The file a rule came from, as its reason names it. */
+function sourceOf(config: GuardConfig, rule: string): string {
+	return (config.sources && Object.hasOwn(config.sources, rule) ? config.sources[rule] : undefined) ?? config.label ?? ".pi/guard.json";
 }
 
 /** CI and release pipelines run with repository credentials, so edits to them need a human look. */
@@ -133,7 +155,7 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 		return { action: "confirm", reason: "The guard config decides what the guard blocks. Loosening it is the user's call; show them the change first." };
 	}
 	const hit = (config.protectedPaths ?? []).find((prefix) => inside && rel.startsWith(prefix.replace(/^\.\//, "")));
-	if (hit) return { action: "block", reason: `${path} is protected by .pi/guard.json (${hit}). Ask the user before changing it.` };
+	if (hit) return { action: "block", reason: `${path} is protected by ${config.label ?? ".pi/guard.json"} (${hit}). Ask the user before changing it.` };
 	if (inside && CI_PIPELINE.test(rel)) {
 		return { action: "confirm", reason: `${path} is a CI/release pipeline; it runs with repository credentials. Show the user the design before editing it.` };
 	}
@@ -158,7 +180,7 @@ const INTERPRETER_HEAD = new RegExp(String.raw`^(?:python3?|node)(?:[ \t]+-)?[ \
  * path, a second command on any line, a missing delimiter) returns undefined, and the command is judged whole. So does
  * a carriage return or another control character: some shells (Cygwin's `igncr`) end a heredoc where this wouldn't.
  */
-function quotedHeredoc(command: string): { head: string; target?: string } | undefined {
+export function quotedHeredoc(command: string): { head: string; target?: string } | undefined {
 	if (/[\0-\x08\x0b-\x1f\x7f]/.test(command)) return undefined;
 	const lines = command.split("\n");
 	if (lines.length > 2 && lines[lines.length - 1] === "") lines.pop();
@@ -340,7 +362,7 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
 /** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv): GuardDecision | undefined {
+function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
 	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
 	const pushToken = segments.some((tokens) =>
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
@@ -353,7 +375,7 @@ function checkPushes(command: string, segments: string[][], project: string, dir
 		return at !== -1 && words.slice(at + 1).some((t) => PUSH_VERBS.has(t));
 	});
 	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command)) return undefined;
-	return ownBranchPush(command, dir, env, project) ? undefined : PUSH_CONFIRM;
+	return ownBranchPush(command, dir, env, project, owners) ? undefined : PUSH_CONFIRM;
 }
 
 /**
@@ -361,7 +383,7 @@ function checkPushes(command: string, segments: string[][], project: string, dir
  * whole command, from a clean environment, naming the current convention-named work branch (or nothing) on a configured
  * remote whose config cannot redirect or enlarge the push. Everything else is false, so it asks.
  */
-export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env, project: string = cwd): boolean {
+export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env, project: string = cwd, owners?: string[]): boolean {
 	// One trailing `2>&1` only merges the output streams.
 	const text = command.trim().replace(/ 2>&1$/, "");
 	if (PUSH_REFUSED_CHARS.test(text)) return false;
@@ -385,9 +407,15 @@ export function ownBranchPush(command: string, cwd: string, env: NodeJS.ProcessE
 	if (positional.length > 2) return false;
 
 	if (git(dir, ["rev-parse", "--git-dir"]) === undefined) return false;
-	// Only the project's own repository (or one of its worktrees) is pushed silently.
+	// Only the project's own repository (or one of its worktrees) is pushed silently; in a workspace, the repository
+	// the push runs in.
 	const repoDir = commonDir(dir);
-	if (repoDir === undefined || repoDir !== commonDir(project)) return false;
+	const workspace = projectRepos(project);
+	const owner = workspace.kind === "workspace" ? repoOf(project, workspace.repos, dir) : project;
+	if (repoDir === undefined || owner === undefined || repoDir !== commonDir(owner)) return false;
+	// Given owners (a workspace session): only a repository that was there when the session started, whatever the
+	// session folder has become since (a clone made since, or a `.git` at the workspace root, asks).
+	if (owners !== undefined && !owners.includes(owner)) return false;
 	const branch = currentBranch(dir);
 	const base = baseBranch(dir);
 	if (!branch || !base || branch === base || !WORK_BRANCH.test(branch)) return false;

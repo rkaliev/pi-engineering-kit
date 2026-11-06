@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
+
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
 
 const cwd = "/work/app";
 const none: GuardConfig = {};
@@ -152,7 +164,7 @@ function sh(cwd: string, ...args: string[]) {
 
 /** A clone of a bare origin with origin/HEAD -> main, checked out on `feat/x`. */
 function pushRepo(withOriginHead = true) {
-	const root = mkdtempSync(join(tmpdir(), "push-"));
+	const root = temp("push-");
 	const origin = join(root, "origin.git");
 	const repo = join(root, "repo");
 	mkdirSync(repo);
@@ -173,6 +185,29 @@ function pushRepo(withOriginHead = true) {
 
 // The project is the repository the command runs in, unless a test says otherwise.
 const ask = (cmd: string, dir: string, env: NodeJS.ProcessEnv = process.env, project = dir) => checkCommand(cmd, project, none, dir, env).action;
+
+test("from a workspace folder, a plain push of a repository's own work branch asks nothing; its base still asks", () => {
+	const repo = pushRepo();
+	// pushRepo's folder holds the bare origin and the repository `repo`: a workspace of one repository.
+	const ws = dirname(repo);
+	assert.equal(ask("git -C repo push", ws, process.env, ws), "allow");
+	assert.equal(ask("git push origin feat/x", repo, process.env, ws), "allow", "run from the repository's folder");
+	sh(repo, "switch", "-q", "main");
+	assert.equal(ask("git -C repo push", ws, process.env, ws), "confirm");
+});
+
+test("from a workspace folder, a repository that isn't one of the push owners asks", () => {
+	const repo = pushRepo();
+	const ws = dirname(repo);
+	assert.equal(checkCommand("git -C repo push", ws, { pushOwners: [] }, ws).action, "confirm");
+	assert.equal(checkCommand("git -C repo push", ws, { pushOwners: [repo] }, ws).action, "allow");
+});
+
+test("a push from a repository that isn't one of the given push owners asks, whatever the session folder is", () => {
+	const repo = pushRepo();
+	assert.equal(checkCommand("git push", repo, { pushOwners: [] }, repo).action, "confirm");
+	assert.equal(checkCommand("git push", repo, {}, repo).action, "allow", "no owners given: as before");
+});
 
 test("pushing the own work branch to a configured remote asks nothing", () => {
 	const repo = pushRepo();

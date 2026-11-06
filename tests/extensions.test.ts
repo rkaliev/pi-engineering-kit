@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after, beforeEach } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import bootstrap, { BOOTSTRAP_MARKER } from "../extensions/bootstrap.ts";
 import { readReports, readReviews, recordVerdict, reviewsDir } from "../extensions/lib/reviews.ts";
@@ -13,12 +13,30 @@ import models from "../extensions/models.ts";
 import verify from "../extensions/verify.ts";
 import { verifyState } from "../extensions/lib/verify-state.ts";
 
+/** Temp folders this file makes, removed when its tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 type Handler = (event: any, ctx: any) => unknown;
+
+// The guard's session record lives in the environment and on globalThis: each test starts without one.
+beforeEach(() => {
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	verifyState.guardBaseline = undefined;
+});
 
 function fakePi(execCodes: Record<string, number> = {}, onExec: (command: string) => void = () => {}) {
 	const handlers = new Map<string, Handler[]>();
@@ -85,7 +103,7 @@ function ctx(cwd: string, opts: { hasUI?: boolean; confirm?: boolean; trusted?: 
 }
 
 function project(files: Record<string, string>) {
-	const dir = mkdtempSync(join(tmpdir(), "kit-"));
+	const dir = temp("kit-");
 	for (const [name, content] of Object.entries(files)) {
 		mkdirSync(resolve(dir, name, ".."), { recursive: true });
 		writeFileSync(join(dir, name), content);
@@ -153,6 +171,330 @@ test("guard blocks, confirms and allows tool calls", async () => {
 	assert.equal(await emit("tool_call", push, ctx(dir, { confirm: true })), undefined, "confirmed by human");
 	assert.equal((await emit("tool_call", push, ctx(dir, { confirm: false }))).block, true, "declined by human");
 	assert.match((await emit("tool_call", push, ctx(dir, { hasUI: false }))).reason, /unavailable/, "no UI means block");
+});
+
+test("guard: in a workspace, a write of a repository's CI pipeline asks", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	const c = ctx(dir, { confirm: false });
+	const write = await emit("tool_call", { toolName: "write", input: { path: "a/.github/workflows/ci.yml" } }, c);
+	assert.equal(write?.block, true, "the write is asked about");
+	assert.match(write.reason, /CI\/release pipeline/);
+	assert.equal(c.asked.length, 1, "asked, then declined");
+});
+
+test("guard: in a workspace, a repository's restrictions always apply and its loosening only in a trusted project", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ allow: ["npm run deploy"], block: ["make release"] }));
+	const deploy = { toolName: "bash", input: { command: "cd a && npm run deploy" } };
+	assert.equal(await emit("tool_call", deploy, ctx(dir, { trusted: true })), undefined);
+	assert.equal((await emit("tool_call", deploy, ctx(dir, { trusted: false, confirm: false }))).block, true);
+	const release = await emit("tool_call", { toolName: "bash", input: { command: "cd a && make release" } }, ctx(dir, { trusted: false }));
+	assert.equal(release.block, true);
+	assert.match(release.reason, /make release/);
+});
+
+test("guard: in a workspace, a repository's guard config is asked about in every form, also before git init", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	for (const command of ["cd a/.pi && echo '{}' > guard.json", "echo '{}' > a/.pi/./guard.json"]) {
+		const c = ctx(dir, { confirm: false });
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command } }, c))?.block, true, command);
+		assert.equal(c.asked.length, 1, command);
+	}
+	const c = ctx(dir, { confirm: false });
+	assert.equal((await emit("tool_call", { toolName: "write", input: { path: "x/.pi/guard.json" } }, c))?.block, true, "x has no .git yet");
+	assert.equal(c.asked.length, 1);
+});
+
+test("guard: in a workspace, a PowerShell landing can't be placed and is blocked", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir, git } = workspaceProject();
+	git("a", "switch", "-qc", "feat/x");
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n");
+	git("a", "add", "-A");
+	git("a", "commit", "-qm", "task");
+	const pr = await emit("tool_call", { toolName: "powershell", input: { command: "Set-Location a; gh pr create" } }, ctx(dir));
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /can't tell which repository/);
+});
+
+test("guard: in a workspace, a repository cloned after the session started pushes only with a question", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	await emit("session_start", { reason: "startup" }, ctx(dir));
+	const remote = temp("kit-remote-");
+	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
+	const c = join(dir, "c");
+	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
+	mkdirSync(c);
+	run("init", "-q", "-b", "main");
+	run("commit", "-q", "--allow-empty", "-m", "init");
+	run("remote", "add", "origin", remote);
+	run("push", "-q", "origin", "main");
+	run("switch", "-qc", "feat/x");
+	const asked = ctx(dir, { confirm: false });
+	assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, asked))?.block, true);
+	assert.match(asked.asked[0] ?? "", /pushes to a remote/);
+});
+
+test("guard: in a workspace, an untrusted project ignores a repository's reviewGate and workDocs", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir, git } = workspaceProject();
+	git("a", "switch", "-qc", "feat/x");
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n");
+	git("a", "add", "-A");
+	git("a", "commit", "-qm", "task");
+	mkdirSync(join(dir, "a", ".pi"));
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ reviewGate: false, workDocs: [] }));
+	const pr = { toolName: "bash", input: { command: "cd a && gh pr create --fill" } };
+	const untrusted = await emit("tool_call", pr, ctx(dir, { trusted: false }));
+	assert.equal(untrusted?.block, true);
+	assert.match(untrusted.reason, /Task files would reach/);
+	assert.equal(await emit("tool_call", pr, ctx(dir, { trusted: true })), undefined, "trusted: a's task-file rule is off and its gate waived");
+});
+
+test("guard: in a workspace, a repository's broken config and its rules name that config", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ block: ["make release", "(unclosed"] }));
+	const c = ctx(dir);
+	const blocked = await emit("tool_call", { toolName: "bash", input: { command: "echo $(cd b) && make release" } }, c);
+	assert.match(blocked.reason, /make release\/ in a\/\.pi\/guard\.json/);
+	assert.ok(c.notes.some((n) => /invalid regex ignored in a\/\.pi\/guard\.json/.test(n)), JSON.stringify(c.notes));
+	mkdirSync(join(dir, "b", ".pi"));
+	writeFileSync(join(dir, "b", ".pi", "guard.json"), "{");
+	const broken = ctx(dir);
+	await emit("tool_call", { toolName: "bash", input: { command: "ls" } }, broken);
+	assert.ok(broken.notes.some((n) => /b[\\/]\.pi[\\/]guard\.json/.test(n)), JSON.stringify(broken.notes));
+});
+
+/** A repository `c` cloned into `dir` with a work branch `feat/x` that has a remote: pushing it is an own-branch push. */
+function cloneLater(dir: string, name = "c") {
+	const remote = temp("kit-remote-");
+	spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
+	const c = join(dir, name);
+	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: c });
+	mkdirSync(c);
+	run("init", "-q", "-b", "main");
+	run("commit", "-q", "--allow-empty", "-m", "init");
+	run("remote", "add", "origin", remote);
+	run("push", "-q", "origin", "main");
+	run("switch", "-qc", "feat/x");
+}
+
+test("guard: without a session_start, the baseline is the folder at the first check", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "ls" } }, ctx(dir)), undefined);
+	cloneLater(dir);
+	assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
+});
+
+test("guard: a child pi process in the same folder takes its parent's baseline", async () => {
+	const { dir } = workspaceProject();
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		cloneLater(dir);
+		const child = fakePi();
+		guard(child.pi);
+		await child.emit("session_start", { reason: "startup" }, ctx(dir));
+		assert.equal((await child.emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
+});
+
+test("guard: in a workspace, the review gate holds a PowerShell landing even with task files off", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject({ ...COMMANDS, ".pi/guard.json": JSON.stringify({ workDocs: [] }) });
+	const pr = await emit("tool_call", { toolName: "powershell", input: { command: "Set-Location a; gh pr create --fill" } }, ctx(dir, { confirm: false }));
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /can't tell which checkout/);
+});
+
+test("guard: in a workspace, the review gate holds a PR named by GH_REPO even with task files off", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject({ ...COMMANDS, ".pi/guard.json": JSON.stringify({ workDocs: [] }) });
+	const pr = await emit("tool_call", { toolName: "bash", input: { command: "GH_REPO=org/a gh pr create -H feat/x --fill" } }, ctx(dir, { confirm: false }));
+	assert.equal(pr?.block, true);
+	assert.match(pr.reason, /can't tell which repository/);
+});
+
+test("guard: a child pi process started in a repository cloned into the workspace pushes only with a question", async () => {
+	const { dir } = workspaceProject();
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		cloneLater(dir);
+		const child = fakePi();
+		guard(child.pi);
+		const c = join(dir, "c");
+		await child.emit("session_start", { reason: "startup" }, ctx(c));
+		assert.equal((await child.emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(c, { confirm: false })))?.block, true);
+		assert.match(String(process.env.ENG_KIT_GUARD_BASELINE), new RegExp(JSON.stringify(dir).slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the child keeps the parent's record");
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
+});
+
+/** A parent pi session in `parent`, and a child pi process (a subagent) in `child`, sharing the environment record. */
+async function parentAndChild(parent: string, child: string, between: () => void = () => {}, trust: { parent?: boolean; child?: boolean } = {}) {
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	const p = fakePi();
+	guard(p.pi);
+	await p.emit("session_start", { reason: "startup" }, ctx(parent, { trusted: trust.parent ?? true }));
+	between();
+	const c = fakePi();
+	guard(c.pi);
+	await c.emit("session_start", { reason: "startup" }, ctx(child, { trusted: trust.child ?? true }));
+	return { emit: c.emit, restore: () => (saved === undefined ? delete process.env.ENG_KIT_GUARD_BASELINE : (process.env.ENG_KIT_GUARD_BASELINE = saved)) };
+}
+
+test("guard: a child below a workspace folder that isn't a repository doesn't push a later clone silently", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "tmp"));
+	const { emit, restore } = await parentAndChild(dir, join(dir, "tmp"), () => cloneLater(join(dir, "tmp")));
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(join(dir, "tmp"), { confirm: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a child in a workspace repository keeps what that repository restricted at the start", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"));
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ block: ["make release"] }));
+	const { emit, restore } = await parentAndChild(dir, join(dir, "a"), () => rmSync(join(dir, "a", ".pi"), { recursive: true }));
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "make release" } }, ctx(join(dir, "a"))))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: in one repository, a child in a subfolder pushes its own work branch without a question", async () => {
+	const dir = temp("kit-");
+	cloneLater(dir, "r");
+	const r = join(dir, "r");
+	mkdirSync(join(r, "packages", "x"), { recursive: true });
+	const { emit, restore } = await parentAndChild(r, join(r, "packages", "x"));
+	try {
+		assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(join(r, "packages", "x"), { confirm: false })), undefined);
+	} finally {
+		restore();
+	}
+});
+
+/** A repository `r` in a temp folder with a remote, a committed `.pi/guard.json` and the work branch `feat/x`. */
+function repoWithGuard(guardJson: object, dir = temp("kit-")) {
+	cloneLater(dir, "r");
+	const r = join(dir, "r");
+	const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: r, encoding: "utf8" });
+	mkdirSync(join(r, ".pi"));
+	writeFileSync(join(r, ".pi", "guard.json"), JSON.stringify(guardJson));
+	run("add", "-A");
+	run("commit", "-q", "-m", "guard");
+	return { dir, r, run };
+}
+
+test("guard: a child in a worktree below the session keeps its own checkout's CI, protected paths and push", async () => {
+	const { r, run } = repoWithGuard({ protectedPaths: ["db/"] });
+	assert.equal(run("worktree", "add", "-q", join(r, ".worktrees", "x"), "-b", "feat/w").status, 0);
+	const wt = join(r, ".worktrees", "x");
+	const { emit, restore } = await parentAndChild(r, wt);
+	try {
+		assert.match((await emit("tool_call", { toolName: "write", input: { path: "db/m.sql" } }, ctx(wt)))?.reason ?? "", /protected by/, "the worktree's protected path");
+		const asked = ctx(wt, { confirm: false });
+		assert.equal((await emit("tool_call", { toolName: "write", input: { path: ".github/workflows/ci.yml" } }, asked))?.block, true);
+		assert.match(asked.asked[0] ?? "", /CI\/release pipeline/);
+		assert.equal(await emit("tool_call", { toolName: "bash", input: { command: "git push" } }, ctx(wt, { confirm: false })), undefined, "its own branch");
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a child in a repository below the folder pi started in is judged by that repository's own config", async () => {
+	// pi started two levels above the repository, so the record's folder holds it without being a workspace of it.
+	const above = temp("kit-");
+	mkdirSync(join(above, "code"));
+	const { r } = repoWithGuard({ block: ["make release"] }, join(above, "code"));
+	const { emit, restore } = await parentAndChild(above, r);
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "make release" } }, ctx(r)))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a trusted child of an untrusted session gets no loosening from the session's config", async () => {
+	const { r } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	mkdirSync(join(r, "packages", "x"), { recursive: true });
+	const child = join(r, "packages", "x");
+	const { emit, restore } = await parentAndChild(r, child, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(child, { trusted: true, hasUI: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a trusted child in its untrusted parent's own folder gets no loosening from that folder's config", async () => {
+	const { r } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	const { emit, restore } = await parentAndChild(r, r, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(r, { trusted: true, hasUI: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a trusted child outside its untrusted parent's folder gets no loosening from its own checkout's config", async () => {
+	const { dir, r, run } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	const sibling = join(dir, "r-feat");
+	assert.equal(run("worktree", "add", "-q", sibling, "-b", "feat/s").status, 0);
+	const { emit, restore } = await parentAndChild(r, sibling, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(sibling, { trusted: true, hasUI: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
+test("guard: a read through a symlink to a secret file is blocked", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir } = workspaceProject();
+	writeFileSync(join(dir, "a", ".env"), "TOKEN=x\n");
+	symlinkSync(join(dir, "a", ".env"), join(dir, "a", "dev.cfg"));
+	assert.equal((await emit("tool_call", { toolName: "read", input: { path: "a/dev.cfg" } }, ctx(dir)))?.block, true);
 });
 
 test("guard honours .pi/guard.json, but only trusted projects may relax confirmation", async () => {
@@ -591,6 +933,90 @@ test("verify: a folder that becomes a git repository mid-session is fingerprinte
 	await bashCall(emit, c, "node gen.js", false, () => writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n"));
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 1, "only the fingerprint can see a script's write");
+});
+
+test("verify: in a workspace, the reminder names a repository's approved task file", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-03)\n");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.ok(sent.some((s) => /Approval gate: .*a\/docs\/tasks\/t\.md/.test(String(s.message.content))), JSON.stringify(sent.map((s) => s.message.content)));
+});
+
+test("verify: the notice of skipped repositories comes again in a new session", async () => {
+	const { dir } = workspaceProject();
+	const { pi, emit } = fakePi();
+	verify(pi);
+	const slow = slowGit(realpathSync(join(dir, "a")), "status");
+	try {
+		const c = ctx(dir);
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("agent_end", { messages: [] }, c);
+		await emit("agent_end", { messages: [] }, c);
+		const skipped = () => c.notes.filter((n) => n.startsWith("Task-file reminders skipped")).length;
+		assert.equal(skipped(), 1, "once per set of skipped repositories");
+		await emit("session_start", { reason: "new" }, c);
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(skipped(), 2, "again in the new session");
+	} finally {
+		slow.restore();
+	}
+});
+
+test("verify: in a workspace, the reminders name a repository's finished task file and use each repository's git", async () => {
+	const { dir, git } = workspaceProject();
+	mkdirSync(join(dir, "b", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "b", "docs", "tasks", "done.md"), "# D\n\n## Plan\n\n- [x] one\n\n## Progress\n");
+	git("b", "add", "-A");
+	git("b", "commit", "-qm", "done");
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	const text = sent.map((m) => String(m.message.content)).join("\n");
+	assert.match(text, /Working-docs gate: .*b\/docs\/tasks\/done\.md/);
+	assert.match(text, /git -C a add docs\/tasks\/t\.md/);
+});
+
+test("verify: a repository config that appeared after the session started can't move its task-file folders", async () => {
+	const { dir } = workspaceProject();
+	const g = fakePi();
+	guard(g.pi);
+	const v = fakePi();
+	verify(v.pi);
+	const c = ctx(dir);
+	await g.emit("session_start", { reason: "startup" }, c);
+	await v.emit("session_start", { reason: "startup" }, c);
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ workDocs: ["plans"] }));
+	mkdirSync(join(dir, "a", "docs", "tasks"), { recursive: true });
+	writeFileSync(join(dir, "a", "docs", "tasks", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.match(v.sent.map((m) => String(m.message.content)).join("\n"), /a\/docs\/tasks\/t\.md/);
+});
+
+test("verify: a repository config the session started with decides its task-file folders", async () => {
+	const { dir } = workspaceProject();
+	mkdirSync(join(dir, "a", ".pi"), { recursive: true });
+	writeFileSync(join(dir, "a", ".pi", "guard.json"), JSON.stringify({ workDocs: ["plans"] }));
+	mkdirSync(join(dir, "a", "plans"), { recursive: true });
+	writeFileSync(join(dir, "a", "plans", "t.md"), "# T\n\nStatus: design approved (2026-11-04)\n");
+	const g = fakePi();
+	guard(g.pi);
+	const v = fakePi();
+	verify(v.pi);
+	const c = ctx(dir, { trusted: true });
+	await g.emit("session_start", { reason: "startup" }, c);
+	await v.emit("session_start", { reason: "startup" }, c);
+	await v.emit("agent_end", { messages: [] }, c);
+	assert.match(v.sent.map((m) => String(m.message.content)).join("\n"), /a\/plans\/t\.md/);
 });
 
 test("verify also reminds to commit an approved task file", async () => {

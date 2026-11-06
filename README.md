@@ -43,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.34.1
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.35.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.34.1
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.35.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -94,6 +94,8 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 
 `.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
 
+**In a folder of repositories** (a workspace, see the verify gate), the guard judges each repository's paths and commands as a session inside it would, with that repository's own `.pi/guard.json`, and the folder's `.pi/guard.json` on top; the stricter decision wins. Restrictions add up: a repository's `block`, `confirm` and `protectedPaths` (measured from the repository) apply to its files and to a command that runs in it (`cd a && …`, `git -C a …`), and every repository's apply to a command whose folder the guard can't follow. Loosening counts only where it is written, and only in a trusted project: a repository's `allow` only for a command that runs in that repository alone (and then it skips the folder's `confirm` rules too, as one config's `allow` does), its `workDocs` for its own task files, its `"reviewGate": false` for its own landings; the folder's apply everywhere. A PR, merge or push whose folder the guard can't follow is blocked. A plain push of a repository's own work branch (`git -C a push`) passes as it does inside it. The task-file reminders in the follow-up name each repository's task files (`a/docs/tasks/…`), skipping repositories the session found slow or that the 3-second budget didn't reach, named once in a notice. A command, or a part of one, that doesn't run inside one repository (from the workspace folder itself, or where the guard can't follow it: any PowerShell command, a shell string, `env -C`, git's `--git-dir` or an exported `GIT_DIR`) gets every repository's restrictions, and a repository the command names as a path (`--prefix a`, `../a/x`, through a symlink or in another case) adds its restrictions; a path with `$` or a glob next to `..` counts as one the guard can't follow. A path is judged from the repository it is written in and the one it really lands in (symlinks, a case-swapped name). A first-level folder's guard config asks when a Write or a shell command names it, also through `cd` or before the folder has a `.git`; copying, moving or deleting the folder doesn't ask, but what a repository restricted when the session started still holds, also without its `.git` or under another name. Only the repositories present when the session started (the same `.git`, not a clone put in their place) loosen anything or push silently, and only with their configs as they were; one cloned or changed later only restricts. The guard records them the first time a pi process starts a session in this folder and leaves the record in the environment: a later session or a subagent started in this folder or inside it takes that record and is judged as that session (a subagent in a repository's subfolder too), so a repository cloned since pushes only with a question; one working in another git checkout below it (a `.worktrees/<branch>`, a repository below the folder pi started in) is also judged as a session started there, and the stricter decision wins. A subagent, wherever it starts, gets loosening only when its parent session was trusted too. A session in an unrelated folder takes a record of its own, which keeps its parent's trust, and coming back after it records the folder anew; a later session of the same pi process counts as such a subagent, so it loosens only while its first session was trusted. A reason names the config its rule came from.
+
 **Pushing the work branch.** A plain `git push` of the agent's own work branch passes without a question when all of these hold:
 
 - the command is exactly `git [-C path] push [-u|--set-upstream|-q|-v|--progress|--no-progress|-n|--dry-run|--porcelain] [remote [refspec]]`, with no shell operators, quotes or variables (a trailing `2>&1` is allowed);
@@ -101,7 +103,7 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 - the remote is configured and its effective push URL equals its configured URL;
 - the push config adds nothing (no mirror, push refspecs, `followTags`, `pushOption`, `recurseSubmodules`, `receivepack` or unusual `push.default`) and no `GIT_*` redirect variable is set;
 - the refspec, if any, names only the current branch;
-- the repository is the session's project (same git common directory; worktrees count). A push from any other repository, such as one the agent cloned, asks first.
+- the repository is the session's project (same git common directory; worktrees count), or in a folder of repositories one that was there when the session started. A push from any other repository, such as one the agent cloned, asks first.
 
 Everything else that pushes still asks first. `--force`, `-f`, `+ref` and `--mirror` stay blocked, and `--force-with-lease` asks first. The review gate is unchanged: `gh pr create` / `glab mr create` and pushes to a PR branch the agent opened need a `Yes` covering HEAD; PR/MR merges (`gh pr merge`, `glab mr merge`) always ask first, and so do pushes to the base.
 

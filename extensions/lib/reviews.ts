@@ -12,10 +12,10 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, posix, resolve } from "node:path";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
-import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
-import { projectRepos } from "./repos.ts";
+import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { canonical, projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
@@ -52,6 +52,14 @@ export interface ReviewGateOptions {
 	waiver: string;
 	/** The project's verification commands: they may run before a landing in the same command. */
 	verify: string[];
+	/** A checkout whose own config waives the gate (a workspace repository's `"reviewGate": false`): its landings pass. */
+	waived?: (checkout: string) => boolean;
+	/** In a workspace a landing must be placed (see `segmentFolders`) before a waiver counts. */
+	workspace?: boolean;
+	/** The command is PowerShell, which the guard can't place. */
+	powershell?: boolean;
+	/** In a workspace: the repository folder holding a folder, so a checkout nested in another repository is told apart. */
+	repoOf?: (dir: string) => string | undefined;
 }
 
 const RANK: Record<Verdict, number> = { Yes: 0, "With fixes": 1, Inconclusive: 2, No: 3 };
@@ -488,8 +496,10 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 /** The review gate over the landings the command's segments show. */
 function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const shell = new Subshells(cwd, command);
+	// The same segments as below, each with the folder it runs in as far as the guard can place it.
+	const placed = options.workspace ? segmentFolders(command, cwd, options.powershell) : [];
 	let unsafeBefore = false;
-	for (const { raw, alone, before } of segmentsOf(tokenize(stripRedirects(command)))) {
+	for (const [index, { raw, alone, before }] of segmentsOf(tokenize(stripRedirects(command))).entries()) {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		const l = landing(tokens);
@@ -507,13 +517,26 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 			continue;
 		}
 		const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
-		if (where === undefined || (l.kind === "pr" && l.repo)) {
+		if (where === undefined || (l.kind === "pr" && l.repo) || (options.workspace && placed[index]?.dir === undefined)) {
 			return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
+		}
+		if (options.workspace) {
+			// A PR naming its repository another way, a folder outside git, or a checkout nested in another repository's
+			// folder: the landing's repository isn't the one this folder belongs to.
+			const named = l.kind === "pr" && (/\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined || /^https?:\/\//.test(l.target ?? ""));
+			const top = git(where, ["rev-parse", "--show-toplevel"]);
+			const repo = options.repoOf?.(where);
+			// A checkout sharing the repository's git common dir is the repository (its own worktree); any other is not.
+			const common = (dir: string) => ((out) => (out === undefined ? undefined : safeRealpath(out)))(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+			if (named || top === undefined || repo === undefined || common(top) !== common(repo)) {
+				return decision(options.missing, "can't tell which repository this command lands in (a repository named by GH_REPO or a URL, a folder outside git, or a checkout nested in another repository). Run it from the repository's folder without naming the repository.", options);
+			}
 		}
 		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
 			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
 			continue;
 		}
+		if (options.waived?.(where)) continue;
 		const base = baseBranch(where);
 		if (!base) continue;
 		const land = l.kind === "push" ? withDestination(l, where) : l;
@@ -645,8 +668,10 @@ function inTemp(path: string): boolean {
 /**
  * Commands that write the review gate's own state: a verdict record (block) or the guard config (ask).
  * The path rules cover Edit/Write; this covers the shell, following `cd`. An interpreter one-liner can still hide a path.
+ * `children`: outside git, a first-level folder's `guardConfig` (a workspace repository's, or one made before its
+ * `git init`) is a gate file too.
  */
-export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string): GuardDecision | undefined {
+export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false, stateDir?: string): GuardDecision | undefined {
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
@@ -655,6 +680,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
 	// In a command the guard can't read (a comment or heredoc may swallow the next line), no step is read-only.
 	const readable = plainShell(command);
+	const state = stateDir === undefined ? [] : [stateDir, canonical(stateDir)].map((p) => p.replaceAll("\\", "/"));
 	let ask: GuardDecision | undefined;
 	for (const { full, words, redirected } of moveSegments(command)) {
 		const tokens = full.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -675,7 +701,18 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig))) {
+		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
+		// `$CLAUDE_PLUGIN_DATA` word; a parent folder only when the command removes or moves it.
+		if (state.length > 0) {
+			const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
+			const shallow = new Set(["/", homedir(), tmpdir(), canonical(tmpdir())].map((p) => p.replaceAll("\\", "/")));
+			const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+			const removes = ["rm", "rmdir", "mv", "unlink"].includes(head.slice(head.lastIndexOf("/") + 1));
+			if (real.some((p) => state.some((s) => p === s || p.startsWith(`${s}/`) || (removes && s.startsWith(`${p}/`) && !shallow.has(p))))) {
+				return { action: "block", reason: "The kit's session state is written only by its hooks." };
+			}
+		}
+		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
 		if (unknown) {
@@ -683,6 +720,24 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		}
 	}
 	return ask;
+}
+
+/** A word with `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` in front, as the shell would expand it. */
+function expandHome(word: string): string {
+	return word
+		.replace(/^~(?=\/|$)/, homedir())
+		.replace(/^\$\{?HOME\}?(?=\/|$)/, homedir())
+		.replace(/^\$\{?TMPDIR\}?(?=\/|$)/, tmpdir())
+		// The shell's TMPDIR may end in `/`, so `${TMPDIR}eng-kit` is a path in it.
+		.replace(/^\$\{TMPDIR\}(?=[^/])/, `${tmpdir()}/`)
+		.replace(/^\$\{?CLAUDE_PLUGIN_DATA\}?(?=\/|$)/, process.env.CLAUDE_PLUGIN_DATA ?? "\0");
+}
+
+/** Whether `path` is `<projectDir>/<one folder>/<guardConfig>`. */
+function childConfig(projectDir: string, path: string, guardConfig: string): boolean {
+	const rel = relative(projectDir, path).replaceAll("\\", "/");
+	const slash = rel.indexOf("/");
+	return slash > 0 && !rel.startsWith("../") && rel.slice(slash + 1) === guardConfig;
 }
 
 function isSafe(tokens: string[], verify: string[]): boolean {

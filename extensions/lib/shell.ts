@@ -5,7 +5,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { tokenize } from "./patterns.ts";
+import { tokenize, unwrapToken } from "./patterns.ts";
 
 /**
  * Writing redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `>& file`) and `tee` make any command a writer;
@@ -497,4 +497,48 @@ export function quotedSubstitutions(command: string): string[] {
 		}
 	}
 	return found;
+}
+
+/**
+ * Each segment of `command`, started in `cwd`, with the folder it runs in: moves followed as the review gate follows
+ * them (Subshells), a git call's `-C` included; undefined where the guard can't tell (any PowerShell command, a shell
+ * string, `env -C`, git's `--git-dir`/`--work-tree` or `GIT_DIR`/`GIT_WORK_TREE`, a `-C` after a git word that isn't
+ * the command). `move`: the segment only moves.
+ */
+export function segmentFolders(command: string, cwd: string, powershell = false): Array<{ raw: string[]; dir: string | undefined; move: boolean }> {
+	const shell = new Subshells(cwd, command);
+	// `export GIT_DIR=…` (or a bare assignment) moves every git call after it.
+	let exported = false;
+	const open = blankQuoted(command);
+	return segmentsOf(tokenize(stripRedirects(command))).map(({ raw, alone, before }) => {
+		shell.enter(raw, before);
+		let dir = powershell || exported ? undefined : shell.dir;
+		const words = raw.map((t) => unwrapToken(t.replace(/^\(+|\)+$/g, ""))).filter(Boolean);
+		// A quoted word keeps its glob characters literal: the tokens lose the quotes, the blanked text still shows them.
+		const literal = words.map((w) => !open.includes(w));
+		if (hidesFolder(words, literal)) dir = undefined;
+		const head = words[commandIndex(words)];
+		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
+		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
+		const at = commandIndex(words);
+		for (let i = at + 1; dir !== undefined && words[at] === "git" && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
+			if (words[i] === "-C") dir = follow(dir, words[i + 1]);
+		}
+		return { raw, dir, move: shell.move(raw, alone, before) !== undefined };
+	});
+}
+
+/** Words that run the segment, or a git call in it, somewhere the folder doesn't show. */
+function hidesFolder(words: string[], literal: boolean[] = []): boolean {
+	const command = words[commandIndex(words)];
+	return words.some((w, i) => {
+		if (/^GIT_(DIR|WORK_TREE)=/.test(w) || w === "eval") return true;
+		// `../$R`, `../a*`: a folder next to `..` that only the shell decides.
+		if (!literal[i] && w.includes("..") && /[$`*?[{]/.test(w)) return true;
+		if (/^(ba|z|da|k)?sh$/.test(w.slice(w.lastIndexOf("/") + 1)) && words.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a))) return true;
+		if (w === "env" && words.slice(i + 1).some((a) => a === "-C" || /^--chdir(=|$)/.test(a) || /^-[a-zA-Z]*C/.test(a))) return true;
+		if (/^--(git-dir|work-tree)(=|$)/.test(w) && words.slice(0, i).includes("git")) return true;
+		// `-C` after a git word that isn't the command (`npm run x git -C a`): where it runs isn't where git would.
+		return w === "git" && w !== command && words.slice(i + 1).some((a) => a === "-C" || a.startsWith("--git-dir") || a.startsWith("--work-tree"));
+	});
 }

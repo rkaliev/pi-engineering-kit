@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { WORK_DOC_DIRS } from "./workdocs.ts";
+import { projectRepos } from "./repos.ts";
+import { finishedWorkDocs, onBaseBranch, WORK_DOC_DIRS } from "./workdocs.ts";
 
 /** "Agreed with the user", so the file must be in git. Drafts and tasks in progress are not; implemented ones are deleted. */
 const SETTLED = /^\s*(?:\*\*)?Status:(?:\*\*)?\s*(?:design|plan) approved\b/im;
@@ -10,12 +11,18 @@ const SETTLED = /^\s*(?:\*\*)?Status:(?:\*\*)?\s*(?:design|plan) approved\b/im;
  * Task files whose status says the design or plan was approved but whose current content is not
  * committed: new, modified or staged. Returns project-relative paths; empty outside a git repo.
  */
-export function uncommittedApproved(projectDir: string, dirs = WORK_DOC_DIRS): string[] {
+export function uncommittedApproved(projectDir: string, dirs = WORK_DOC_DIRS, timeout = 5000): string[] {
+	return approvedIn(projectDir, dirs, timeout) ?? [];
+}
+
+/** As uncommittedApproved, but undefined when git didn't answer (killed at `timeout`, or failed to start). */
+function approvedIn(projectDir: string, dirs: string[], timeout: number): string[] | undefined {
 	const r = spawnSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ...dirs], {
 		cwd: projectDir,
 		encoding: "utf8",
-		timeout: 5000,
+		timeout,
 	});
+	if (r.error || r.signal) return undefined;
 	if (r.status !== 0 || !r.stdout) return [];
 	const files: string[] = [];
 	for (const line of r.stdout.split("\n")) {
@@ -35,7 +42,73 @@ export function uncommittedApproved(projectDir: string, dirs = WORK_DOC_DIRS): s
 }
 
 /** `onBase` names the base branch when it is checked out: working documents are committed only on a work branch. */
-export function approvalReminder(files: string[], onBase?: string): string {
-	const where = onBase ? ` You are on ${onBase}, where task files never go: create a work branch first (\`git switch -c <type>/<topic>\`).` : "";
-	return `Approval gate: approved task files are not committed: ${files.join(", ")}. An approval that isn't in git can be lost or silently edited.${where} Commit them now as their own commit (\`git add ${files.join(" ")} && git commit -m "docs: approve …"\`), or tell me why not.`;
+export function approvalReminder(files: string[], onBase?: string, workspace = false): string {
+	const branch = workspace ? "git -C <repo> switch -c <type>/<topic>" : "git switch -c <type>/<topic>";
+	const where = onBase ? ` You are on ${onBase}, where task files never go: create a work branch first (\`${branch}\`).` : "";
+	// In a workspace each path starts with its repository's folder, and each repository commits its own.
+	const groups = new Map<string, string[]>();
+	for (const f of files) {
+		const [repo, path] = workspace ? [f.slice(0, f.indexOf("/")), f.slice(f.indexOf("/") + 1)] : ["", f];
+		groups.set(repo, [...(groups.get(repo) ?? []), path]);
+	}
+	const commits = [...groups].map(([repo, paths]) => {
+		const git = repo ? `git -C ${repo}` : "git";
+		return `\`${git} add ${paths.join(" ")} && ${git} commit -m "docs: approve …"\``;
+	});
+	return `Approval gate: approved task files are not committed: ${files.join(", ")}. An approval that isn't in git can be lost or silently edited.${where} Commit them now as their own commit (${commits.join(", ")}), or tell me why not.`;
+}
+
+/** Task files due a reminder at Stop, as `approvalReminder` and `workDocsReminder` take them. */
+export interface TaskFileReminders {
+	approved: string[];
+	finished: string[];
+	onBase: string | undefined;
+	/** The paths start with their workspace repository's folder. */
+	workspace: boolean;
+	/** Workspace repositories not reached before the deadline, or known to be slow. */
+	skipped: string[];
+}
+
+/**
+ * The approved-but-uncommitted and the finished task files of the project or, in a workspace, of the session folder
+ * and each repository (paths prefixed with its name), within `deadline`. `want` skips what was already reminded;
+ * `slow` names repositories the session already found slow, which are skipped without a git call.
+ */
+export function taskFileReminders(projectDir: string, dirsFor: (root: string) => string[], deadline: number, want = { approved: true, finished: true }, slow: string[] = []): TaskFileReminders {
+	const dirs = dirsFor(projectDir);
+	const { kind, repos } = projectRepos(projectDir);
+	if (kind !== "workspace") {
+		const approved = want.approved ? uncommittedApproved(projectDir, dirs) : [];
+		return { approved, finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: approved.length > 0 ? onBaseBranch(projectDir) : undefined, workspace: false, skipped: [] };
+	}
+	// The session folder holds no git: only its finished task files count.
+	const due: TaskFileReminders = { approved: [], finished: want.finished ? finishedWorkDocs(projectDir, dirs) : [], onBase: undefined, workspace: true, skipped: [] };
+	const bases: string[] = [];
+	for (const name of repos) {
+		const left = deadline - Date.now();
+		if (left <= 0 || slow.includes(name)) {
+			due.skipped.push(name);
+			continue;
+		}
+		const dir = join(projectDir, name);
+		const own = dirsFor(dir);
+		if (want.finished) due.finished.push(...finishedWorkDocs(dir, own).map((f) => `${name}/${f}`));
+		if (!want.approved) continue;
+		const files = approvedIn(dir, own, Math.min(5000, left));
+		// Git that didn't answer in the time left: named, never taken for "nothing approved".
+		if (files === undefined) {
+			due.skipped.push(name);
+			continue;
+		}
+		due.approved.push(...files.map((f) => `${name}/${f}`));
+		const base = files.length > 0 ? onBaseBranch(dir, deadline) : undefined;
+		if (base) bases.push(`${base} in ${name}`);
+	}
+	due.onBase = bases.length > 0 ? bases.join(", ") : undefined;
+	return due;
+}
+
+/** A warning naming the repositories the reminders skipped, or undefined. */
+export function taskFileWarning(skipped: string[]): string | undefined {
+	return skipped.length > 0 ? `Task-file reminders skipped (no time left, or slow in this session): ${skipped.join(", ")}` : undefined;
 }
