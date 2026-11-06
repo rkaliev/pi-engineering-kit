@@ -476,6 +476,18 @@ test("guard: a trusted child in its untrusted parent's own folder gets no loosen
 	}
 });
 
+test("guard: a trusted child outside its untrusted parent's folder gets no loosening from its own checkout's config", async () => {
+	const { dir, r, run } = repoWithGuard({ allow: ["npm run deploy"], reviewGate: false });
+	const sibling = join(dir, "r-feat");
+	assert.equal(run("worktree", "add", "-q", sibling, "-b", "feat/s").status, 0);
+	const { emit, restore } = await parentAndChild(r, sibling, () => {}, { parent: false, child: true });
+	try {
+		assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "npm run deploy" } }, ctx(sibling, { trusted: true, hasUI: false })))?.block, true);
+	} finally {
+		restore();
+	}
+});
+
 test("guard: a read through a symlink to a secret file is blocked", async () => {
 	const { pi, emit } = fakePi();
 	guard(pi);

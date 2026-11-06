@@ -44,14 +44,15 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 	// The workspace repositories that may loosen the guard: those there when this process, or the pi process that
 	// started it (a subagent, in this folder or inside it), first started a session (lib/scope.ts).
 	let record: BaselineRecord | undefined;
-	// Whether this process took the record itself; an inherited one (a subagent's) loosens only with its parent's trust.
-	let own = false;
+	// Any record left in the environment counts as a parent's: a subagent, wherever it starts, loosens only with its
+	// parent's trust. A later session of this process reads its own record that way too, which fails closed.
+	let parentTrusted = true;
 	const take = (ctx: ExtensionContext): BaselineRecord => {
 		if (!record) {
 			const parent = inherited();
 			const inside = parent !== undefined && (parent.cwd === ctx.cwd || within(parent.cwd, ctx.cwd));
-			const trusted = ctx.isProjectTrusted();
-			own = !inside;
+			parentTrusted = parent?.trusted ?? true;
+			const trusted = ctx.isProjectTrusted() && parentTrusted;
 			record = inside ? parent : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)) };
 			// A record of another folder stays for the processes this one starts: a grandchild back in the workspace keeps it.
 			if (!inside) process.env[BASELINE_ENV] = JSON.stringify(record);
@@ -97,7 +98,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		if (toolName !== "bash" && toolName !== "powershell" && toolName !== "read" && toolName !== "write" && toolName !== "edit") return undefined;
 		const subject = String(toolName === "bash" || toolName === "powershell" ? (input.command ?? "") : (input.path ?? ""));
 		const rec = record ?? take(ctx);
-		const trusted = ctx.isProjectTrusted() && (own || rec.trusted);
+		const trusted = ctx.isProjectTrusted() && parentTrusted;
 		const decision = judge(toolName, subject, ctx, rec.cwd, rec.baseline, trusted);
 		const top = rec.cwd === ctx.cwd ? undefined : toplevel(ctx.cwd);
 		if (top === undefined || canonical(top) === canonical(rec.cwd)) return { decision, subject };
