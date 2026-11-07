@@ -31,6 +31,8 @@ export interface GuardConfig {
 	sources?: Record<string, string>;
 	/** In a workspace: the repositories whose own work branch a plain push sends without a question (lib/scope.ts). */
 	pushOwners?: string[];
+	/** The folder `core.hooksPath` names, relative to this config's root (`""` for the root), as the session read it at its start. Never read from the file. */
+	hooksPath?: string;
 }
 
 const ALLOW: GuardDecision = { action: "allow" };
@@ -129,6 +131,9 @@ function sourceOf(config: GuardConfig, rule: string): string {
 /** CI and release pipelines run with repository credentials, so edits to them need a human look. */
 const CI_PIPELINE = /^(\.github\/(workflows|actions)\/|\.gitlab\/ci\/|\.circleci\/|\.buildkite\/|(\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|Jenkinsfile)$)/i;
 
+/** Git hook managers' files outside `.git`: husky, plain `.githooks`, lefthook and pre-commit. */
+const GIT_HOOKS = /^(\.husky\/|\.githooks\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$)/i;
+
 /** Decide what to do with a read/write/edit of a file path. */
 export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: string, config: GuardConfig): GuardDecision {
 	const absolute = resolve(cwd, path);
@@ -159,6 +164,10 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	}
 	const hit = (config.protectedPaths ?? []).find((prefix) => inside && lower.startsWith(prefix.replace(/^\.\//, "").toLowerCase()));
 	if (hit) return { action: "block", reason: `${path} is protected by ${config.label ?? ".pi/guard.json"} (${hit}). Ask the user before changing it.` };
+	const hooks = config.hooksPath?.toLowerCase();
+	if (inside && (GIT_HOOKS.test(rel) || (hooks !== undefined && (hooks === "" || lower === hooks || lower.startsWith(`${hooks}/`))))) {
+		return { action: "confirm", reason: `${path} is a git hook; its code runs on every commit or push. Show the user the change first.` };
+	}
 	if (inside && CI_PIPELINE.test(rel)) {
 		return { action: "confirm", reason: `${path} is a CI/release pipeline; it runs with repository credentials. Show the user the design before editing it.` };
 	}

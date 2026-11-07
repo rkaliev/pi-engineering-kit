@@ -34,6 +34,13 @@ test("scopedPath: a CI pipeline or the guard config of a workspace repository as
 	assert.equal(scopedPath("edit", join(ws, "a", ".pi", "guard.json"), scope).action, "confirm");
 });
 
+test("scopedPath: a repository's hooks folder asks under it, measured from it", () => {
+	const { ws, scope } = workspace({ a: { hooksPath: "hooks" } });
+	assert.equal(scopedPath("write", join(ws, "a", "hooks", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(ws, "hooks", "pre-commit"), scope).action, "allow");
+	assert.equal(scopedPath("write", join(ws, "b", "hooks", "pre-commit"), scope).action, "allow");
+});
+
 test("scopedPath: a repository's protected paths block under it, measured from it", () => {
 	const { ws, scope } = workspace({ a: { protectedPaths: ["secret/"] } });
 	assert.equal(scopedPath("write", join(ws, "a", "secret", "x"), scope).action, "block");

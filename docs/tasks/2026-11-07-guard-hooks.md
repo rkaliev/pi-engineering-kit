@@ -124,13 +124,13 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 **Files:** Modify `lib/patterns.ts` (both) · Test `tests/guard.test.ts`, `tests/scope.test.ts` (both)
 **Interfaces:** Produces `GuardConfig.hooksPath?: string` (a folder relative to the config's root, set by the caller, never read from `guard.json`) and `GIT_HOOKS: RegExp`
 
-- [ ] Write failing test `paths: git hook files ask`: `write` and `edit` of `.husky/pre-commit`, `.husky/_/h`, `.githooks/pre-push`, `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, `.lefthook.yaml`, `lefthook-local.yml`, `lefthook-local.yaml`, `.pre-commit-config.yaml`, `./.husky/pre-commit` are `confirm` with a reason matching `/git hook/`; `docs/husky.md`, `src/lefthook.yml.bak`, `husky/pre-commit` are `allow`; a heredoc `cat > .husky/pre-commit <<'EOF'` through `checkCommand` is `confirm`
-- [ ] Write failing test `paths: a configured hooks folder asks`: with `{ hooksPath: "tools/hooks" }`, `tools/hooks/pre-commit` and `TOOLS/Hooks/x` ask, `tools/hooksx/a` and `tools/a` are allowed; with `{ hooksPath: "" }` (the root) `src/a.ts` asks
-- [ ] Write failing test in `scope.test.ts` `scopedPath: a repository's hooks folder asks under it`: a workspace repo `a` with config `{ hooksPath: "hooks" }` makes `a/hooks/pre-commit` ask and leaves `hooks/pre-commit` at the workspace root allowed
-- [ ] Run both suites → expect FAIL: `expected 'confirm', actual 'allow'`
-- [ ] Implement `GIT_HOOKS = /^(\.husky\/|\.githooks\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$)/i` beside `CI_PIPELINE` with reason "`<path>` is a git hook; its code runs on every commit or push. Show the user the change first."; the `hooksPath` check (`rel` lowercased equals the folder or starts with `folder + "/"`; `""` matches every `rel`) gives the same reason
-- [ ] Run both suites → expect PASS
-- [ ] Commit `feat(guard): editing a git hook file asks`
+- [x] Write failing test `paths: git hook files ask`: `write` and `edit` of `.husky/pre-commit`, `.husky/_/h`, `.githooks/pre-push`, `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, `.lefthook.yaml`, `lefthook-local.yml`, `lefthook-local.yaml`, `.pre-commit-config.yaml`, `./.husky/pre-commit` are `confirm` with a reason matching `/git hook/`; `docs/husky.md`, `src/lefthook.yml.bak`, `husky/pre-commit` are `allow`; a heredoc `cat > .husky/pre-commit <<'EOF'` through `checkCommand` is `confirm`
+- [x] Write failing test `paths: a configured hooks folder asks`: with `{ hooksPath: "tools/hooks" }`, `tools/hooks/pre-commit` and `TOOLS/Hooks/x` ask, `tools/hooksx/a` and `tools/a` are allowed; with `{ hooksPath: "" }` (the root) `src/a.ts` asks
+- [x] Write failing test in `scope.test.ts` `scopedPath: a repository's hooks folder asks under it`: a workspace repo `a` with config `{ hooksPath: "hooks" }` makes `a/hooks/pre-commit` ask and leaves `hooks/pre-commit` at the workspace root allowed
+- [x] Run both suites → expect FAIL: `expected 'confirm', actual 'allow'`
+- [x] Implement `GIT_HOOKS = /^(\.husky\/|\.githooks\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$)/i` beside `CI_PIPELINE` with reason "`<path>` is a git hook; its code runs on every commit or push. Show the user the change first."; the `hooksPath` check (`rel` lowercased equals the folder or starts with `folder + "/"`; `""` matches every `rel`) gives the same reason
+- [x] Run both suites → expect PASS
+- [x] Commit `feat(guard): editing a git hook file asks`
 
 ### Task 3: hooks bypass on the command line blocks; config changes ask (criteria 4, 5)
 
@@ -205,3 +205,4 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Drift check: no changes to lib/, extensions/ or tests/ since the plan's Base.
 - Ruling: Task 1 also lowercases the workspace rule in `scope.ts` `scopedPath` (a first-level folder's guard config outside git) — criterion 1 says every path rule, and that one is a path rule beside `checkPath` — cost if wrong: one extra lowercase compare. Test: the existing first-level-folder test in `scope.test.ts` gained an `x/.CLAUDE/guard.json` (pi: `.PI`) assertion, seen failing first.
 - Task 1: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: guard `expected 'block', actual 'allow'` for `.GIT/config`, scope `expected 'confirm', actual 'allow'`)
+- Task 2: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: 3 tests `expected 'confirm', actual 'allow'`)

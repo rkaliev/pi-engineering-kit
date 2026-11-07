@@ -164,6 +164,34 @@ test("paths: every path rule ignores case, as macOS and Windows file systems do"
 	assert.equal(checkPath("write", "INFRA/main.tf", cwd, { protectedPaths: ["infra/"] }).action, "block");
 });
 
+test("paths: git hook files ask: their code runs on every commit or push", () => {
+	for (const path of [".husky/pre-commit", ".husky/_/h", ".githooks/pre-push", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", "lefthook-local.yml", "lefthook-local.yaml", ".pre-commit-config.yaml", "./.husky/pre-commit", ".Husky/pre-commit"]) {
+		for (const tool of ["write", "edit"] as const) {
+			const decision = checkPath(tool, path, cwd, none);
+			assert.equal(decision.action, "confirm", `${tool} ${path}`);
+			assert.match(String(decision.reason), /git hook/, path);
+		}
+	}
+	for (const path of ["docs/husky.md", "src/lefthook.yml.bak", "husky/pre-commit"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "allow", path);
+	}
+	assert.equal(action("cat > .husky/pre-commit <<'EOF'\nnpm test\nEOF"), "confirm");
+});
+
+test("paths: the hooks folder the caller configures asks, in any case; a root hooks folder makes every write ask", () => {
+	const hooks: GuardConfig = { hooksPath: "tools/hooks" };
+	for (const path of ["tools/hooks/pre-commit", "TOOLS/Hooks/x", "tools/hooks/lib/a.sh"]) {
+		const decision = checkPath("write", path, cwd, hooks);
+		assert.equal(decision.action, "confirm", path);
+		assert.match(String(decision.reason), /git hook/, path);
+	}
+	for (const path of ["tools/hooksx/a", "tools/a", "hooks/pre-commit"]) {
+		assert.equal(checkPath("write", path, cwd, hooks).action, "allow", path);
+	}
+	assert.equal(checkPath("write", "src/a.ts", cwd, { hooksPath: "" }).action, "confirm");
+	assert.equal(checkPath("read", "tools/hooks/pre-commit", cwd, hooks).action, "allow");
+});
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");
