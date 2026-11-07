@@ -160,12 +160,12 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 **Files:** Modify `src_claude/lib/state.ts`, `src_claude/lib/hooks.ts` · Test `src_claude/tests/hooks.test.ts`
 **Interfaces:** Consumes `hooksPaths` (Task 4) · Produces `SessionState.hooksPaths?: Record<string, string>`
 
-- [ ] Write failing test `guard: the hooks folder a repository configures asks, from the session start`: temp repo with `core.hooksPath tools/hooks`; `SessionStart` (source `startup`), then `PreToolUse` Write `tools/hooks/pre-commit` → `permissionDecision: "ask"`; a workspace with repo `a` configuring `h` → Write `a/h/x` asks; changing the config after SessionStart to `other` leaves `other/x` allowed (read once)
-- [ ] Write failing test `guard: a resumed session without hooks paths takes them`: state saved without `hooksPaths`, `SessionStart` source `resume` → Write `tools/hooks/x` asks
-- [ ] Run `npm test --prefix src_claude` → expect FAIL: `expected 'ask', actual undefined`
-- [ ] `state.ts`: parse `hooksPaths` (an object of strings, else `undefined`). `hooks.ts`: `sessionStart` stores `hooksPaths(env.projectDir)` when the state has none, for every source, via `bestEffort`; both `guardScope` calls pass `load` as `(root) => ({ ...<current load>(root), hooksPath: hooks[root] })` with `hooks = session.hooksPaths ?? {}`
-- [ ] Run → expect PASS
-- [ ] Commit `feat(guard): the session's hooks folders ask (Claude)`
+- [x] Write failing test `guard: the hooks folder a repository configures asks, from the session start`: temp repo with `core.hooksPath tools/hooks`; `SessionStart` (source `startup`), then `PreToolUse` Write `tools/hooks/pre-commit` → `permissionDecision: "ask"`; a workspace with repo `a` configuring `h` → Write `a/h/x` asks; changing the config after SessionStart to `other` leaves `other/x` allowed (read once)
+- [x] Write failing test `guard: a resumed session without hooks paths takes them`: state saved without `hooksPaths`, `SessionStart` source `resume` → Write `tools/hooks/x` asks
+- [x] Run `npm test --prefix src_claude` → expect FAIL: `expected 'ask', actual undefined`
+- [x] `state.ts`: parse `hooksPaths` (an object of strings, else `undefined`). `hooks.ts`: `sessionStart` stores `hooksPaths(env.projectDir)` when the state has none, for every source, via `bestEffort`; both `guardScope` calls pass `load` as `(root) => ({ ...<current load>(root), hooksPath: hooks[root] })` with `hooks = session.hooksPaths ?? {}`
+- [x] Run → expect PASS
+- [x] Commit `feat(guard): the session's hooks folders ask (Claude)`
 
 ### Task 6: pi wiring (criterion 3 hook-level)
 
@@ -210,3 +210,4 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Task 3: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: `expected 'block', actual 'confirm'`; the `git config` test is a characterization test, green on first run as the plan said)
 - Ruling: `hooksPaths` measures the hooks folder from the session folder, not the repository top (git resolves a relative `core.hooksPath` from the top; `checkPath` measures from the session folder), so a session started in a subfolder gets the folder relative to it, and one above the session folder counts as outside — the description's "relative to the root" read for a session in a subfolder — cost if wrong: a hooks folder above a subfolder session goes unprotected by path, still covered by the known list and the `git config` ask. Real paths are compared, via the nearest existing folder (a hooks folder not made yet).
 - Task 4: complete (scope.ts byte-identical; kit verify script → all 4 checks PASS; RED seen: `actual {}` for the configured repo; the failing-git test passed on the stub, was rewritten to reach the config read (a workspace, found without git), and then caught the mutation `throw value.error`)
+- Task 5: complete (eng-kit only; kit verify script → all 4 checks PASS; RED seen: 3 tests `actual undefined, expected 'ask'`). Only the PreToolUse `guardScope` call gets the hooks folders; the Stop one reads task-file folders only.
