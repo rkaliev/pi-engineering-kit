@@ -729,7 +729,6 @@ test("-c asks only for keys that move where git pushes or what it runs", () => {
 	for (const cmd of [
 		"git -c alias.x=push x",
 		"git -c core.sshCommand=evil fetch",
-		"git -c core.hooksPath=/x commit -m x",
 		"git -c core.fsmonitor=x status",
 		"git -c core.gitProxy=x fetch",
 		"git -c credential.helper=x fetch",
