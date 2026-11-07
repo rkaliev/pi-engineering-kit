@@ -210,6 +210,16 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
 	const gitAt = words.indexOf("git");
+	// `-c core.hooksPath=…` (or `--config-env`) on git's command line skips or replaces the hooks for that call.
+	const raw = tokens.map(unwrapToken);
+	const hooksOverride = raw.some((t, i) => {
+		if (gitAt === -1 || i <= raw.indexOf("git")) return false;
+		const setting = t === "-c" || t === "--config-env" ? raw[i + 1] : /^-c./.test(t) ? t.slice(2) : t.startsWith("--config-env=") ? t.slice("--config-env=".length) : undefined;
+		return setting !== undefined && setting.split("=")[0]!.toLowerCase() === "core.hookspath";
+	});
+	if (hooksOverride) {
+		return { action: "block", reason: "Overriding core.hooksPath on the command line skips or replaces the git hooks. Fix what the hook reports instead." };
+	}
 	if (gitAt !== -1) {
 		const rest = words.slice(gitAt + 1);
 		if (rest.includes("commit") && rest.some((t) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(t))) {

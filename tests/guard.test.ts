@@ -35,6 +35,34 @@ test("blocks hook bypass", () => {
 	}
 });
 
+test("git -c core.hooksPath blocks like --no-verify: it skips or replaces the hooks", () => {
+	for (const cmd of [
+		"git -c core.hooksPath=/dev/null commit -m x",
+		"git -ccore.hooksPath=x commit -m x",
+		"git -c CORE.HOOKSPATH=x push",
+		"git --config-env core.hooksPath=V commit -m x",
+		"git --config-env=core.hookspath=V commit -m x",
+		"(git -c core.hooksPath= commit -m x)",
+		"git -c user.name=x -c core.hooksPath=x commit -m x",
+	]) {
+		const decision = checkCommand(cmd, cwd, none);
+		assert.equal(decision.action, "block", cmd);
+		assert.match(String(decision.reason), /hooksPath/, cmd);
+	}
+	assert.equal(action("git -c user.name=x commit -m x"), "allow");
+	assert.equal(action("git commit -m 'set -c core.hooksPath=x later'"), "allow", "a message is not an option");
+});
+
+// Characterization: these already held before 0.37.0 (the push-setup rule asks for any config change it watches).
+test("git config changes to core.hooksPath ask; reading it is quiet", () => {
+	for (const cmd of ["git config core.hooksPath x", "git config --local core.hooksPath x", "git config --global core.hookspath x", "git config set core.hooksPath x", "git config --unset core.hooksPath", "git config --unset-all core.hooksPath", "git config --replace-all core.hooksPath x"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git config --get core.hooksPath", "git config core.hooksPath", "git config get core.hooksPath"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
 test("blocks the hook bypass abbreviated, as git accepts it; an ambiguous or longer option is not it", () => {
 	for (const cmd of ["git commit --no-veri -m x", "git commit --no-verif -m x", "git push --no-veri origin feat/x", "(git merge --no-veri x)"]) {
 		assert.equal(action(cmd), "block", cmd);

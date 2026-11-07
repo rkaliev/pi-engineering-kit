@@ -136,12 +136,12 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 
 **Files:** Modify `lib/patterns.ts` (both, `checkSegment`) · Test `tests/guard.test.ts` (both)
 
-- [ ] Write failing test `git -c core.hooksPath blocks like --no-verify`: `block` for `git -c core.hooksPath=/dev/null commit -m x`, `git -ccore.hooksPath=x commit`, `git -c CORE.HOOKSPATH=x push`, `git --config-env core.hooksPath=V commit`, `git --config-env=core.hookspath=V commit`, `(git -c core.hooksPath= commit)`; move `git -c core.hooksPath=/x commit -m x` out of the confirm list of `-c asks only for keys that move where git pushes or what it runs`
-- [ ] Write pinning test `git config changes to core.hooksPath ask; reading it is quiet`: `confirm` for `git config core.hooksPath x`, `git config --local core.hooksPath x`, `git config --global core.hookspath x`, `git config set core.hooksPath x`, `git config --unset core.hooksPath`, `git config --unset-all core.hooksPath`, `git config --replace-all core.hooksPath x`; `allow` for `git config --get core.hooksPath`, `git config core.hooksPath`, `git config get core.hooksPath` (already holds: run it once to see it pass and record that in Progress)
-- [ ] Run both suites → expect FAIL only in the first test: `expected 'block', actual 'confirm'`
-- [ ] In `checkSegment`, after the `--no-verify` check: a `git` word followed (before the subcommand) by `-c <k>=…`, `-c<k>=…`, `--config-env <k>=…` or `--config-env=<k>=…` where `k` lowercased is `core.hookspath` returns `block`, reason "Overriding core.hooksPath on the command line skips or replaces the git hooks. Fix what the hook reports instead."
-- [ ] Run both suites → expect PASS
-- [ ] Commit `fix(guard): git -c core.hooksPath blocks like --no-verify`
+- [x] Write failing test `git -c core.hooksPath blocks like --no-verify`: `block` for `git -c core.hooksPath=/dev/null commit -m x`, `git -ccore.hooksPath=x commit`, `git -c CORE.HOOKSPATH=x push`, `git --config-env core.hooksPath=V commit`, `git --config-env=core.hookspath=V commit`, `(git -c core.hooksPath= commit)`; move `git -c core.hooksPath=/x commit -m x` out of the confirm list of `-c asks only for keys that move where git pushes or what it runs`
+- [x] Write pinning test `git config changes to core.hooksPath ask; reading it is quiet`: `confirm` for `git config core.hooksPath x`, `git config --local core.hooksPath x`, `git config --global core.hookspath x`, `git config set core.hooksPath x`, `git config --unset core.hooksPath`, `git config --unset-all core.hooksPath`, `git config --replace-all core.hooksPath x`; `allow` for `git config --get core.hooksPath`, `git config core.hooksPath`, `git config get core.hooksPath` (already holds: run it once to see it pass and record that in Progress)
+- [x] Run both suites → expect FAIL only in the first test: `expected 'block', actual 'confirm'`
+- [x] In `checkSegment`, after the `--no-verify` check: a `git` word followed (before the subcommand) by `-c <k>=…`, `-c<k>=…`, `--config-env <k>=…` or `--config-env=<k>=…` where `k` lowercased is `core.hookspath` returns `block`, reason "Overriding core.hooksPath on the command line skips or replaces the git hooks. Fix what the hook reports instead."
+- [x] Run both suites → expect PASS
+- [x] Commit `fix(guard): git -c core.hooksPath blocks like --no-verify`
 
 ### Task 4: read core.hooksPath per repository (criterion 3, shared helper)
 
@@ -206,3 +206,5 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Ruling: Task 1 also lowercases the workspace rule in `scope.ts` `scopedPath` (a first-level folder's guard config outside git) — criterion 1 says every path rule, and that one is a path rule beside `checkPath` — cost if wrong: one extra lowercase compare. Test: the existing first-level-folder test in `scope.test.ts` gained an `x/.CLAUDE/guard.json` (pi: `.PI`) assertion, seen failing first.
 - Task 1: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: guard `expected 'block', actual 'allow'` for `.GIT/config`, scope `expected 'confirm', actual 'allow'`)
 - Task 2: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: 3 tests `expected 'confirm', actual 'allow'`)
+- Ruling: the ask-list entry `git -c core.hooksPath=/x commit -m x` was removed from the existing `-c asks only…` test in its own commit (`test(guard): drop git -c core.hooksPath…`), citing criterion 5 of the approved design — cost if wrong: one assertion to restore.
+- Task 3: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: `expected 'block', actual 'confirm'`; the `git config` test is a characterization test, green on first run as the plan said)
