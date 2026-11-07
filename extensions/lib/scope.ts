@@ -4,8 +4,9 @@
  * session folder's everywhere, a repository's only for a command that runs in that repository alone.
  */
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { checkPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
 import { placeIn, projectRepos, repoOf } from "./repos.ts";
 import { blankQuoted, segmentFolders } from "./shell.ts";
@@ -196,5 +197,38 @@ function configHash(file: string): string | null {
 		return createHash("sha1").update(readFileSync(file)).digest("hex");
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * The folder `core.hooksPath` names in the session folder's repository, or in each workspace repository, keyed by the
+ * root as `guardScope` names it and relative to it (`""` for the root itself). A folder outside that root, an unset key
+ * or a git that fails adds nothing: the known hook paths still ask (lib/patterns.ts).
+ */
+export function hooksPaths(projectDir: string): Record<string, string> {
+	const found = projectRepos(projectDir);
+	const roots = found.kind === "repo" ? [projectDir] : found.kind === "workspace" ? found.repos.map((name) => join(projectDir, name)) : [];
+	const paths: Record<string, string> = {};
+	for (const root of roots) {
+		const git = (...args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 1000 });
+		const value = git("config", "--type=path", "--get", "core.hooksPath");
+		const top = value.status === 0 && value.stdout.trim() !== "" ? git("rev-parse", "--show-toplevel") : undefined;
+		if (top?.status !== 0) continue;
+		// Git resolves a relative hooks path from the top of the working tree; the guard measures from the session folder.
+		const folder = realOrSelf(resolve(top.stdout.trim(), value.stdout.trim()));
+		const rel = relative(realOrSelf(root), folder).replaceAll("\\", "/");
+		if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) continue;
+		paths[root] = rel;
+	}
+	return paths;
+}
+
+/** The real path of `path`, or of its nearest existing folder with the rest appended (a hooks folder not made yet). */
+function realOrSelf(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		const parent = dirname(path);
+		return parent === path ? path : join(realOrSelf(parent), basename(path));
 	}
 }

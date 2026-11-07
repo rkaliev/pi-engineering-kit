@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
-import { guardBaseline, guardScope, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
+import { guardBaseline, guardScope, hooksPaths, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -240,4 +240,67 @@ test("guardScope: two repositories that swapped folders keep both entries' restr
 	const scope = guardScope(ws, () => ({}), ".pi/guard.json", baseline);
 	const cmd = "cd b && make release";
 	assert.equal(checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws).action, "block", "a's repository now in folder b");
+});
+
+/** A real repository at `dir` (created), with `core.hooksPath` set to `hooks` unless undefined. */
+function gitRepo(dir: string, hooks?: string): string {
+	mkdirSync(dir, { recursive: true });
+	execFileSync("git", ["init", "-q"], { cwd: dir, env: isolated });
+	if (hooks !== undefined) execFileSync("git", ["config", "core.hooksPath", hooks], { cwd: dir, env: isolated });
+	return dir;
+}
+// No global or system git config: the user's own core.hooksPath must not leak into these tests.
+const isolated = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+
+test("hooksPaths: each repository's own core.hooksPath inside the session folder, relative to its root", () => {
+	const withEnv = (fn: () => void) => {
+		const saved = { g: process.env.GIT_CONFIG_GLOBAL, s: process.env.GIT_CONFIG_NOSYSTEM };
+		Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+		try {
+			fn();
+		} finally {
+			for (const [k, v] of [["GIT_CONFIG_GLOBAL", saved.g], ["GIT_CONFIG_NOSYSTEM", saved.s]] as const) {
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			}
+		}
+	};
+	withEnv(() => {
+		const repo = gitRepo(join(temp("hooks-"), "r"), "tools/hooks");
+		assert.deepEqual(hooksPaths(repo), { [repo]: "tools/hooks" });
+		const absolute = gitRepo(join(temp("hooks-"), "r"));
+		execFileSync("git", ["config", "core.hooksPath", join(absolute, "x")], { cwd: absolute, env: isolated });
+		assert.deepEqual(hooksPaths(absolute), { [absolute]: "x" });
+		const root = gitRepo(join(temp("hooks-"), "r"), ".");
+		assert.deepEqual(hooksPaths(root), { [root]: "" });
+		for (const outside of ["../outside", "/tmp/elsewhere"]) {
+			const r = gitRepo(join(temp("hooks-"), "r"), outside);
+			assert.deepEqual(hooksPaths(r), {}, outside);
+		}
+		assert.deepEqual(hooksPaths(gitRepo(join(temp("hooks-"), "r"))), {}, "unset");
+		const sub = gitRepo(join(temp("hooks-"), "r"), "app/hooks");
+		mkdirSync(join(sub, "app"));
+		assert.deepEqual(hooksPaths(join(sub, "app")), { [join(sub, "app")]: "hooks" }, "a session in a subfolder measures from it");
+		const above = gitRepo(join(temp("hooks-"), "r"), "tools/hooks");
+		mkdirSync(join(above, "app"));
+		assert.deepEqual(hooksPaths(join(above, "app")), {}, "a hooks folder above the session folder is outside it");
+		const ws = temp("hooks-ws-");
+		gitRepo(join(ws, "a"), "h");
+		gitRepo(join(ws, "b"));
+		assert.deepEqual(hooksPaths(ws), { [join(ws, "a")]: "h" });
+		assert.deepEqual(hooksPaths(temp("hooks-none-")), {});
+	});
+});
+
+test("hooksPaths: a git that can't run leaves nothing, without throwing", () => {
+	// A workspace is found without git, so the failing call is the one that reads core.hooksPath.
+	const ws = temp("hooks-ws-");
+	gitRepo(join(ws, "a"), "tools/hooks");
+	const saved = process.env.PATH;
+	process.env.PATH = temp("no-git-");
+	try {
+		assert.deepEqual(hooksPaths(ws), {});
+	} finally {
+		process.env.PATH = saved;
+	}
 });

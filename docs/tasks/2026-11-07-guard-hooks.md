@@ -148,12 +148,12 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 **Files:** Modify `lib/scope.ts` (both, byte-identical) · Test `tests/scope.test.ts` (both)
 **Interfaces:** Produces `hooksPaths(projectDir: string): Record<string, string>`, keyed by each root as `guardScope` names it (`projectDir`, `join(projectDir, name)`), valued by a folder relative to that root (`""` for the root itself)
 
-- [ ] Write failing test `hooksPaths: each repository's own core.hooksPath inside it`: in temp repos (`git init`, `git config core.hooksPath …`): a repo with `tools/hooks` → `{ [repo]: "tools/hooks" }`; absolute `<repo>/x` → `"x"`; `.` → `""`; `../outside` and `/tmp/elsewhere` → no key; unset → no key; a workspace with repos `a` (`h`) and `b` (unset) → `{ [join(ws,"a")]: "h" }`; a folder that is no repository → `{}`
-- [ ] Write failing test `hooksPaths: a failing git leaves nothing`: with `PATH` pointing at an empty folder for the call → `{}` without throwing
-- [ ] Run both suites → expect FAIL: `expected { … }, actual {}` (stub returning `{}` added first)
-- [ ] Implement: for `projectDir` when `projectRepos(projectDir).kind === "repo"`, and for each workspace repo, `spawnSync("git", ["-C", root, "config", "--type=path", "--get", "core.hooksPath"], { timeout: 1000 })`; on status 0 resolve the trimmed value against the root (`git rev-parse --show-toplevel` not needed: the root is the top level), keep it when it is the root or inside it, store `relative(root, value)` with `\` → `/`
-- [ ] Run both suites → expect PASS; `cmp src/extensions/lib/scope.ts src_claude/lib/scope.ts` → no output
-- [ ] Commit `feat(guard): read each repository's core.hooksPath`
+- [x] Write failing test `hooksPaths: each repository's own core.hooksPath inside it`: in temp repos (`git init`, `git config core.hooksPath …`): a repo with `tools/hooks` → `{ [repo]: "tools/hooks" }`; absolute `<repo>/x` → `"x"`; `.` → `""`; `../outside` and `/tmp/elsewhere` → no key; unset → no key; a workspace with repos `a` (`h`) and `b` (unset) → `{ [join(ws,"a")]: "h" }`; a folder that is no repository → `{}`
+- [x] Write failing test `hooksPaths: a failing git leaves nothing`: with `PATH` pointing at an empty folder for the call → `{}` without throwing
+- [x] Run both suites → expect FAIL: `expected { … }, actual {}` (stub returning `{}` added first)
+- [x] Implement: for `projectDir` when `projectRepos(projectDir).kind === "repo"`, and for each workspace repo, `spawnSync("git", ["-C", root, "config", "--type=path", "--get", "core.hooksPath"], { timeout: 1000 })`; on status 0 resolve the trimmed value against the root (`git rev-parse --show-toplevel` not needed: the root is the top level), keep it when it is the root or inside it, store `relative(root, value)` with `\` → `/`
+- [x] Run both suites → expect PASS; `cmp src/extensions/lib/scope.ts src_claude/lib/scope.ts` → no output
+- [x] Commit `feat(guard): read each repository's core.hooksPath`
 
 ### Task 5: Claude wiring (criterion 3 hook-level)
 
@@ -208,3 +208,5 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Task 2: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: 3 tests `expected 'confirm', actual 'allow'`)
 - Ruling: the ask-list entry `git -c core.hooksPath=/x commit -m x` was removed from the existing `-c asks only…` test in its own commit (`test(guard): drop git -c core.hooksPath…`), citing criterion 5 of the approved design — cost if wrong: one assertion to restore.
 - Task 3: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: `expected 'block', actual 'confirm'`; the `git config` test is a characterization test, green on first run as the plan said)
+- Ruling: `hooksPaths` measures the hooks folder from the session folder, not the repository top (git resolves a relative `core.hooksPath` from the top; `checkPath` measures from the session folder), so a session started in a subfolder gets the folder relative to it, and one above the session folder counts as outside — the description's "relative to the root" read for a session in a subfolder — cost if wrong: a hooks folder above a subfolder session goes unprotected by path, still covered by the known list and the `git config` ask. Real paths are compared, via the nearest existing folder (a hooks folder not made yet).
+- Task 4: complete (scope.ts byte-identical; kit verify script → all 4 checks PASS; RED seen: `actual {}` for the configured repo; the failing-git test passed on the stub, was rewritten to reach the config read (a workspace, found without git), and then caught the mutation `throw value.error`)
