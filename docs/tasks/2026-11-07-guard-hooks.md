@@ -1,6 +1,6 @@
 # Guard closes case, git-hook and run-record bypasses
 
-Status: design approved (2026-11-07)
+Status: plan approved (2026-11-07)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 07385cb8c69db4b20a8a9fd73c9a5591f75318f1, pi 805377115352fa381ca329e1f30277478ccbf832
 Links: FRAMEWORK-SOURCES §11.46–11.47 follow-ups; user ruling 2026-11-06 on the guard task
