@@ -78,6 +78,7 @@ test("scopedPath: outside git, a guard config in any first-level folder asks, al
 	const { ws, scope } = workspace();
 	assert.equal(scopedPath("write", join(ws, "x", ".pi", "guard.json"), scope).action, "confirm", "x has no .git yet");
 	assert.equal(scopedPath("write", join(ws, "x", "deep", ".pi", "guard.json"), scope).action, "allow", "only a first-level folder's");
+	assert.equal(scopedPath("write", join(ws, "x", ".PI", "guard.json"), scope).action, "confirm", "in any case");
 });
 
 test("scopedConfig: a command the guard can't place gets every repository's restrictions and no repository's loosening", () => {

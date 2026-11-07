@@ -1,6 +1,6 @@
 # Guard closes case, git-hook and run-record bypasses
 
-Status: plan approved (2026-11-07)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 07385cb8c69db4b20a8a9fd73c9a5591f75318f1, pi 805377115352fa381ca329e1f30277478ccbf832
 Links: FRAMEWORK-SOURCES §11.46–11.47 follow-ups; user ruling 2026-11-06 on the guard task
@@ -113,11 +113,11 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 
 **Files:** Modify `lib/patterns.ts` (both) · Test `tests/guard.test.ts` (both)
 
-- [ ] Write failing test `paths: every path rule ignores case`: `checkPath("write", p, cwd, {})` is `block` for `.GIT/config`, `.Git/HEAD`, `sub/.GIT/hooks/x`, `/tmp/ENG-KIT/reviews/x.json`; `confirm` for `.GITHUB/workflows/x.yml`, `.GitLab-CI.yml`, `.CLAUDE/guard.json` (pi: `.PI/guard.json`), `.ENV` (write); `checkPath("read", ".ENV", …)` and `read` of `ID_RSA` are `block`; `{ protectedPaths: ["infra/"] }` blocks `INFRA/main.tf`; `.env.EXAMPLE` read stays `allow`
-- [ ] Run `npm test --prefix src_claude` and `npm test --prefix src` → expect FAIL: `expected 'block', actual 'allow'` for `.GIT/config`
-- [ ] Add the `i` flag to every regex in `checkPath` and `isSecretPath` (`SECRET_EXAMPLE`, `SECRET_PATTERNS`, `CI_PIPELINE`, the `.git` and `eng-kit/reviews` tests); compare `rel` to the guard-config path and to `protectedPaths` prefixes lowercased
-- [ ] Run both suites → expect PASS
-- [ ] Commit in each repo `fix(guard): path rules ignore case, as macOS and Windows file systems do`
+- [x] Write failing test `paths: every path rule ignores case`: `checkPath("write", p, cwd, {})` is `block` for `.GIT/config`, `.Git/HEAD`, `sub/.GIT/hooks/x`, `/tmp/ENG-KIT/reviews/x.json`; `confirm` for `.GITHUB/workflows/x.yml`, `.GitLab-CI.yml`, `.CLAUDE/guard.json` (pi: `.PI/guard.json`), `.ENV` (write); `checkPath("read", ".ENV", …)` and `read` of `ID_RSA` are `block`; `{ protectedPaths: ["infra/"] }` blocks `INFRA/main.tf`; `.env.EXAMPLE` read stays `allow`
+- [x] Run `npm test --prefix src_claude` and `npm test --prefix src` → expect FAIL: `expected 'block', actual 'allow'` for `.GIT/config`
+- [x] Add the `i` flag to every regex in `checkPath` and `isSecretPath` (`SECRET_EXAMPLE`, `SECRET_PATTERNS`, `CI_PIPELINE`, the `.git` and `eng-kit/reviews` tests); compare `rel` to the guard-config path and to `protectedPaths` prefixes lowercased
+- [x] Run both suites → expect PASS
+- [x] Commit in each repo `fix(guard): path rules ignore case, as macOS and Windows file systems do`
 
 ### Task 2: known git-hook files and a configured hooks folder ask (criteria 2, 3 unit)
 
@@ -201,4 +201,7 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 
 ## Progress
 
-None yet
+- Baseline (2026-11-07): verify run had one failure, pi `extensions.test.ts` "review gate: the lookups for one reviewer run share one deadline…" (actual [] vs one Inconclusive record) under full parallel load; alone 3/3 green. Same timing-test family as the §11.45 follow-up; not touched by this branch.
+- Drift check: no changes to lib/, extensions/ or tests/ since the plan's Base.
+- Ruling: Task 1 also lowercases the workspace rule in `scope.ts` `scopedPath` (a first-level folder's guard config outside git) — criterion 1 says every path rule, and that one is a path rule beside `checkPath` — cost if wrong: one extra lowercase compare. Test: the existing first-level-folder test in `scope.test.ts` gained an `x/.CLAUDE/guard.json` (pi: `.PI`) assertion, seen failing first.
+- Task 1: complete (eng-kit and pi, kit verify script → all 4 checks PASS; RED seen: guard `expected 'block', actual 'allow'` for `.GIT/config`, scope `expected 'confirm', actual 'allow'`)

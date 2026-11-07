@@ -64,7 +64,8 @@ const SECRET_PATTERNS = [
 ];
 
 export function isSecretPath(path: string): boolean {
-	const p = path.replaceAll("\\", "/");
+	// Lowercased: on macOS and Windows `.ENV` is `.env`.
+	const p = path.replaceAll("\\", "/").toLowerCase();
 	if (SECRET_EXAMPLE.test(p)) return false;
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
@@ -126,13 +127,15 @@ function sourceOf(config: GuardConfig, rule: string): string {
 }
 
 /** CI and release pipelines run with repository credentials, so edits to them need a human look. */
-const CI_PIPELINE = /^(\.github\/(workflows|actions)\/|\.gitlab\/ci\/|\.circleci\/|\.buildkite\/|(\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|Jenkinsfile)$)/;
+const CI_PIPELINE = /^(\.github\/(workflows|actions)\/|\.gitlab\/ci\/|\.circleci\/|\.buildkite\/|(\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|Jenkinsfile)$)/i;
 
 /** Decide what to do with a read/write/edit of a file path. */
 export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: string, config: GuardConfig): GuardDecision {
 	const absolute = resolve(cwd, path);
 	const rel = relative(cwd, absolute).replaceAll("\\", "/");
 	const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+	// Every rule ignores case: on macOS and Windows `.GIT/config` is `.git/config`.
+	const lower = rel.toLowerCase();
 
 	if (isSecretPath(absolute)) {
 		if (tool === "read") {
@@ -145,16 +148,16 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	}
 	if (tool === "read") return ALLOW;
 
-	if (/(^|\/)\.git(\/|$)/.test(inside ? rel : absolute.replaceAll("\\", "/"))) {
+	if (/(^|\/)\.git(\/|$)/i.test(inside ? rel : absolute.replaceAll("\\", "/"))) {
 		return { action: "block", reason: "Never edit .git internals directly; use git commands." };
 	}
-	if (/(^|\/)eng-kit\/reviews\//.test(absolute.replaceAll("\\", "/"))) {
+	if (/(^|\/)eng-kit\/reviews\//i.test(absolute.replaceAll("\\", "/"))) {
 		return { action: "block", reason: "Review stamps are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 	}
-	if (inside && rel === ".pi/guard.json") {
+	if (inside && lower === ".pi/guard.json") {
 		return { action: "confirm", reason: "The guard config decides what the guard blocks. Loosening it is the user's call; show them the change first." };
 	}
-	const hit = (config.protectedPaths ?? []).find((prefix) => inside && rel.startsWith(prefix.replace(/^\.\//, "")));
+	const hit = (config.protectedPaths ?? []).find((prefix) => inside && lower.startsWith(prefix.replace(/^\.\//, "").toLowerCase()));
 	if (hit) return { action: "block", reason: `${path} is protected by ${config.label ?? ".pi/guard.json"} (${hit}). Ask the user before changing it.` };
 	if (inside && CI_PIPELINE.test(rel)) {
 		return { action: "confirm", reason: `${path} is a CI/release pipeline; it runs with repository credentials. Show the user the design before editing it.` };

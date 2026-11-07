@@ -151,6 +151,19 @@ test("paths: CI and release pipeline edits need confirmation", () => {
 	}
 });
 
+test("paths: every path rule ignores case, as macOS and Windows file systems do", () => {
+	for (const path of [".GIT/config", ".Git/HEAD", "sub/.GIT/hooks/x", "/tmp/ENG-KIT/reviews/x.json"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "block", path);
+	}
+	for (const path of [".GITHUB/workflows/x.yml", ".GitLab-CI.yml", ".PI/guard.json", ".ENV"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("read", ".ENV", cwd, none).action, "block");
+	assert.equal(checkPath("read", "keys/ID_RSA", cwd, none).action, "block");
+	assert.equal(checkPath("read", ".env.EXAMPLE", cwd, none).action, "allow");
+	assert.equal(checkPath("write", "INFRA/main.tf", cwd, { protectedPaths: ["infra/"] }).action, "block");
+});
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");

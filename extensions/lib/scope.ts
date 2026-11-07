@@ -72,7 +72,7 @@ export function scopedPath(tool: "read" | "write" | "edit", path: string, scope:
 	// Outside git, a first-level folder's guard config is a repository's, or will be one after `git init`.
 	const rel = relative(scope.projectDir, resolve(path)).replaceAll("\\", "/");
 	const slash = rel.indexOf("/");
-	if (tool === "read" || scope.kind === "repo" || slash <= 0 || rel.startsWith("../") || rel.slice(slash + 1) !== scope.guardFile) return placed;
+	if (tool === "read" || scope.kind === "repo" || slash <= 0 || rel.startsWith("../") || rel.slice(slash + 1).toLowerCase() !== scope.guardFile) return placed;
 	return strictest(placed, { action: "confirm", reason: `${path} is the guard config of ${rel.slice(0, slash)}: it decides what the guard blocks there. Loosening it is the user's call; show them the change first.` });
 }
 
