@@ -160,12 +160,12 @@ None. Released as 0.38.0 in both editions by CI on merge.
 **Files:** Modify `lib/workdocs.ts` (`landing`) and `lib/worktree.ts` (`tee`/`sed` targets), copy both to `src/extensions/lib/` · Test `tests/workdocs.test.ts`, `tests/worktree.test.ts` in both
 **Interfaces:** Consumes `commandName` (Task 2)
 
-- [ ] Write failing test `landing sees gh, glab and git in any case`: `GH pr merge 1` → `kind: "pr", merge: true`; `GH pr create` → `kind: "pr", merge: false`; `GLAB mr merge` → merge; `GIT push origin main` → `kind: "push"`, `remote: "origin"`; `GIT merge x` and `GIT commit -m x` → the same kinds as lowercase
-- [ ] Write failing test `shellWriteTargets counts TEE and SED -i targets`: `TEE out.txt` → `["out.txt"]`; `SED -i s/a/b/ f.txt` → `["f.txt"]` (same helper arguments as the existing `shellWriteTargets` test)
-- [ ] Run → expect FAIL: `undefined` vs a landing
-- [ ] Implement: `landing` finds `gh`/`glab`/`git` by `commandName`; `worktree.ts` compares `commandName(seg[0])` with `tee`/`sed`
-- [ ] Run both editions → PASS; `cmp` both pairs → same; full suites → pass
-- [ ] Commit `fix(gates): landings and write targets in any letter case`
+- [x] Write failing test `landing sees gh, glab and git in any case`: `GH pr merge 1` → `kind: "pr", merge: true`; `GH pr create` → `kind: "pr", merge: false`; `GLAB mr merge` → merge; `GIT push origin main` → `kind: "push"`, `remote: "origin"`; `GIT merge x` and `GIT commit -m x` → the same kinds as lowercase
+- [x] Write failing test `shellWriteTargets counts TEE and SED -i targets`: `TEE out.txt` → `["out.txt"]`; `SED -i s/a/b/ f.txt` → `["f.txt"]` (same helper arguments as the existing `shellWriteTargets` test)
+- [x] Run → expect FAIL: `undefined` vs a landing
+- [x] Implement: `landing` finds `gh`/`glab`/`git` by `commandName`; `worktree.ts` compares `commandName(seg[0])` with `tee`/`sed`
+- [x] Run both editions → PASS; `cmp` both pairs → same; full suites → pass
+- [x] Commit `fix(gates): landings and write targets in any letter case`
 
 ### Task 6: skill texts
 
@@ -196,3 +196,4 @@ None. Released as 0.38.0 in both editions by CI on merge.
 - Task 2: complete (eng-kit c5b5428..HEAD, pi 93883af..HEAD; `external command names are judged in any case` failed first on `GIT push --force` allow vs block and on `XARGS git log`; mutants: reverting any folded site fails the test except `gh`/`glab`, which were already lowercased (equivalent for ASCII); kit verify → all 4 checks pass).
 - Task 3: complete (eng-kit 6d45f47..HEAD, pi 1887fc0..HEAD; the regex test failed first on `NPM publish` allow vs confirm; `folding never reaches arguments or paths` passes before and after by design (it pins today's decisions the view must not change); added row `python3 -c \"…os.system('GIT push')\"` (git inside an interpreter string, decided only by PUSH_WORDS on the view); mutants — dropping the view from CONFIRM_RULES, project block, project confirm or PUSH_WORDS, or letting allow read it — each fail the test; kit verify → all 4 checks pass).
 - Task 4: complete (eng-kit 4c1cb29..HEAD, pi 581f848..HEAD; `segmentFolders: git and env in any case, builtins as written` failed first on `GIT -C b status` → ws vs ws/b; added row `GIT --git-dir=b/.git log` → unknown; `/usr/bin/git -C b` was judged in the session folder before too (an absolute path failed open), now followed; the git-is-not-the-command test compares indexes, so a second git word after the command with `-C` now hides the folder (stricter); mutants on the -C loop, sh -c, env, --git-dir and not-the-command each fail the test; shell.ts identical in both editions; kit verify → all 4 checks pass).
+- Task 5: complete (eng-kit 4d0ff8e..HEAD, pi 0f404dd..HEAD; `landing sees gh, glab and git in any letter case` failed first on `GH pr merge 1` → undefined (expected values are the lowercase landings, which the test also asserts are defined), `shellWriteTargets counts TEE and SED -i targets…` on [] vs ["src/c.ts"]; a path to gh or git (`/opt/homebrew/bin/gh pr merge`) now counts too; mutants on gh/glab, git and tee/sed each fail; workdocs.ts and worktree.ts identical in both editions; kit verify → all 4 checks pass).

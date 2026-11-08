@@ -7,7 +7,7 @@ import { type Dirent, existsSync, lstatSync, readdirSync, readlinkSync, statSync
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
-import { splitSegments, tokenize } from "./patterns.ts";
+import { commandName, splitSegments, tokenize } from "./patterns.ts";
 import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
 
 const GIT_TIMEOUT_MS = 3000;
@@ -419,8 +419,10 @@ export function shellWriteTargets(command: string, cwd: string, projectDir: stri
 		found.push([target, !powershell && !moves && PLAIN_WORD.test(word)]);
 	}
 	for (const seg of segments) {
-		if (seg[0] === "tee") found.push(...seg.slice(1).filter((t) => !t.startsWith("-")).map((t): [string, boolean] => [t, false]));
-		if (seg[0] === "sed" && seg.some((t) => /^-i|^--in-place/.test(t)) && seg.length > 2) found.push([seg[seg.length - 1]!, false]);
+		// tee and sed run in any letter case on macOS and Windows.
+		const program = seg[0] === undefined ? "" : commandName(seg[0]);
+		if (program === "tee") found.push(...seg.slice(1).filter((t) => !t.startsWith("-")).map((t): [string, boolean] => [t, false]));
+		if (program === "sed" && seg.some((t) => /^-i|^--in-place/.test(t)) && seg.length > 2) found.push([seg[seg.length - 1]!, false]);
 	}
 	const vars = knownVars(text, segments, env);
 	const inside = found

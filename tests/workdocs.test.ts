@@ -319,3 +319,18 @@ test("in a workspace, a quoted argument with .. and glob characters doesn't hide
 	const { check } = workspace();
 	assert.match(String(check('cd a && gh pr create --title "handle ../ paths [WIP]"')?.reason), /Task files would reach/);
 });
+
+// macOS and Windows run gh, glab and git in any letter case: a landing is the same landing.
+test("landing sees gh, glab and git in any letter case", () => {
+	for (const [upper, lower] of [
+		["GH pr merge 1", "gh pr merge 1"],
+		["GH pr create", "gh pr create"],
+		["GLAB mr merge 1", "glab mr merge 1"],
+		["GIT push origin main", "git push origin main"],
+		["GIT merge x", "git merge x"],
+		["GIT commit -m x", "git commit -m x"],
+	]) {
+		assert.notEqual(landing(lower.split(" ")), undefined, lower);
+		assert.deepEqual(landing(upper.split(" ")), landing(lower.split(" ")), upper);
+	}
+});

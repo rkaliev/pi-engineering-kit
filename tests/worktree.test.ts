@@ -646,3 +646,9 @@ test("shellWriteTargets: only a plain word with names bound once is expanded", (
 	assert.deepEqual(targets("BUILD_DIR=/tmp/ci; make > $BUILD_DIR/build.log", { BUILD_DIR: "/tmp/ci" }), [], "the same value as the environment's");
 	assert.deepEqual(targets("echo x | tee ~/log $TMPDIR/b", { HOME: "/tmp/h", TMPDIR: "/tmp/t" }), ["~/log", "$TMPDIR/b"], "tee operands aren't expanded");
 });
+
+test("shellWriteTargets counts TEE and SED -i targets: the programs run in any letter case", () => {
+	const project = mkdtempSync(join(tmpdir(), "no-git-"));
+	assert.deepEqual(shellWriteTargets("echo x | TEE src/c.ts", project, project), ["src/c.ts"]);
+	assert.deepEqual(shellWriteTargets("SED -i '' 's/a/b/' src/d.ts", project, project), ["src/d.ts"]);
+});

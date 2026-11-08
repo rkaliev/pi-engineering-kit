@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { commandName, quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
 import { safeRealpath, segmentFolders } from "./shell.ts";
 
@@ -201,10 +201,12 @@ export function landing(raw: string[]): Landing | undefined {
 	// A group or substitution around the command does not hide it.
 	const tokens = raw.map(unwrapToken).filter(Boolean);
 	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
+	// gh, glab and git run in any letter case on macOS and Windows.
+	const named = (name: string) => (t: string) => commandName(t) === name;
 	for (const tool of ["gh", "glab"]) {
-		const at = words.indexOf(tool);
+		const at = words.findIndex(named(tool));
 		if (at === -1) continue;
-		const args = tokens.slice(tokens.indexOf(tool) + 1);
+		const args = tokens.slice(tokens.findIndex(named(tool)) + 1);
 		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
 		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
 		const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
@@ -215,9 +217,9 @@ export function landing(raw: string[]): Landing | undefined {
 		const flag = args[head]!;
 		return { kind: "pr", merge: false, target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1], repo };
 	}
-	if (!words.includes("git")) return undefined;
+	if (!words.some(named("git"))) return undefined;
 	// Raw tokens after git: `-c key=value` keeps its value, so options and their values pair up.
-	const rest = tokens.slice(tokens.indexOf("git") + 1);
+	const rest = tokens.slice(tokens.findIndex(named("git")) + 1);
 	// The subcommand is the first word after git's own options (`-C <dir>` and `-c <key=value>` take a value).
 	let verb = 0;
 	let dir: string | undefined;
