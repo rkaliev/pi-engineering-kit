@@ -35,6 +35,34 @@ test("blocks hook bypass", () => {
 	}
 });
 
+test("git -c core.hooksPath blocks like --no-verify: it skips or replaces the hooks", () => {
+	for (const cmd of [
+		"git -c core.hooksPath=/dev/null commit -m x",
+		"git -ccore.hooksPath=x commit -m x",
+		"git -c CORE.HOOKSPATH=x push",
+		"git --config-env core.hooksPath=V commit -m x",
+		"git --config-env=core.hookspath=V commit -m x",
+		"(git -c core.hooksPath= commit -m x)",
+		"git -c user.name=x -c core.hooksPath=x commit -m x",
+	]) {
+		const decision = checkCommand(cmd, cwd, none);
+		assert.equal(decision.action, "block", cmd);
+		assert.match(String(decision.reason), /hooksPath/, cmd);
+	}
+	assert.equal(action("git -c user.name=x commit -m x"), "allow");
+	assert.equal(action("git commit -m 'set -c core.hooksPath=x later'"), "allow", "a message is not an option");
+});
+
+// Characterization: these already held before 0.37.0 (the push-setup rule asks for any config change it watches).
+test("git config changes to core.hooksPath ask; reading it is quiet", () => {
+	for (const cmd of ["git config core.hooksPath x", "git config --local core.hooksPath x", "git config --global core.hookspath x", "git config set core.hooksPath x", "git config --unset core.hooksPath", "git config --unset-all core.hooksPath", "git config --replace-all core.hooksPath x"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["git config --get core.hooksPath", "git config core.hooksPath", "git config get core.hooksPath"]) {
+		assert.equal(action(cmd), "allow", cmd);
+	}
+});
+
 test("blocks the hook bypass abbreviated, as git accepts it; an ambiguous or longer option is not it", () => {
 	for (const cmd of ["git commit --no-veri -m x", "git commit --no-verif -m x", "git push --no-veri origin feat/x", "(git merge --no-veri x)"]) {
 		assert.equal(action(cmd), "block", cmd);
@@ -148,6 +176,130 @@ test("paths: CI and release pipeline edits need confirmation", () => {
 	}
 	for (const path of ["src/ci.ts", "docs/ci.md", "docs/github/workflows.md", "tools/Jenkinsfile.md"]) {
 		assert.equal(checkPath("edit", path, cwd, none).action, "allow", path);
+	}
+});
+
+test("paths: every path rule ignores case, as macOS and Windows file systems do", () => {
+	for (const path of [".GIT/config", ".Git/HEAD", "sub/.GIT/hooks/x", "/tmp/ENG-KIT/reviews/x.json"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "block", path);
+	}
+	for (const path of [".GITHUB/workflows/x.yml", ".GitLab-CI.yml", ".PI/guard.json", ".ENV"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("read", ".ENV", cwd, none).action, "block");
+	assert.equal(checkPath("read", "keys/ID_RSA", cwd, none).action, "block");
+	assert.equal(checkPath("read", ".env.EXAMPLE", cwd, none).action, "block", "only the lowercase example names are exempt, as before 0.37.0");
+	assert.equal(checkPath("write", "INFRA/main.tf", cwd, { protectedPaths: ["infra/"] }).action, "block");
+});
+
+test("paths: git hook files ask: their code runs on every commit or push", () => {
+	for (const path of [".husky/pre-commit", ".husky/_/h", ".githooks/pre-push", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", "lefthook-local.yml", "lefthook-local.yaml", ".pre-commit-config.yaml", "./.husky/pre-commit", ".Husky/pre-commit"]) {
+		for (const tool of ["write", "edit"] as const) {
+			const decision = checkPath(tool, path, cwd, none);
+			assert.equal(decision.action, "confirm", `${tool} ${path}`);
+			assert.match(String(decision.reason), /git hook/, path);
+		}
+	}
+	for (const path of ["docs/husky.md", "src/lefthook.yml.bak", "husky/pre-commit"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "allow", path);
+	}
+	assert.equal(action("cat > .husky/pre-commit <<'EOF'\nnpm test\nEOF"), "confirm");
+});
+
+test("paths: the hooks folder the caller configures asks, in any case; a root hooks folder makes every write ask", () => {
+	const hooks: GuardConfig = { hooksPath: "tools/hooks" };
+	for (const path of ["tools/hooks/pre-commit", "TOOLS/Hooks/x", "tools/hooks/lib/a.sh"]) {
+		const decision = checkPath("write", path, cwd, hooks);
+		assert.equal(decision.action, "confirm", path);
+		assert.match(String(decision.reason), /git hook/, path);
+	}
+	for (const path of ["tools/hooksx/a", "tools/a", "hooks/pre-commit"]) {
+		assert.equal(checkPath("write", path, cwd, hooks).action, "allow", path);
+	}
+	assert.equal(checkPath("write", "src/a.ts", cwd, { hooksPath: "" }).action, "confirm");
+	assert.equal(checkPath("read", "tools/hooks/pre-commit", cwd, hooks).action, "allow");
+});
+
+test("paths: verify-run records are written only by the verify script", () => {
+	for (const path of [join(tmpdir(), "eng-kit", "runs", "x.json"), "/tmp/ENG-KIT/Runs/x.json"]) {
+		const decision = checkPath("write", path, cwd, none);
+		assert.equal(decision.action, "block", path);
+		assert.match(String(decision.reason), /verify script/, path);
+	}
+});
+
+test("git -c core.hooksPath blocks only as git's own option, for git by path or a variable too", () => {
+	for (const cmd of ["/usr/bin/git -c core.hooksPath=/dev/null commit -m x", "G=git; $G -c core.hooksPath=x commit -m x", "git -C sub -c core.hooksPath=x commit -m x"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["git grep -c core.hooksPath", "git log -S core.hooksPath -c", "bash -c 'echo core.hooksPath=x'"]) {
+		assert.notEqual(action(cmd), "block", cmd);
+	}
+});
+
+test("git config removing or renaming a watched section asks", () => {
+	for (const cmd of ["git config --remove-section core", "git config --rename-section core x", "git config remove-section core", "git config rename-section core x", "git config --local --remove-section remote.origin", "git config --remove-section CORE"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git config --remove-section user"), "allow");
+});
+
+test("paths: every lefthook config name asks", () => {
+	for (const path of ["lefthook.toml", ".lefthook.json", "lefthook.jsonc", ".lefthook.toml", "lefthook-local.json", ".config/lefthook.yml", ".config/lefthook-local.toml"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("write", "docs/lefthook.toml", cwd, none).action, "allow");
+});
+
+test("paths: a letter the file system folds is folded before every rule, also in a name that doesn't exist yet", () => {
+	// U+017F (long s) and U+212A (Kelvin sign) open the ASCII names on APFS and NTFS.
+	for (const path of [".pi/guard.j\u017fon", ".githook\u017f/pre-commit", "lefthoo\u212a.yml", ".github/workflow\u017f/ci.yml"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("write", "tool\u017f/hooks/x", cwd, { hooksPath: "tools/hooks" }).action, "confirm");
+	for (const path of ["/tmp/eng-kit/run\u017f/x.json", "/tmp/eng-kit/review\u017f/h/x.json"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "block", path);
+	}
+});
+
+test("git -c core.hooksPath blocks behind any wrapper or group, and after a variable in any position", () => {
+	for (const cmd of [
+		"caffeinate git -c core.hooksPath=/dev/null commit -m x",
+		"find . -exec git -c core.hooksPath=/dev/null commit -m x \\;",
+		"$SUDO git -c core.hooksPath=x commit -m x",
+		"{ $G -c core.hooksPath=x commit -m x; }",
+		"env $G -c core.hooksPath=x commit -m x",
+		"time $G -c core.hooksPath=x commit -m x",
+		"$G -C . -c core.hooksPath=x commit -m x",
+	]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["git grep -c core.hooksPath", "echo $HOME -c x", "caffeinate git commit -m x"]) {
+		assert.notEqual(action(cmd), "block", cmd);
+	}
+});
+
+test("git config renaming or removing a section that holds a watched key asks, whatever the key needs after it", () => {
+	for (const cmd of ["git config --rename-section x credential", "git config --rename-section x gpg", "git config --remove-section credential", "git config --rename-section x sequence", "git config --rename-section x diff.tool", "git config --rename-section x submodule.m"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git config --rename-section old user"), "allow");
+});
+
+test("paths: secret names and protected prefixes are folded too, and ẞ folds to ss as APFS folds it", () => {
+	assert.equal(checkPath("read", "keys/id_r\u017fa", cwd, none).action, "block");
+	assert.equal(checkPath("write", "db/migration\u017f/001.sql", cwd, { protectedPaths: ["db/migrations/"] }).action, "block");
+	assert.equal(checkPath("write", "a\u1e9eets/logo.png", cwd, { protectedPaths: ["assets/"] }).action, "block");
+});
+
+test("git -c core.hooksPath blocks after a value option git takes and after a substitution among git's options", () => {
+	for (const cmd of [
+		"$G --attr-source HEAD -c core.hooksPath=x commit -m x",
+		"git --attr-source HEAD -c core.hooksPath=x commit -m x",
+		"git -C $(git rev-parse --show-toplevel) -c core.hooksPath=/dev/null commit -m x",
+		"git -C `git rev-parse --show-toplevel` -c core.hooksPath=/dev/null commit -m x",
+	]) {
+		assert.equal(action(cmd), "block", cmd);
 	}
 });
 
@@ -688,7 +840,6 @@ test("-c asks only for keys that move where git pushes or what it runs", () => {
 	for (const cmd of [
 		"git -c alias.x=push x",
 		"git -c core.sshCommand=evil fetch",
-		"git -c core.hooksPath=/x commit -m x",
 		"git -c core.fsmonitor=x status",
 		"git -c core.gitProxy=x fetch",
 		"git -c credential.helper=x fetch",

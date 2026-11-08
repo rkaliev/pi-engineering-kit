@@ -19,7 +19,7 @@ import { checkCommand, checkPath, type GuardConfig, type GuardDecision } from ".
 import { resolveVerifyCommands } from "./lib/commands.ts";
 import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordVerdict, reviewedHead, settlePr, holdBack } from "./lib/reviews.ts";
 import { canonical } from "./lib/repos.ts";
-import { guardBaseline, guardScope, isGuardBaseline, repoIn, scopedConfig, scopedPath, strictest, type GuardBaseline } from "./lib/scope.ts";
+import { guardBaseline, guardScope, hooksPaths, isGuardBaseline, repoIn, scopedConfig, scopedPath, strictest, type GuardBaseline } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
@@ -53,7 +53,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const inside = parent !== undefined && (parent.cwd === ctx.cwd || within(parent.cwd, ctx.cwd));
 			parentTrusted = parent?.trusted ?? true;
 			const trusted = ctx.isProjectTrusted() && parentTrusted;
-			record = inside ? parent : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)) };
+			record = inside ? { ...parent, hooks: parent.hooks ?? hooksPaths(parent.cwd) } : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)), hooks: hooksPaths(ctx.cwd) };
 			// A record of another folder stays for the processes this one starts: a grandchild back in the workspace keeps it.
 			if (!inside) process.env[BASELINE_ENV] = JSON.stringify(record);
 		}
@@ -99,15 +99,22 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		const subject = String(toolName === "bash" || toolName === "powershell" ? (input.command ?? "") : (input.path ?? ""));
 		const rec = record ?? take(ctx);
 		const trusted = ctx.isProjectTrusted() && parentTrusted;
-		const decision = judge(toolName, subject, ctx, rec.cwd, rec.baseline, trusted);
+		const decision = judge(toolName, subject, ctx, rec.cwd, rec.baseline, trusted, rec.hooks);
 		const top = rec.cwd === ctx.cwd ? undefined : toplevel(ctx.cwd);
 		if (top === undefined || canonical(top) === canonical(rec.cwd)) return { decision, subject };
-		return { decision: join(decision, judge(toolName, subject, ctx, top, undefined, trusted)), subject };
+		if (!checkoutHooks.has(top)) checkoutHooks.set(top, hooksPaths(top));
+		return { decision: join(decision, judge(toolName, subject, ctx, top, undefined, trusted, checkoutHooks.get(top)!)), subject };
 	}
+	// A subagent's own checkout's hooks folders, read once per checkout, as a session there would at its start.
+	const checkoutHooks = new Map<string, Record<string, string>>();
 
 	/** One tool call judged as a session whose project is `project`, with the configs in force there (lib/scope.ts). */
-	function judge(toolName: string, subject: string, ctx: ExtensionContext, project: string, baseline: GuardBaseline | undefined, trusted: boolean): GuardDecision {
-		const scope = guardScope(project, (root) => loadConfig(ctx, root, project, trusted), GUARD_FILE, baseline);
+	function judge(toolName: string, subject: string, ctx: ExtensionContext, project: string, baseline: GuardBaseline | undefined, trusted: boolean, hooks: Record<string, string>): GuardDecision {
+		const load = (root: string) => {
+			const config = loadConfig(ctx, root, project, trusted);
+			return Object.hasOwn(hooks, root) ? { ...config, hooksPath: hooks[root] } : config;
+		};
+		const scope = guardScope(project, load, GUARD_FILE, baseline);
 		const config = scope.config;
 		if (toolName !== "bash" && toolName !== "powershell") {
 			// The secret rules also see where the path really leads (a symlink to `.env`).
@@ -253,13 +260,16 @@ interface BaselineRecord {
 	/** Whether that session's project was trusted: a subagent's loosening needs it too. */
 	trusted: boolean;
 	baseline: GuardBaseline;
+	/** Each root's `core.hooksPath` folder, read when the record was taken (lib/scope.ts `hooksPaths`). */
+	hooks: Record<string, string>;
 }
 
-/** The record a parent pi process left in the environment, if it has the right shape. */
-function inherited(): BaselineRecord | undefined {
+/** The record a parent pi process left in the environment, if it has the right shape; `hooks` is absent in one from before 0.37.0. */
+function inherited(): (Omit<BaselineRecord, "hooks"> & { hooks?: Record<string, string> }) | undefined {
 	try {
-		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; trusted?: unknown; baseline?: unknown };
-		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, trusted: parsed.trusted === true, baseline: parsed.baseline } : undefined;
+		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; trusted?: unknown; baseline?: unknown; hooks?: unknown };
+		const hooks = parsed.hooks && typeof parsed.hooks === "object" && Object.values(parsed.hooks).every((v) => typeof v === "string") ? (parsed.hooks as Record<string, string>) : undefined;
+		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, trusted: parsed.trusted === true, baseline: parsed.baseline, hooks } : undefined;
 	} catch {
 		return undefined;
 	}

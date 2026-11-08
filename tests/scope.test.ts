@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { slowGit } from "./slow-git.ts";
 import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
-import { guardBaseline, guardScope, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
+import { guardBaseline, guardScope, hooksPaths, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -32,6 +33,13 @@ test("scopedPath: a CI pipeline or the guard config of a workspace repository as
 	const { ws, scope } = workspace();
 	assert.equal(scopedPath("write", join(ws, "a", ".github", "workflows", "ci.yml"), scope).action, "confirm");
 	assert.equal(scopedPath("edit", join(ws, "a", ".pi", "guard.json"), scope).action, "confirm");
+});
+
+test("scopedPath: a repository's hooks folder asks under it, measured from it", () => {
+	const { ws, scope } = workspace({ a: { hooksPath: "hooks" } });
+	assert.equal(scopedPath("write", join(ws, "a", "hooks", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(ws, "hooks", "pre-commit"), scope).action, "allow");
+	assert.equal(scopedPath("write", join(ws, "b", "hooks", "pre-commit"), scope).action, "allow");
 });
 
 test("scopedPath: a repository's protected paths block under it, measured from it", () => {
@@ -78,6 +86,7 @@ test("scopedPath: outside git, a guard config in any first-level folder asks, al
 	const { ws, scope } = workspace();
 	assert.equal(scopedPath("write", join(ws, "x", ".pi", "guard.json"), scope).action, "confirm", "x has no .git yet");
 	assert.equal(scopedPath("write", join(ws, "x", "deep", ".pi", "guard.json"), scope).action, "allow", "only a first-level folder's");
+	assert.equal(scopedPath("write", join(ws, "x", ".PI", "guard.json"), scope).action, "confirm", "in any case");
 });
 
 test("scopedConfig: a command the guard can't place gets every repository's restrictions and no repository's loosening", () => {
@@ -232,4 +241,152 @@ test("guardScope: two repositories that swapped folders keep both entries' restr
 	const scope = guardScope(ws, () => ({}), ".pi/guard.json", baseline);
 	const cmd = "cd b && make release";
 	assert.equal(checkCommand(cmd, ws, scopedConfig(cmd, ws, scope), ws).action, "block", "a's repository now in folder b");
+});
+
+/** A real repository at `dir` (created), with `core.hooksPath` set to `hooks` unless undefined. */
+function gitRepo(dir: string, hooks?: string): string {
+	mkdirSync(dir, { recursive: true });
+	execFileSync("git", ["init", "-q"], { cwd: dir, env: isolated });
+	if (hooks !== undefined) execFileSync("git", ["config", "core.hooksPath", hooks], { cwd: dir, env: isolated });
+	return dir;
+}
+// No global or system git config: the user's own core.hooksPath must not leak into these tests.
+const isolated = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+
+test("hooksPaths: each repository's own core.hooksPath inside the session folder, relative to its root", () => {
+	const withEnv = (fn: () => void) => {
+		const saved = { g: process.env.GIT_CONFIG_GLOBAL, s: process.env.GIT_CONFIG_NOSYSTEM };
+		Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+		try {
+			fn();
+		} finally {
+			for (const [k, v] of [["GIT_CONFIG_GLOBAL", saved.g], ["GIT_CONFIG_NOSYSTEM", saved.s]] as const) {
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			}
+		}
+	};
+	withEnv(() => {
+		const repo = gitRepo(join(temp("hooks-"), "r"), "tools/hooks");
+		assert.deepEqual(hooksPaths(repo), { [repo]: "tools/hooks" });
+		const absolute = gitRepo(join(temp("hooks-"), "r"));
+		execFileSync("git", ["config", "core.hooksPath", join(absolute, "x")], { cwd: absolute, env: isolated });
+		assert.deepEqual(hooksPaths(absolute), { [absolute]: "x" });
+		const root = gitRepo(join(temp("hooks-"), "r"), ".");
+		assert.deepEqual(hooksPaths(root), { [root]: "" });
+		for (const outside of ["../outside", "/tmp/elsewhere"]) {
+			const r = gitRepo(join(temp("hooks-"), "r"), outside);
+			assert.deepEqual(hooksPaths(r), {}, outside);
+		}
+		assert.deepEqual(hooksPaths(gitRepo(join(temp("hooks-"), "r"))), {}, "unset");
+		const sub = gitRepo(join(temp("hooks-"), "r"), "app/hooks");
+		mkdirSync(join(sub, "app"));
+		assert.deepEqual(hooksPaths(join(sub, "app")), { [join(sub, "app")]: "hooks" }, "a session in a subfolder measures from it");
+		const above = gitRepo(join(temp("hooks-"), "r"), "tools/hooks");
+		mkdirSync(join(above, "app"));
+		assert.deepEqual(hooksPaths(join(above, "app")), {}, "a hooks folder above the session folder is outside it");
+		const ws = temp("hooks-ws-");
+		gitRepo(join(ws, "a"), "h");
+		gitRepo(join(ws, "b"));
+		assert.deepEqual(hooksPaths(ws), { [join(ws, "a")]: "h" });
+		assert.deepEqual(hooksPaths(temp("hooks-none-")), {});
+	});
+});
+
+test("hooksPaths: a git that can't run leaves nothing, without throwing", () => {
+	// A workspace is found without git, so the failing call is the one that reads core.hooksPath.
+	const ws = temp("hooks-ws-");
+	gitRepo(join(ws, "a"), "tools/hooks");
+	const saved = process.env.PATH;
+	process.env.PATH = temp("no-git-");
+	try {
+		assert.deepEqual(hooksPaths(ws), {});
+	} finally {
+		process.env.PATH = saved;
+	}
+});
+
+test("scopedPath: outside a workspace too, a write is judged where it really leads: a symlink to a hook folder asks", () => {
+	const dir = temp("scope-real-");
+	mkdirSync(join(dir, ".husky"));
+	symlinkSync(".husky", join(dir, "h"));
+	mkdirSync(join(dir, "tools", "git-hooks"), { recursive: true });
+	symlinkSync(join("tools", "git-hooks"), join(dir, ".hooks"));
+	const scope = guardScope(dir, () => ({ hooksPath: "tools/git-hooks" }), ".claude/guard.json");
+	assert.equal(scopedPath("write", join(dir, "h", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(dir, ".hooks", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(dir, "src.ts"), scope).action, "allow");
+});
+
+// APFS opens `.huſky` (long s, U+017F) as `.husky`; a file system that doesn't has nothing to bypass.
+const folds = (() => {
+	const dir = temp("scope-fold-");
+	mkdirSync(join(dir, ".husky"));
+	return existsSync(join(dir, ".hu\u017fky"));
+})();
+test("scopedPath: a letter the file system folds onto a protected name is judged by the name on disk", { skip: !folds && "platform: needs a file system that folds U+017F onto s (APFS)" }, () => {
+	const dir = temp("scope-fold-");
+	mkdirSync(join(dir, ".husky"));
+	const scope = guardScope(dir, () => ({}), ".claude/guard.json");
+	assert.equal(scopedPath("write", join(dir, ".hu\u017fky", "pre-commit"), scope).action, "confirm");
+});
+
+test("hooksPaths: a configured folder with a trailing slash, or reached through a symlink, is kept by its real path", () => {
+	const isolatedEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+	const saved = { ...process.env };
+	Object.assign(process.env, isolatedEnv);
+	try {
+		const slashed = gitRepo(join(temp("hooks-"), "r"), "tools/hooks/");
+		assert.deepEqual(hooksPaths(slashed), { [slashed]: "tools/hooks" });
+		const linked = gitRepo(join(temp("hooks-"), "r"), ".hooks");
+		mkdirSync(join(linked, "tools", "git-hooks"), { recursive: true });
+		symlinkSync(join("tools", "git-hooks"), join(linked, ".hooks"));
+		assert.deepEqual(hooksPaths(linked), { [linked]: "tools/git-hooks" });
+		const deep = gitRepo(join(temp("hooks-"), "r"), Array.from({ length: 12000 }, () => "a").join("/"));
+		assert.doesNotThrow(() => hooksPaths(deep), "a very deep folder that doesn't exist yet");
+	} finally {
+		for (const k of Object.keys(isolatedEnv)) {
+			if (saved[k] === undefined) delete process.env[k];
+			else process.env[k] = saved[k];
+		}
+	}
+});
+
+test("hooksPaths: the reads share one budget, so hanging repositories can't hold the session start past it", () => {
+	const ws = temp("hooks-ws-");
+	const names = ["a", "b", "c", "d"];
+	for (const name of names) gitRepo(join(ws, name), "h");
+	const slow = names.map((name) => slowGit(realpathSync(join(ws, name)), "", 10));
+	const status = { complete: true };
+	let calls: string[] = [];
+	try {
+		assert.deepEqual(hooksPaths(ws, 1000, status), {});
+		calls = slow.map((s) => readFileSync(s.log, "utf8"));
+	} finally {
+		for (const s of [...slow].reverse()) s.restore();
+	}
+	// The first read used the whole budget: the others were never started, and the result says it is incomplete.
+	assert.notEqual(calls[0], "", "a was read");
+	assert.deepEqual(calls.slice(1), ["", "", ""], "b, c and d were skipped");
+	assert.equal(status.complete, false);
+});
+
+test("hooksPaths: one hanging repository gets at most a second, so the others are still read", () => {
+	const ws = temp("hooks-ws-");
+	for (const name of ["a", "b", "c"]) gitRepo(join(ws, name), "h");
+	const slow = slowGit(realpathSync(join(ws, "a")), "", 10);
+	const status = { complete: true };
+	let found: Record<string, string> = {};
+	try {
+		found = hooksPaths(ws, 3000, status);
+	} finally {
+		slow.restore();
+	}
+	assert.deepEqual(found, { [join(ws, "b")]: "h", [join(ws, "c")]: "h" });
+	assert.equal(status.complete, false, "a's read timed out");
+});
+
+test("scopedPath: a first-level folder's guard config is found with a letter the file system folds", () => {
+	const { ws, scope } = workspace();
+	assert.equal(scopedPath("write", join(ws, "x", ".pi", "guard.j\u017fon"), scope).action, "confirm");
 });

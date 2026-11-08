@@ -17,6 +17,9 @@ export function slowGit(slowDir: string, only: string | string[] = "", seconds =
 	const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
 	const hang = `if [ "$PWD" = "${slowDir}" ]; then echo "$*" >> "${log}"; case " $* " in ${[only].flat().map((o) => `*"${o}"*`).join("|")}) exec sleep ${seconds};; esac; fi`; // test-hygiene: allow the hang is the slow repository under test
 	writeFileSync(join(bin, "git"), `#!/bin/sh\n${hang}\nexec "${real}" "$@"\n`, { mode: 0o755 });
+	// The first run of a new script can take seconds (macOS checks it), which a test's deadline would count: run it once now,
+	// outside the slow folder.
+	execFileSync(join(bin, "git"), ["--version"], { cwd: bin, stdio: "ignore" });
 	const path = process.env.PATH;
 	process.env.PATH = `${bin}:${path}`;
 	return {

@@ -305,6 +305,69 @@ test("guard: without a session_start, the baseline is the folder at the first ch
 	assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
 });
 
+/** A pi write of `file` under `dir`, refused at its question: what the guard asked, if anything. */
+async function writeAsks(emit: ReturnType<typeof fakePi>["emit"], dir: string, cwd: string, file: string): Promise<string | undefined> {
+	const c = ctx(cwd, { confirm: false });
+	await emit("tool_call", { toolName: "write", input: { path: join(dir, file), content: "x" } }, c);
+	return c.asked[0];
+}
+
+test("guard: the hooks folder a repository configures asks, as the session read it at its start", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const dir = project({});
+	execFileSync("git", ["init", "-q"], { cwd: dir });
+	execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: dir });
+	await emit("session_start", { reason: "startup" }, ctx(dir));
+	assert.match((await writeAsks(emit, dir, dir, "tools/hooks/pre-commit")) ?? "", /git hook/);
+	execFileSync("git", ["config", "core.hooksPath", "other"], { cwd: dir });
+	assert.equal(await writeAsks(emit, dir, dir, "other/pre-commit"), undefined, "read once, at the start");
+});
+
+test("guard: a child keeps its parent's hooks folders; an older parent's record without them keeps its trust, and the child reads the parent folder's hooks itself", async () => {
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const dir = project({});
+		execFileSync("git", ["init", "-q"], { cwd: dir });
+		execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: dir });
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		execFileSync("git", ["config", "--unset", "core.hooksPath"], { cwd: dir });
+		const child = fakePi();
+		guard(child.pi);
+		await child.emit("session_start", { reason: "startup" }, ctx(dir));
+		assert.match((await writeAsks(child.emit, dir, dir, "tools/hooks/pre-commit")) ?? "", /git hook/, "the parent's record");
+
+		// An older parent's record (no hooks): the child keeps it, its trust included, and reads the parent folder's hooks itself.
+		const old = project({ ".pi/guard.json": JSON.stringify({ allow: ["^npm publish"] }) });
+		execFileSync("git", ["init", "-q"], { cwd: old });
+		execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: old });
+		process.env.ENG_KIT_GUARD_BASELINE = JSON.stringify({ cwd: old, trusted: false, baseline: {} });
+		const older = fakePi();
+		guard(older.pi);
+		await older.emit("session_start", { reason: "startup" }, ctx(old));
+		const publish = ctx(old, { confirm: false });
+		await older.emit("tool_call", { toolName: "bash", input: { command: "npm publish" } }, publish);
+		assert.match(publish.asked[0] ?? "", /publishes a release/, "the parent's distrust is kept: the allow rule doesn't loosen");
+		assert.match((await writeAsks(older.emit, old, old, "tools/hooks/pre-commit")) ?? "", /git hook/, "the parent folder's hooks, read by the child");
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
+});
+
+test("guard: in a workspace, each repository's own hooks folder asks under it", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir, git } = workspaceProject({});
+	git("a", "config", "core.hooksPath", "h");
+	await emit("session_start", { reason: "startup" }, ctx(dir));
+	assert.match((await writeAsks(emit, dir, dir, "a/h/pre-commit")) ?? "", /git hook/);
+	assert.equal(await writeAsks(emit, dir, dir, "b/h/pre-commit"), undefined);
+});
+
 test("guard: a child pi process in the same folder takes its parent's baseline", async () => {
 	const { dir } = workspaceProject();
 	const saved = process.env.ENG_KIT_GUARD_BASELINE;
