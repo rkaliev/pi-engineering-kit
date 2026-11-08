@@ -286,6 +286,23 @@ test("git config renaming or removing a section that holds a watched key asks, w
 	assert.equal(action("git config --rename-section old user"), "allow");
 });
 
+test("paths: secret names and protected prefixes are folded too, and ẞ folds to ss as APFS folds it", () => {
+	assert.equal(checkPath("read", "keys/id_r\u017fa", cwd, none).action, "block");
+	assert.equal(checkPath("write", "db/migration\u017f/001.sql", cwd, { protectedPaths: ["db/migrations/"] }).action, "block");
+	assert.equal(checkPath("write", "a\u1e9eets/logo.png", cwd, { protectedPaths: ["assets/"] }).action, "block");
+});
+
+test("git -c core.hooksPath blocks after a value option git takes and after a substitution among git's options", () => {
+	for (const cmd of [
+		"$G --attr-source HEAD -c core.hooksPath=x commit -m x",
+		"git --attr-source HEAD -c core.hooksPath=x commit -m x",
+		"git -C $(git rev-parse --show-toplevel) -c core.hooksPath=/dev/null commit -m x",
+		"git -C `git rev-parse --show-toplevel` -c core.hooksPath=/dev/null commit -m x",
+	]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+});
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");

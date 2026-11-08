@@ -385,3 +385,8 @@ test("hooksPaths: one hanging repository gets at most a second, so the others ar
 	assert.deepEqual(found, { [join(ws, "b")]: "h", [join(ws, "c")]: "h" });
 	assert.equal(status.complete, false, "a's read timed out");
 });
+
+test("scopedPath: a first-level folder's guard config is found with a letter the file system folds", () => {
+	const { ws, scope } = workspace();
+	assert.equal(scopedPath("write", join(ws, "x", ".pi", "guard.j\u017fon"), scope).action, "confirm");
+});

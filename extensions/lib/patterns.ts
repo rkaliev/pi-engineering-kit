@@ -70,7 +70,8 @@ const SECRET_PATTERNS = [
  * and `lefthooK.yml` (U+212A) compare equal to `.env`, `.husky` and `lefthook.yml`, also for a name not created yet.
  */
 export function foldPath(path: string): string {
-	return path.normalize("NFKC").toUpperCase().toLowerCase();
+	// Lower first: `ẞ` (U+1E9E) only lowercases to `ß`, which then uppercases to `SS`.
+	return path.normalize("NFKC").toLowerCase().toUpperCase().toLowerCase();
 }
 
 export function isSecretPath(path: string): boolean {
@@ -200,9 +201,10 @@ function overridesHooksPath(tokens: string[]): boolean {
 		const setting = t === "-c" || t === "--config-env" ? raw[i + 1] : /^-c./.test(t) ? t.slice(2) : t.startsWith("--config-env=") ? t.slice("--config-env=".length) : undefined;
 		return setting !== undefined && setting.split("=")[0]!.toLowerCase() === "core.hookspath";
 	};
+	// A walk also starts where a substitution among git's options ends (`git -C $(git rev-parse …) -c …`).
 	return raw.some((t, at) => {
-		if (!gitLike(t) && !/[$`]/.test(tokens[at]!)) return false;
-		for (let i = at + 1; i < raw.length && raw[i]!.startsWith("-"); i += GIT_VALUE_OPTIONS.has(raw[i]!) ? 2 : 1) {
+		if (!gitLike(t) && !/[$`]/.test(tokens[at]!) && !/[)`]$/.test(tokens[at]!)) return false;
+		for (let i = at + 1; i < raw.length && raw[i]!.startsWith("-"); i += GIT_VALUE_OPTIONS.has(raw[i]!) || raw[i] === "--attr-source" ? 2 : 1) {
 			if (sets(i)) return true;
 		}
 		return false;

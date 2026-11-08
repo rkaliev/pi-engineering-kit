@@ -677,6 +677,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
 	// The verify script's run records (the Claude edition's verify gate reads them) are as forgeable as the review records.
 	const runRecords = [join(tmpdir(), "eng-kit", "runs"), safeRealpath(tmpdir()) + "/eng-kit/runs"].map((p) => p.replaceAll("\\", "/"));
+	const realProject = canonical(projectDir);
 	const { dirs, unknown } = reachable(command, cwd);
 	// The tokens lose the `<` of `<(…)`, so a process substitution is found in the text.
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
@@ -704,13 +705,13 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		// On macOS and Windows a path in any letter case, or with a letter the file system folds, opens the same folder:
 		// compare folded (foldPath), as written and by the real path.
 		const folded = [...paths, ...real].map(foldPath);
-		const under = (roots: string[]) => folded.some((p) => roots.map(foldPath).some((r) => p === r || p.startsWith(`${r}/`)));
+		const under = (roots: string[]) => folded.some((p) => roots.some((r) => p === r || p.startsWith(`${r}/`)));
 		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?tmpdir\}?\/*eng-kit\/reviews(\/|$)/.test(foldPath(p))));
-		if (named || under(records)) {
+		if (named || under(records.map(foldPath))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
 		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?tmpdir\}?\/*eng-kit\/runs(\/|$)/.test(foldPath(p))));
-		if (namedRuns || under(runRecords)) {
+		if (namedRuns || under(runRecords.map(foldPath))) {
 			return { action: "block", reason: "Verify-run records are written only by the verify script. Run it instead." };
 		}
 		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
@@ -723,7 +724,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 				return { action: "block", reason: "The kit's session state is written only by its hooks." };
 			}
 		}
-		const childConfigs = () => [...paths.map((p) => [projectDir, p]), ...real.map((p) => [canonical(projectDir), p])].some(([dir, p]) => childConfig(dir!, p!, guardConfig));
+		const childConfigs = () => [...paths.map((p) => [projectDir, p]), ...real.map((p) => [realProject, p])].some(([dir, p]) => childConfig(dir!, p!, guardConfig));
 		if (folded.includes(foldPath(config)) || tokens.some((t) => foldPath(t).endsWith(guardConfig)) || (children && childConfigs())) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}

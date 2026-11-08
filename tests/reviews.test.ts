@@ -985,6 +985,13 @@ test("gate files: a workspace repository's guard config is found in any letter c
 	}
 });
 
+test("gate files: a workspace repository's guard config reached through a symlink asks", () => {
+	const ws = mkdtempSync(join(tmpdir(), "gate-files-ws-"));
+	mkdirSync(join(ws, "a", ".claude"), { recursive: true });
+	symlinkSync(join(ws, "a", ".claude"), join(ws, "cfg"));
+	assert.equal(checkGateFiles("echo '{}' > cfg/guard.json", ws, ws, ".claude/guard.json", true)?.action, "confirm");
+});
+
 test("gate files: >| and >&file are writes too", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");
