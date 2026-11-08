@@ -101,6 +101,10 @@ export function checkCommand(
 	const target = write !== undefined && !isOutside(write.startsWith("~") ? write : resolve(dir, write), cwd) ? resolve(dir, write) : undefined;
 	const text = target ? heredoc!.head : command;
 	const segments = splitSegments(tokenize(text));
+	// The command as the shell runs it: decoded words, every letter folded (`NPM publish`, `$'\x67it' reset --hard`).
+	// Rules that block or ask also read it; `allow` and the own-branch push never do, so it can't loosen anything.
+	const view = foldPath(tokenize(text).join(" "));
+	const commandView = text === command ? view : foldPath(tokenize(command).join(" "));
 
 	// An interpreter heredoc's body is code, not shell: the block rules, which read shell words, read its first line;
 	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
@@ -111,7 +115,8 @@ export function checkCommand(
 		if (hard) return hard;
 	}
 	for (const source of config.block ?? []) {
-		if (new RegExp(source).test(command)) {
+		const re = new RegExp(source);
+		if (re.test(command) || re.test(commandView)) {
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
@@ -119,13 +124,14 @@ export function checkCommand(
 	if (written.action !== "allow") return written;
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env, config.pushOwners);
+	const push = checkPushSetup(segments, text) ?? checkPushes(text, view, segments, cwd, dir, env, config.pushOwners);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
-		if (re.test(text)) return { action: "confirm", reason: `This command ${what}.` };
+		if (re.test(text) || re.test(view)) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
-		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
+		const re = new RegExp(source);
+		if (re.test(command) || re.test(commandView)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
 	}
 	if (segments.some((segment) => segment.some(isSecretPath))) {
 		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
@@ -452,8 +458,8 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 /** The kit's branch naming (git-workflow): only such a branch is pushed without a question. */
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
-/** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
+/** Anything that mentions `git … push`, as written or in `view` (decoded and folded), asks, unless the command is the plain own-branch push (see ownBranchPush). */
+function checkPushes(command: string, view: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
 	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
 	const pushToken = segments.some((tokens) =>
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
@@ -465,7 +471,7 @@ function checkPushes(command: string, segments: string[][], project: string, dir
 		const at = words.findIndex(gitLike);
 		return at !== -1 && words.slice(at + 1).some((t) => PUSH_VERBS.has(t));
 	});
-	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command)) return undefined;
+	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command) && !PUSH_WORDS.test(view)) return undefined;
 	return ownBranchPush(command, dir, env, project, owners) ? undefined : PUSH_CONFIRM;
 }
 

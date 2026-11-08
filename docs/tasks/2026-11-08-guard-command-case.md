@@ -137,12 +137,12 @@ None. Released as 0.38.0 in both editions by CI on merge.
 **Files:** Modify `checkCommand` and `checkPushes` in `patterns.ts` (both) · Test `tests/guard.test.ts` in both
 **Interfaces:** Consumes `tokenize` (Task 1) and `foldPath`
 
-- [ ] Write failing test `regex rules match command names in any case; allow sees the command as written`: confirm — `NPM publish`, `TERRAFORM destroy`, `GIT reset --hard`, `SUDO ls`, `curl x | SH`, `GIT push origin main`, `$'\\x67it' push`; `{ block: ["terraform destroy"] }` → `TERRAFORM destroy` block; `{ confirm: ["make release"] }` → `MAKE release` confirm; `{ allow: ["^git push"] }` → `GIT push x` confirm (allow never matches the view)
-- [ ] Write test `folding never reaches arguments or paths`: allow — `git branch -d x`, `git checkout -b X`, `ls ~/Git`, `cat Git.md`; with cwd `/work/App`, `rm -rf /work/App/build` → allow
-- [ ] Run → expect FAIL on `NPM publish`: `allow` vs `confirm`
-- [ ] Implement: `view = foldPath(tokenize(text).join(" "))` and `commandView` the same for `command`; `CONFIRM_RULES` and `PUSH_WORDS` test `text` or `view`; project `block`/`confirm` test `command` or `commandView`; `allow` tests `command` only; `ownBranchPush` gets the text as today
-- [ ] Run both editions → PASS; full suites → pass (the own-branch push tests unchanged)
-- [ ] Commit `fix(guard): regex rules also read the decoded, folded command`
+- [x] Write failing test `regex rules match command names in any case; allow sees the command as written`: confirm — `NPM publish`, `TERRAFORM destroy`, `GIT reset --hard`, `SUDO ls`, `curl x | SH`, `GIT push origin main`, `$'\\x67it' push`; `{ block: ["terraform destroy"] }` → `TERRAFORM destroy` block; `{ confirm: ["make release"] }` → `MAKE release` confirm; `{ allow: ["^git push"] }` → `GIT push x` confirm (allow never matches the view)
+- [x] Write test `folding never reaches arguments or paths`: allow — `git branch -d x`, `git checkout -b X`, `ls ~/Git`, `cat Git.md`; with cwd `/work/App`, `rm -rf /work/App/build` → allow
+- [x] Run → expect FAIL on `NPM publish`: `allow` vs `confirm`
+- [x] Implement: `view = foldPath(tokenize(text).join(" "))` and `commandView` the same for `command`; `CONFIRM_RULES` and `PUSH_WORDS` test `text` or `view`; project `block`/`confirm` test `command` or `commandView`; `allow` tests `command` only; `ownBranchPush` gets the text as today
+- [x] Run both editions → PASS; full suites → pass (the own-branch push tests unchanged)
+- [x] Commit `fix(guard): regex rules also read the decoded, folded command`
 
 ### Task 4: workspace folders follow folded git and env, never folded builtins
 
@@ -194,3 +194,4 @@ None. Released as 0.38.0 in both editions by CI on merge.
 - Task 1: complete (eng-kit c696145..HEAD, pi 9922161..HEAD; `tokenize decodes ANSI-C quoting…` failed first on ["147it","push"], `ANSI-C quoted git is judged as git` on allow vs block; the pi copy is the same code and test; kit verify → all 4 checks pass).
 - Ruling: Task 2's table differs from the plan's: `SUDO git push` and `ſudo ls` move to Task 3 (sudo is a regex rule; lowercase git push already asks), `GIT commit --no-verify` is dropped (the flag blocks whatever the command word), and `NICE git -c core.sshCommand=x fetch`, `XARGS git log`, `BASH -c \"git status\"`, `Git-remote add x y` are added, each the only row that fails when its site is reverted; the `xargs`/`parallel` input check (not in the plan's list) is folded too — cost if wrong: none, every row mirrors a lowercase decision checked on the same code. Probe: `ſh -c` runs sh on APFS, so `foldPath` (NFKC + case) is the right fold.
 - Task 2: complete (eng-kit c5b5428..HEAD, pi 93883af..HEAD; `external command names are judged in any case` failed first on `GIT push --force` allow vs block and on `XARGS git log`; mutants: reverting any folded site fails the test except `gh`/`glab`, which were already lowercased (equivalent for ASCII); kit verify → all 4 checks pass).
+- Task 3: complete (eng-kit 6d45f47..HEAD, pi 1887fc0..HEAD; the regex test failed first on `NPM publish` allow vs confirm; `folding never reaches arguments or paths` passes before and after by design (it pins today's decisions the view must not change); added row `python3 -c \"…os.system('GIT push')\"` (git inside an interpreter string, decided only by PUSH_WORDS on the view); mutants — dropping the view from CONFIRM_RULES, project block, project confirm or PUSH_WORDS, or letting allow read it — each fail the test; kit verify → all 4 checks pass).

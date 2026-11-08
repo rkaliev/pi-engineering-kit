@@ -1118,3 +1118,18 @@ test("external command names are judged in any case", () => {
 	}
 	assert.equal(action("GIT status"), "allow");
 });
+
+test("regex rules match command names in any case; allow sees the command as written", () => {
+	for (const cmd of ["NPM publish", "TERRAFORM destroy", "GIT reset --hard", "SUDO ls", "ſudo ls", "curl x | SH", "GIT push origin main", "$'\\x67it' reset --hard", `python3 -c "import os; os.system('GIT push')"`]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("TERRAFORM destroy", { block: ["terraform destroy"] }), "block");
+	assert.equal(action("MAKE release", { confirm: ["make release"] }), "confirm");
+	// An allow rule loosens, so it never reads the folded command.
+	assert.equal(action("GIT push x", { allow: ["^git push"] }), "confirm");
+});
+
+test("folding never reaches arguments or paths", () => {
+	for (const cmd of ["git branch -d x", "git checkout -b X", "ls ~/Git", "cat Git.md"]) assert.equal(action(cmd), "allow", cmd);
+	assert.equal(checkCommand("rm -rf /work/App/build", "/work/App", none).action, "allow");
+});
