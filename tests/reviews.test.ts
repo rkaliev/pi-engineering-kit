@@ -1415,3 +1415,20 @@ test("segmentFolders: git and env in any case, builtins as written", () => {
 	assert.equal(segmentFolders("cd $'b\\0'x && git status", ws)[1]!.dir, undefined, "a NUL makes the folder unknown");
 	assert.equal(segmentFolders("PUSHD b; git status", ws)[1]!.dir, ws);
 });
+
+// An escaped `;` keeps `find … -exec … \; -exec …` one segment, and bash still runs both calls.
+test("every landing in one segment is judged: a merge after a commit in find -exec", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("find . -maxdepth 0 -exec git commit -qm x \\; -exec git merge feat/a \\;")), "block");
+});
+
+// In PowerShell `\` is a plain character and `;` separates statements, so `cat x \; Set-Content …` writes.
+test("gate files: a segment holding a quoted operator word is never read-only", (t) => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	t.after(() => rmSync(project, { recursive: true, force: true }));
+	mkdirSync(join(project, ".claude"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
+	assert.equal(check("cat x \\; Set-Content .claude/guard.json '{}'"), "confirm");
+	assert.equal(check("cat .claude/guard.json"), "allow");
+});

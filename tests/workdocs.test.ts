@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
 import { slowGit } from "./slow-git.ts";
-import { baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
+import { allLandings, baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -344,4 +344,8 @@ test("landing skips an assignment or argument whose base name is git or gh and f
 	]) {
 		assert.deepEqual(landing(before), landing(plain), before.join(" "));
 	}
+});
+
+test("allLandings lists every commit, merge, push or PR call in a segment, in order", () => {
+	assert.deepEqual(allLandings(["find", ".", "-exec", "git", "commit", "-qm", "x", "';'", "-exec", "git", "merge", "feat/a", "';'"]).map((l) => l.kind), ["commit", "merge"]);
 });

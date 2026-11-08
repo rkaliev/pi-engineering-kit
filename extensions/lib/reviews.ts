@@ -16,7 +16,7 @@ import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { commandName, foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
-import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
+import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
 
 export type Verdict = "Yes" | "With fixes" | "No" | "Inconclusive";
 
@@ -303,7 +303,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 		// The segments may miss a PR (the user confirmed it): read the texts that show it, from any folder they may reach.
 		const { text, substitutions } = heredocs(command);
 		const subs = [...quotedSubstitutions(text), ...substitutions];
-		const prs = [text, ...subs].flatMap((t) => segmentsOf(tokenize(stripRedirects(t))).map(({ raw }) => landing(raw.map((w) => w.replace(/^\(+|\)+$/g, "")).filter(Boolean))));
+		const prs = [text, ...subs].flatMap((t) => segmentsOf(tokenize(stripRedirects(t))).flatMap(({ raw }) => allLandings(raw.map((w) => w.replace(/^\(+|\)+$/g, "")).filter(Boolean))));
 		const dirs = anywhere([text, ...subs]);
 		for (const l of prs) if (l?.kind === "pr" && !l.merge && !l.repo) branches.push(...prBranches(l, dirs));
 		last = false;
@@ -313,12 +313,12 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 	segments.forEach(({ raw, alone, before }, index) => {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		const l = landing(tokens);
+		const prs = allLandings(tokens).filter((l): l is Extract<Landing, { kind: "pr" }> => l.kind === "pr" && !l.merge && !l.repo);
 		const dir = shell.dir;
-		if (shell.move(raw, alone, before) === undefined && l?.kind === "pr" && !l.merge && !l.repo) {
+		if (shell.move(raw, alone, before) === undefined && prs.length > 0) {
 			// After a move the guard doesn't follow (the user confirmed it), the PR may come from any folder the command may reach.
 			const dirs = dir !== undefined ? [dir] : anywhere([command]);
-			branches.push(...prBranches(l, dirs));
+			for (const l of prs) branches.push(...prBranches(l, dirs));
 			if (index !== segments.length - 1) last = false;
 		}
 	});
@@ -502,56 +502,63 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 	for (const [index, { raw, alone, before }] of segmentsOf(tokenize(stripRedirects(command))).entries()) {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		const l = landing(tokens);
-		if (!l || l.kind === "commit") {
+		// Every call in the segment counts: `find … -exec git commit … \; -exec git merge …` runs both.
+		const found = allLandings(tokens);
+		if (found.every((l) => l.kind === "commit")) {
 			if (shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) unsafeBefore = true;
 			continue;
 		}
 		const dir = shell.dir;
-		// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
-		if (l.kind === "merge" && unsafeBefore) {
-			return decision(options.missing, "this command moves HEAD before it merges, so the guard can't see where the merge lands. Run the merge as its own command.", options);
-		}
-		if (l.kind === "merge" && dir !== undefined && !landsOnBase(l, dir)) {
-			unsafeBefore = true;
-			continue;
-		}
-		const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
-		if (where === undefined || (l.kind === "pr" && l.repo) || (options.workspace && placed[index]?.dir === undefined)) {
-			return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
-		}
-		if (options.workspace) {
-			// A PR naming its repository another way, a folder outside git, or a checkout nested in another repository's
-			// folder: the landing's repository isn't the one this folder belongs to.
-			const named = l.kind === "pr" && (/\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined || /^https?:\/\//.test(l.target ?? ""));
-			const top = git(where, ["rev-parse", "--show-toplevel"]);
-			const repo = options.repoOf?.(where);
-			// A checkout sharing the repository's git common dir is the repository (its own worktree); any other is not.
-			const common = (dir: string) => ((out) => (out === undefined ? undefined : safeRealpath(out)))(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
-			if (named || top === undefined || repo === undefined || common(top) !== common(repo)) {
-				return decision(options.missing, "can't tell which repository this command lands in (a repository named by GH_REPO or a URL, a folder outside git, or a checkout nested in another repository). Run it from the repository's folder without naming the repository.", options);
+		for (const l of found) {
+			if (l.kind === "commit") {
+				unsafeBefore = true;
+				continue;
 			}
-		}
-		if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
-			if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
-			continue;
-		}
-		if (options.waived?.(where)) continue;
-		const base = baseBranch(where);
-		if (!base) continue;
-		const land = l.kind === "push" ? withDestination(l, where) : l;
-		const remote = land.kind === "push" && land.remote ? land.remote : "origin";
-		const refs = targets(land, where, base, land.kind === "push" ? prBranches(projectDir, where, remote, anchorRef(where, remote, base), root) : []);
-		if (refs.length === 0) continue;
-		if (unsafeBefore) {
-			return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
-		}
-		for (const ref of refs) {
-			if (ref === undefined) {
-				return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
+			// After a switch or commit in the same command, a merge may land on the base: its target is unknown.
+			if (l.kind === "merge" && unsafeBefore) {
+				return decision(options.missing, "this command moves HEAD before it merges, so the guard can't see where the merge lands. Run the merge as its own command.", options);
 			}
-			const problem = uncovered(where, projectDir, base, ref, remote, root);
-			if (problem) return decision(options.missing, problem, options);
+			if (l.kind === "merge" && dir !== undefined && !landsOnBase(l, dir)) {
+				unsafeBefore = true;
+				continue;
+			}
+			const where = dir === undefined ? undefined : "dir" in l && l.dir ? follow(dir, l.dir) : dir;
+			if (where === undefined || (l.kind === "pr" && l.repo) || (options.workspace && placed[index]?.dir === undefined)) {
+				return decision(options.missing, "can't tell which checkout this command lands from (a variable, `$(…)`, a nested subshell, a missing folder or another repository). Run it from the checkout itself.", options);
+			}
+			if (options.workspace) {
+				// A PR naming its repository another way, a folder outside git, or a checkout nested in another repository's
+				// folder: the landing's repository isn't the one this folder belongs to.
+				const named = l.kind === "pr" && (/\bGH_REPO\b/.test(command) || process.env.GH_REPO !== undefined || /^https?:\/\//.test(l.target ?? ""));
+				const top = git(where, ["rev-parse", "--show-toplevel"]);
+				const repo = options.repoOf?.(where);
+				// A checkout sharing the repository's git common dir is the repository (its own worktree); any other is not.
+				const common = (dir: string) => ((out) => (out === undefined ? undefined : safeRealpath(out)))(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+				if (named || top === undefined || repo === undefined || common(top) !== common(repo)) {
+					return decision(options.missing, "can't tell which repository this command lands in (a repository named by GH_REPO or a URL, a folder outside git, or a checkout nested in another repository). Run it from the repository's folder without naming the repository.", options);
+				}
+			}
+			if (git(where, ["rev-parse", "--git-dir"]) === undefined) {
+				if (where !== cwd) return decision(options.missing, `${where} is not a git checkout, so the guard can't see what this command lands.`, options);
+				continue;
+			}
+			if (options.waived?.(where)) continue;
+			const base = baseBranch(where);
+			if (!base) continue;
+			const land = l.kind === "push" ? withDestination(l, where) : l;
+			const remote = land.kind === "push" && land.remote ? land.remote : "origin";
+			const refs = targets(land, where, base, land.kind === "push" ? prBranches(projectDir, where, remote, anchorRef(where, remote, base), root) : []);
+			if (refs.length === 0) continue;
+			if (unsafeBefore) {
+				return decision(options.missing, "this command runs a step before it lands that may commit or move a ref (only read-only steps and the project's verification commands may come first), so the guard can't see what it lands. Run the landing as its own command.", options);
+			}
+			for (const ref of refs) {
+				if (ref === undefined) {
+					return { action: "confirm", reason: "Review gate: can't tell locally which commit this PR/MR merge lands. Check that its head commit has a Yes review, or merge it by branch name." };
+				}
+				const problem = uncovered(where, projectDir, base, ref, remote, root);
+				if (problem) return decision(options.missing, problem, options);
+			}
 		}
 	}
 	return undefined;
@@ -562,8 +569,7 @@ function landings(command: string): Map<string, number> {
 	const found = new Map<string, number>();
 	for (const { raw } of segmentsOf(tokenize(stripRedirects(command)))) {
 		const words = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
-		const l = landing(words);
-		if (l !== undefined && l.kind !== "commit") found.set(JSON.stringify(l), (found.get(JSON.stringify(l)) ?? 0) + 1);
+		for (const l of allLandings(words)) if (l.kind !== "commit") found.set(JSON.stringify(l), (found.get(JSON.stringify(l)) ?? 0) + 1);
 	}
 	return found;
 }
@@ -693,7 +699,9 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const runs = processSubst || tokens.some((t) => /\$\(|`/.test(t) || t.startsWith("--ou"));
 		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
-		const readOnly = readable && !redirects && !runs && ((READ_ONLY.has(tokens[0] ?? "") && !tokens.some((t) => WRITING[tokens[0]!]?.test(t))) || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
+		// A re-quoted operator word (`\;`) is a separator in PowerShell, so such a segment is never read-only.
+		const operatorWord = tokens.some((t) => /^'(&&|\|\||;|\||&|\n)'$/.test(t));
+		const readOnly = readable && !redirects && !runs && !operatorWord && ((READ_ONLY.has(tokens[0] ?? "") && !tokens.some((t) => WRITING[tokens[0]!]?.test(t))) || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
 		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.
 		const inner = (t: string) => (/\$\(|`/.test(t) ? tokenize(t.replace(/^.*?(\$\(|`)/, "").replace(/[)`]+$/, "")) : []);
