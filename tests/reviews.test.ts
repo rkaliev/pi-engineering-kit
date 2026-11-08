@@ -967,6 +967,24 @@ test("gate files: the records and the guard config are found in any letter case,
 	assert.equal(check("echo '{}' > .CLAUDE/guard.json"), "confirm");
 });
 
+test("gate files: a letter the file system folds is folded, also in a record folder or guard config that doesn't exist yet", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action;
+	for (const write of ["echo x > $TMPDIR/eng-kit/run\u017f/x.json", `echo x > ${join(tmpdir(), "eng-kit", "run\u017f", "x.json")}`, "echo x > $TMPDIR/eng-kit/review\u017f/h/x.json"]) {
+		assert.equal(check(write), "block", write);
+	}
+	assert.equal(check("echo '{}' > .claude/guard.j\u017fon"), "confirm");
+});
+
+test("gate files: a workspace repository's guard config is found in any letter case, as written and by its real path", () => {
+	const ws = mkdtempSync(join(tmpdir(), "gate-files-ws-"));
+	mkdirSync(join(ws, "a", ".claude"), { recursive: true });
+	const check = (command: string) => checkGateFiles(command, ws, ws, ".claude/guard.json", true)?.action;
+	for (const write of ["cd a/.CLAUDE && echo '{}' > guard.json", "echo '{}' > a/.CLAUDE//guard.json", "echo '{}' > a/.claude/guard.j\u017fon"]) {
+		assert.equal(check(write), "confirm", write);
+	}
+});
+
 test("gate files: >| and >&file are writes too", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");

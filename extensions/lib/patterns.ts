@@ -65,11 +65,19 @@ const SECRET_PATTERNS = [
 	/(^|\/)service-account[\w.-]*\.json$/,
 ];
 
+/**
+ * A path as a case-insensitive file system opens it: compatibility forms and case folded, so `.ENV`, `.huſky` (U+017F)
+ * and `lefthooK.yml` (U+212A) compare equal to `.env`, `.husky` and `lefthook.yml`, also for a name not created yet.
+ */
+export function foldPath(path: string): string {
+	return path.normalize("NFKC").toUpperCase().toLowerCase();
+}
+
 export function isSecretPath(path: string): boolean {
 	const written = path.replaceAll("\\", "/");
-	// Only the example names as written are exempt; every secret name counts in any case (on macOS and Windows `.ENV` is `.env`).
+	// Only the example names as written are exempt; every secret name counts folded (on macOS and Windows `.ENV` is `.env`).
 	if (SECRET_EXAMPLE.test(written)) return false;
-	const p = written.toLowerCase();
+	const p = foldPath(written);
 	return SECRET_PATTERNS.some((re) => re.test(p));
 }
 
@@ -140,8 +148,9 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	const absolute = resolve(cwd, path);
 	const rel = relative(cwd, absolute).replaceAll("\\", "/");
 	const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-	// Every rule ignores case: on macOS and Windows `.GIT/config` is `.git/config`.
-	const lower = rel.toLowerCase();
+	// Every rule reads the path folded: on macOS and Windows `.GIT/config` is `.git/config` (see foldPath).
+	const lower = foldPath(rel);
+	const folded = foldPath(absolute.replaceAll("\\", "/"));
 
 	if (isSecretPath(absolute)) {
 		if (tool === "read") {
@@ -154,25 +163,25 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 	}
 	if (tool === "read") return ALLOW;
 
-	if (/(^|\/)\.git(\/|$)/i.test(inside ? rel : absolute.replaceAll("\\", "/"))) {
+	if (/(^|\/)\.git(\/|$)/.test(inside ? lower : folded)) {
 		return { action: "block", reason: "Never edit .git internals directly; use git commands." };
 	}
-	if (/(^|\/)eng-kit\/reviews\//i.test(absolute.replaceAll("\\", "/"))) {
+	if (/(^|\/)eng-kit\/reviews\//.test(folded)) {
 		return { action: "block", reason: "Review stamps are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 	}
-	if (/(^|\/)eng-kit\/runs\//i.test(absolute.replaceAll("\\", "/"))) {
+	if (/(^|\/)eng-kit\/runs\//.test(folded)) {
 		return { action: "block", reason: "Verify-run records are written only by the verify script. Run it instead." };
 	}
 	if (inside && lower === ".pi/guard.json") {
 		return { action: "confirm", reason: "The guard config decides what the guard blocks. Loosening it is the user's call; show them the change first." };
 	}
-	const hit = (config.protectedPaths ?? []).find((prefix) => inside && lower.startsWith(prefix.replace(/^\.\//, "").toLowerCase()));
+	const hit = (config.protectedPaths ?? []).find((prefix) => inside && lower.startsWith(foldPath(prefix.replace(/^\.\//, ""))));
 	if (hit) return { action: "block", reason: `${path} is protected by ${config.label ?? ".pi/guard.json"} (${hit}). Ask the user before changing it.` };
-	const hooks = config.hooksPath?.toLowerCase();
-	if (inside && (GIT_HOOKS.test(rel) || (hooks !== undefined && (hooks === "" || lower === hooks || lower.startsWith(`${hooks}/`))))) {
+	const hooks = config.hooksPath === undefined ? undefined : foldPath(config.hooksPath);
+	if (inside && (GIT_HOOKS.test(lower) || (hooks !== undefined && (hooks === "" || lower === hooks || lower.startsWith(`${hooks}/`))))) {
 		return { action: "confirm", reason: `${path} is a git hook; its code runs on every commit or push. Show the user the change first.` };
 	}
-	if (inside && CI_PIPELINE.test(rel)) {
+	if (inside && CI_PIPELINE.test(lower)) {
 		return { action: "confirm", reason: `${path} is a CI/release pipeline; it runs with repository credentials. Show the user the design before editing it.` };
 	}
 	if (!inside) return { action: "confirm", reason: `${path} is outside the project directory.` };
@@ -181,25 +190,23 @@ export function checkPath(tool: "read" | "write" | "edit", path: string, cwd: st
 
 /**
  * `-c core.hooksPath=…` or `--config-env core.hooksPath=…` among git's own options (before the subcommand): it skips or
- * replaces the hooks for that call. Git by a path counts, and so does a command word git may hide behind (`$G -c …`).
+ * replaces the hooks for that call. Read after git in any position (behind any wrapper, `find -exec`, a group) and after
+ * a word that isn't literal (`$G`, `$SUDO`), which may be git; `git grep -c core.hooksPath` passes a subcommand first.
  */
 function overridesHooksPath(tokens: string[]): boolean {
 	const raw = tokens.map(unwrapToken);
-	const sets = (from: number, to: number) => {
-		for (let i = from; i < to; i++) {
-			const t = raw[i]!;
-			const setting = t === "-c" || t === "--config-env" ? raw[i + 1] : /^-c./.test(t) ? t.slice(2) : t.startsWith("--config-env=") ? t.slice("--config-env=".length) : undefined;
-			if (setting !== undefined && setting.split("=")[0]!.toLowerCase() === "core.hookspath") return true;
+	const sets = (i: number) => {
+		const t = raw[i]!;
+		const setting = t === "-c" || t === "--config-env" ? raw[i + 1] : /^-c./.test(t) ? t.slice(2) : t.startsWith("--config-env=") ? t.slice("--config-env=".length) : undefined;
+		return setting !== undefined && setting.split("=")[0]!.toLowerCase() === "core.hookspath";
+	};
+	return raw.some((t, at) => {
+		if (!gitLike(t) && !/[$`]/.test(tokens[at]!)) return false;
+		for (let i = at + 1; i < raw.length && raw[i]!.startsWith("-"); i += GIT_VALUE_OPTIONS.has(raw[i]!) ? 2 : 1) {
+			if (sets(i)) return true;
 		}
 		return false;
-	};
-	if (parseGitCalls(tokens).some((call) => sets(call.at + 1, call.v))) return true;
-	// A command word that isn't literal (`$G`, `` `which git` ``): its leading options are read as git's.
-	const head = raw.findIndex((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
-	if (head === -1 || !/[$`]/.test(tokens[head]!)) return false;
-	let end = head + 1;
-	while (end < raw.length && raw[end]!.startsWith("-")) end += raw[end] === "-c" || raw[end] === "--config-env" ? 2 : 1;
-	return sets(head + 1, end);
+	});
 }
 
 const WRITE_PATH = String.raw`(?<target>[A-Za-z0-9_./~@+-]+)`;
@@ -508,6 +515,8 @@ const COMMAND_KEY = new RegExp(`^(${COMMAND_KEYS})`);
 /** Values of a command key that run nothing of interest. */
 const HARMLESS_COMMAND = /^(|cat|true|:)$/;
 const WATCHED_CONFIG = new RegExp(`^((remote|url|push|branch|alias|include|includeif)[.]|${EXEC_KEYS})`);
+/** The sections WATCHED_CONFIG's keys live in: removing or renaming one drops or plants such a key. */
+const WATCHED_SECTIONS = new Set(["remote", "url", "push", "branch", "alias", "include", "includeif", "core", "sequence", "diff", "gpg", "filter", "pager", "merge", "difftool", "mergetool", "submodule", "credential", "http"]);
 
 /** Words that run the command after them, so a git token behind one is a git call. */
 const WRAPPERS = new Set(["xargs", "parallel", "env", "command", "exec", "nice", "nohup", "time", "timeout", "strace", "script", "sudo", "stdbuf", "flock", "ionice", "taskset", "chrt", "setsid", "unbuffer", "doas"]);
@@ -730,7 +739,7 @@ function checkPushSetup(segments: string[][], command: string): GuardDecision | 
 				if (args.some((t) => t === "-e" || t === "--edit")) return setup;
 				// Removing or renaming a section drops every key in it (`--remove-section core` unsets core.hooksPath).
 				const sections = ["--remove-section", "--rename-section", "remove-section", "rename-section"];
-				if (args.some((t) => sections.includes(t)) && args.some((t) => !t.startsWith("-") && !sections.includes(t) && (t === "core" || WATCHED_CONFIG.test(`${t}.`)))) return setup;
+				if (args.some((t) => sections.includes(t)) && args.some((t) => !t.startsWith("-") && !sections.includes(t) && WATCHED_SECTIONS.has(t.split(".")[0]!))) return setup;
 				if (args.some((t) => ["--get", "--list", "-l", "--get-all", "--get-regexp"].includes(t))) continue;
 				// `git config get|list` (git 2.46+) read like --get/--list.
 				const verb = args.find((t) => !t.startsWith("-"));

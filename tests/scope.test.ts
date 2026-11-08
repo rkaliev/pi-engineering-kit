@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { slowGit } from "./slow-git.ts";
@@ -356,13 +356,32 @@ test("hooksPaths: the reads share one budget, so hanging repositories can't hold
 	const ws = temp("hooks-ws-");
 	const names = ["a", "b", "c", "d"];
 	for (const name of names) gitRepo(join(ws, name), "h");
-	// Every repository hangs; with a timeout per read only, four reads would take four times as long at least.
 	const slow = names.map((name) => slowGit(realpathSync(join(ws, name)), "", 10));
-	const started = Date.now();
+	const status = { complete: true };
+	let calls: string[] = [];
 	try {
-		assert.deepEqual(hooksPaths(ws, 1000), {});
+		assert.deepEqual(hooksPaths(ws, 1000, status), {});
+		calls = slow.map((s) => readFileSync(s.log, "utf8"));
 	} finally {
-		for (const s of slow.reverse()) s.restore();
+		for (const s of [...slow].reverse()) s.restore();
 	}
-	assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms, past the 1000 ms budget`);
+	// The first read used the whole budget: the others were never started, and the result says it is incomplete.
+	assert.notEqual(calls[0], "", "a was read");
+	assert.deepEqual(calls.slice(1), ["", "", ""], "b, c and d were skipped");
+	assert.equal(status.complete, false);
+});
+
+test("hooksPaths: one hanging repository gets at most a second, so the others are still read", () => {
+	const ws = temp("hooks-ws-");
+	for (const name of ["a", "b", "c"]) gitRepo(join(ws, name), "h");
+	const slow = slowGit(realpathSync(join(ws, "a")), "", 10);
+	const status = { complete: true };
+	let found: Record<string, string> = {};
+	try {
+		found = hooksPaths(ws, 3000, status);
+	} finally {
+		slow.restore();
+	}
+	assert.deepEqual(found, { [join(ws, "b")]: "h", [join(ws, "c")]: "h" });
+	assert.equal(status.complete, false, "a's read timed out");
 });

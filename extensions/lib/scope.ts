@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import { checkPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
+import { checkPath, foldPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
 import { canonical, placeIn, projectRepos, repoOf } from "./repos.ts";
 import { blankQuoted, segmentFolders } from "./shell.ts";
 
@@ -75,7 +75,7 @@ export function scopedPath(tool: "read" | "write" | "edit", path: string, scope:
 	// Outside git, a first-level folder's guard config is a repository's, or will be one after `git init`.
 	const rel = relative(scope.projectDir, resolve(path)).replaceAll("\\", "/");
 	const slash = rel.indexOf("/");
-	if (tool === "read" || scope.kind === "repo" || slash <= 0 || rel.startsWith("../") || rel.slice(slash + 1).toLowerCase() !== scope.guardFile) return placed;
+	if (tool === "read" || scope.kind === "repo" || slash <= 0 || rel.startsWith("../") || foldPath(rel.slice(slash + 1)) !== scope.guardFile) return placed;
 	return strictest(placed, { action: "confirm", reason: `${path} is the guard config of ${rel.slice(0, slash)}: it decides what the guard blocks there. Loosening it is the user's call; show them the change first.` });
 }
 
@@ -207,26 +207,39 @@ function configHash(file: string): string | null {
  * root as `guardScope` names it and relative to it (`""` for the root itself). A folder outside that root, an unset key
  * or a git that fails adds nothing: the known hook paths still ask (lib/patterns.ts).
  */
-export function hooksPaths(projectDir: string, budgetMs = HOOKS_BUDGET_MS): Record<string, string> {
+export function hooksPaths(projectDir: string, budgetMs = HOOKS_BUDGET_MS, status?: { complete: boolean }): Record<string, string> {
 	const deadline = Date.now() + budgetMs;
 	const found = projectRepos(projectDir);
 	const roots = found.kind === "repo" ? [projectDir] : found.kind === "workspace" ? found.repos.map((name) => join(projectDir, name)) : [];
 	const paths: Record<string, string> = {};
+	// A read that timed out or couldn't run, or a repository left unread: the map is incomplete, and the caller may read again.
+	const missed = () => {
+		if (status) status.complete = false;
+	};
 	for (const root of roots) {
+		if (Date.now() >= deadline) {
+			missed();
+			break;
+		}
 		try {
-			const git = (...args: string[]) => spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: Math.max(1, deadline - Date.now()) });
-			if (Date.now() >= deadline) break;
+			// One hanging repository takes at most HOOKS_CALL_MS of the budget, so the others are still read.
+			const git = (...args: string[]) => spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: Math.max(1, Math.min(HOOKS_CALL_MS, deadline - Date.now())) });
 			const value = git("config", "--type=path", "--get", "core.hooksPath");
+			if (value.error) missed();
 			if (value.status !== 0 || value.stdout.trim() === "") continue;
 			// Git resolves a relative hooks path from the top of the working tree (a workspace repository's root is its top).
 			const top = found.kind === "workspace" ? root : git("rev-parse", "--show-toplevel").stdout?.trim();
-			if (!top) continue;
+			if (!top) {
+				missed();
+				continue;
+			}
 			// The guard measures from the root it is given, by real paths; a folder outside it adds nothing.
 			const rel = relative(canonical(root), canonical(resolve(top, value.stdout.trim()))).replaceAll("\\", "/");
 			if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) continue;
 			paths[root] = rel;
 		} catch {
 			// an unreadable repository adds nothing: the known hook paths still ask
+			missed();
 		}
 	}
 	return paths;
@@ -234,3 +247,5 @@ export function hooksPaths(projectDir: string, budgetMs = HOOKS_BUDGET_MS): Reco
 
 /** All `core.hooksPath` reads of one session start share this budget (the SessionStart hook times out at 10 s). */
 const HOOKS_BUDGET_MS = 3000;
+/** The longest one `core.hooksPath` read may take of that budget. */
+const HOOKS_CALL_MS = 1000;

@@ -251,6 +251,41 @@ test("paths: every lefthook config name asks", () => {
 	assert.equal(checkPath("write", "docs/lefthook.toml", cwd, none).action, "allow");
 });
 
+test("paths: a letter the file system folds is folded before every rule, also in a name that doesn't exist yet", () => {
+	// U+017F (long s) and U+212A (Kelvin sign) open the ASCII names on APFS and NTFS.
+	for (const path of [".pi/guard.j\u017fon", ".githook\u017f/pre-commit", "lefthoo\u212a.yml", ".github/workflow\u017f/ci.yml"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("write", "tool\u017f/hooks/x", cwd, { hooksPath: "tools/hooks" }).action, "confirm");
+	for (const path of ["/tmp/eng-kit/run\u017f/x.json", "/tmp/eng-kit/review\u017f/h/x.json"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "block", path);
+	}
+});
+
+test("git -c core.hooksPath blocks behind any wrapper or group, and after a variable in any position", () => {
+	for (const cmd of [
+		"caffeinate git -c core.hooksPath=/dev/null commit -m x",
+		"find . -exec git -c core.hooksPath=/dev/null commit -m x \\;",
+		"$SUDO git -c core.hooksPath=x commit -m x",
+		"{ $G -c core.hooksPath=x commit -m x; }",
+		"env $G -c core.hooksPath=x commit -m x",
+		"time $G -c core.hooksPath=x commit -m x",
+		"$G -C . -c core.hooksPath=x commit -m x",
+	]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["git grep -c core.hooksPath", "echo $HOME -c x", "caffeinate git commit -m x"]) {
+		assert.notEqual(action(cmd), "block", cmd);
+	}
+});
+
+test("git config renaming or removing a section that holds a watched key asks, whatever the key needs after it", () => {
+	for (const cmd of ["git config --rename-section x credential", "git config --rename-section x gpg", "git config --remove-section credential", "git config --rename-section x sequence", "git config --rename-section x diff.tool", "git config --rename-section x submodule.m"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git config --rename-section old user"), "allow");
+});
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");

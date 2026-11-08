@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
@@ -699,22 +699,23 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		// zsh's `>!` loses only its `>` to the tokens.
 		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
 		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
+		// Each word where it really leads: `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` expanded, symlinks resolved.
+		const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
 		// On macOS and Windows a path in any letter case, or with a letter the file system folds, opens the same folder:
-		// compare lowercased, as written and by the real path.
-		const folded = [...paths, ...dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")))].map((p) => p.toLowerCase());
-		const under = (roots: string[]) => folded.some((p) => roots.some((r) => p === r.toLowerCase() || p.startsWith(`${r.toLowerCase()}/`)));
-		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/i.test(p)));
+		// compare folded (foldPath), as written and by the real path.
+		const folded = [...paths, ...real].map(foldPath);
+		const under = (roots: string[]) => folded.some((p) => roots.map(foldPath).some((r) => p === r || p.startsWith(`${r}/`)));
+		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?tmpdir\}?\/*eng-kit\/reviews(\/|$)/.test(foldPath(p))));
 		if (named || under(records)) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/runs(\/|$)/i.test(p)));
+		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?tmpdir\}?\/*eng-kit\/runs(\/|$)/.test(foldPath(p))));
 		if (namedRuns || under(runRecords)) {
 			return { action: "block", reason: "Verify-run records are written only by the verify script. Run it instead." };
 		}
 		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
 		// `$CLAUDE_PLUGIN_DATA` word; a parent folder only when the command removes or moves it.
 		if (state.length > 0) {
-			const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
 			const shallow = new Set(["/", homedir(), tmpdir(), canonical(tmpdir())].map((p) => p.replaceAll("\\", "/")));
 			const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
 			const removes = ["rm", "rmdir", "mv", "unlink"].includes(head.slice(head.lastIndexOf("/") + 1));
@@ -722,7 +723,8 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 				return { action: "block", reason: "The kit's session state is written only by its hooks." };
 			}
 		}
-		if (folded.includes(config.toLowerCase()) || tokens.some((t) => t.toLowerCase().endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
+		const childConfigs = () => [...paths.map((p) => [projectDir, p]), ...real.map((p) => [canonical(projectDir), p])].some(([dir, p]) => childConfig(dir!, p!, guardConfig));
+		if (folded.includes(foldPath(config)) || tokens.some((t) => foldPath(t).endsWith(guardConfig)) || (children && childConfigs())) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
 		if (unknown) {
@@ -747,7 +749,7 @@ function expandHome(word: string): string {
 function childConfig(projectDir: string, path: string, guardConfig: string): boolean {
 	const rel = relative(projectDir, path).replaceAll("\\", "/");
 	const slash = rel.indexOf("/");
-	return slash > 0 && !rel.startsWith("../") && rel.slice(slash + 1) === guardConfig;
+	return slash > 0 && !rel.startsWith("../") && foldPath(rel.slice(slash + 1)) === guardConfig;
 }
 
 function isSafe(tokens: string[], verify: string[]): boolean {
