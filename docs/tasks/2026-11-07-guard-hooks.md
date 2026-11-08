@@ -194,10 +194,10 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 
 **Files:** Modify the files in Post-implementation · Create a live-check script in the session scratchpad only
 
-- [ ] Live check: temp git repo with `.husky/` and the branch's kit via `claude -p --plugin-dir src_claude` (installed eng-kit disabled): a prompt to edit `.husky/pre-commit` is refused with the git-hook reason and the file is unchanged; a prompt to run `cat > "$TMPDIR/eng-kit/runs/x.json"` is refused with the verify-script reason. Record both outputs in Progress
-- [ ] Update every file in Post-implementation; bump both editions to 0.37.0
-- [ ] Run the kit verify script from the workspace root → expect all four commands PASS; `node tools/compare-editions.mts` → no new drift
-- [ ] Commit `docs: guard closes case, git-hook and run-record bypasses (0.37.0)` in each repo
+- [x] Live check: temp git repo with `.husky/` and the branch's kit via `claude -p --plugin-dir src_claude` (installed eng-kit disabled): a prompt to edit `.husky/pre-commit` is refused with the git-hook reason and the file is unchanged; a prompt to run `cat > "$TMPDIR/eng-kit/runs/x.json"` is refused with the verify-script reason. Record both outputs in Progress
+- [x] Update every file in Post-implementation; bump both editions to 0.37.0
+- [x] Run the kit verify script from the workspace root → expect all four commands PASS; `node tools/compare-editions.mts` → no new drift
+- [x] Commit `docs: guard closes case, git-hook and run-record bypasses (0.37.0)` in each repo
 
 ## Progress
 
@@ -214,3 +214,6 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Task 6: complete (pi only; kit verify script → all 4 checks PASS; RED seen: 2 tests `actual '', expected /git hook/`).
 - Flakes during Task 6: two full verify runs failed in pi on timing tests ("…share one deadline…" and "…late twice running…"); pi suite alone on the branch 1 of 4 red (the deadline test), on main 0 of 4 (plus the baseline run, red on main code). Neither test reaches the new code: the deadline test's `tool_result` path takes no record, and the other loads only the verify extension. Treated as the known load-sensitive family (§11.45, §11.47 follow-ups), not fixed here.
 - Task 7: complete (patterns.ts and reviews.ts in both editions, reviews.ts byte-identical; owner check in Claude state.ts; kit verify script → all 4 checks PASS, including the existing foreground and background verify-credit cases (criterion 8); RED seen: `expected 'block', actual 'allow'` (path), `actual undefined` (shell), `expected undefined` (owner)). Found on the way: a first name `runs` was shadowed by the loop's boolean `runs` in `checkGateFiles` and broke every shell check; renamed `runRecords` before committing.
+- Live check (claude 2.1.318, `--plugin-dir src_claude`, installed eng-kit disabled by project settings, temp repos): `core.hooksPath tools/hooks` → Edit of `tools/hooks/pre-commit` refused in `-p` with "Guard: … is a git hook; its code runs on every commit or push…", file unchanged; control without the setting → file edited; `echo '{}' > "$TMPDIR/eng-kit/runs/live-check.json"` → "Guard: Verify-run records are written only by the verify script. Run it instead.", nothing written.
+- Ruling: criterion 9's `.husky/pre-commit` step was refused by Claude Code itself ("… which is a sensitive file") before the hook ran, so it can't show the guard's ask live; the hooksPath folder (not sensitive to Claude Code) with a control run stands in for it, and the `.husky` rule stays covered by unit tests — cost if wrong: none for Claude users (two layers), pi relies on the unit tests.
+- Task 8: complete (0.37.0 in both editions, CHANGELOG, README, ARCHITECTURE(.ru), pi install pins, workspace FRAMEWORK-SOURCES §11.48; compare-editions: no new drift, branch touched no skills; kit verify script → all 4 checks PASS)

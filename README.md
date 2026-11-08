@@ -43,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.35.1
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.37.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.35.1
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.37.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -82,15 +82,15 @@ Small, bounded changes need no task file: they stay in chat, e.g. `/implement ma
 
 | Blocks | Asks first (blocked in non-interactive modes) |
 |---|---|
-| `--no-verify` and its abbreviations down to `--no-veri` (also inside groups and substitutions), `git commit -n` | `git push` other than your own work branch (below), publish and release commands |
+| `--no-verify` and its abbreviations down to `--no-veri` (also inside groups and substitutions), `git commit -n`, `git -c core.hooksPath=…` (or `--config-env`) | `git push` other than your own work branch (below), publish and release commands |
 | `push --force` / `-f` / `+ref` / `--mirror` | deploys, `terraform apply`, `kubectl apply`, `helm upgrade` |
 | recursive `rm` outside the project (`/`, `~`, `$HOME`, `..`, other absolute paths) | DB migrations and rollbacks, `prisma db execute`, `DROP` / `TRUNCATE` |
 | reading `.env*`, keys, keystores and credential files | `git reset --hard`, `git clean -f`, `branch -D`, `sudo`/`doas`, `curl … \| sh` |
-| writing into `.git/` and `protectedPaths` | shell access to secret files; writes outside the project |
-| `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines |
+| writing into `.git/` and `protectedPaths`; path rules ignore letter case (`.GIT/config` is `.git/config` on macOS and Windows) | shell access to secret files; writes outside the project |
+| `gh pr create/merge`, `glab mr create/merge`, merging into or pushing to the base branch while a task file is tracked; committing it on the base branch | editing CI and release pipelines, and git hooks: `.husky/`, `.githooks/`, lefthook and pre-commit configs, and the folder `core.hooksPath` named when the session started |
 | writing into the review records | `gh pr create`, `glab mr create`, merging into or pushing to the base branch and pushing to a PR branch the agent opened, without a reviewer `Yes` for the commit being landed or chained after anything but read-only steps and the project's verification commands (review gate); every PR/MR merge (`gh pr merge`, `glab mr merge`), even after a `Yes`; editing `.pi/guard.json` (edit/write, or a shell command naming it) |
 
-**What the guard reads:** a command that, as a whole, only writes a file through a quoted heredoc (`cat > file <<'EOF'`, `cat >> file`, `tee [-a] file`, then the body and the delimiter as the last line) into a file inside the project is judged by its first line, since writing the file runs nothing in it, and its target is judged as a Write to it would be (`.git/` is blocked; CI pipelines, the guard config and secret files ask). A program fed to `python`, `python3` or `node` (optionally `-`) the same way, with nothing else in the command and no backtick in it, is code, not shell: the blocks for a recursive delete outside the project, `--no-verify` and a force push read only its first line, so a comment or string that looks like one no longer blocks. The questions still match the program's text as they match a shell command, so a push, `npm publish`, `DROP TABLE`, `sudo` or a secret file written out as its own words still asks; what the code does by itself (`open('.env')`, `['npm', 'publish']`, `shutil.rmtree`) is not seen, as with an interpreter one-liner. A target elsewhere (`~/.zshrc`), every other heredoc, an unquoted delimiter, a `$` in the path, a carriage return or anything after the delimiter is judged whole. In a recursive `rm`, `/dev/null` left by `2>/dev/null` isn't a path to delete. Your own `block`, `confirm` and `allow` patterns still match the whole command.
+**What the guard reads:** a command that, as a whole, only writes a file through a quoted heredoc (`cat > file <<'EOF'`, `cat >> file`, `tee [-a] file`, then the body and the delimiter as the last line) into a file inside the project is judged by its first line, since writing the file runs nothing in it, and its target is judged as a Write to it would be (`.git/` is blocked; CI pipelines, git hooks, the guard config and secret files ask). A program fed to `python`, `python3` or `node` (optionally `-`) the same way, with nothing else in the command and no backtick in it, is code, not shell: the blocks for a recursive delete outside the project, `--no-verify` and a force push read only its first line, so a comment or string that looks like one no longer blocks. The questions still match the program's text as they match a shell command, so a push, `npm publish`, `DROP TABLE`, `sudo` or a secret file written out as its own words still asks; what the code does by itself (`open('.env')`, `['npm', 'publish']`, `shutil.rmtree`) is not seen, as with an interpreter one-liner. A target elsewhere (`~/.zshrc`), every other heredoc, an unquoted delimiter, a `$` in the path, a carriage return or anything after the delimiter is judged whole. In a recursive `rm`, `/dev/null` left by `2>/dev/null` isn't a path to delete. Your own `block`, `confirm` and `allow` patterns still match the whole command.
 
 `.pi/guard.json` has six keys: `block`, `confirm`, `allow` (regex sources), `protectedPaths` (path prefixes), `workDocs` (the task-file folders, default `["docs/tasks"]`; `[]` turns that rule off) and `reviewGate` (`false` turns the review gate off). `allow` only relaxes confirmation, never a block. `allow`, `workDocs` and `reviewGate` apply only in trusted projects.
 

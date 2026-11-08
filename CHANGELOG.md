@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.37.0
+
+- **Path rules ignore letter case.** On macOS and Windows `.GIT/config` is `.git/config`, so a capital letter got past the `.git/` block, the CI pipeline and guard-config questions, the secret-file rules and `protectedPaths`. Every path rule now ignores case on every OS (a real `.GIT` folder on Linux is treated as `.git`); this only widens what is protected.
+- **Editing a git hook asks.** A hook's code runs on the user's machine at every commit or push, so a Write or Edit (or a quoted-heredoc write) of `.husky/…`, `.githooks/…`, `lefthook.yml`/`.yaml` (also `.lefthook.*` and `lefthook-local.*`) or `.pre-commit-config.yaml` asks, as CI pipelines do. So does a write under the folder `core.hooksPath` names, read for each repository once, when the baseline record is taken (a child pi process takes its parent's; its own checkout is read once), and measured from the session folder (a folder outside it adds nothing; a git that fails leaves the known paths). `git config` changes to `core.hooksPath` already asked; `git -c core.hooksPath=…` and `--config-env core.hooksPath=…`, which skip or replace the hooks for one call, are now blocked like `--no-verify`.
+- **Docs:** README and ARCHITECTURE describe the new rules. The install pins move to v0.37.0 (0.36.0 changed only the Claude edition).
+
 ## 0.35.1
 
 - **Docs for people are in English by default.** using-skills' language line read "docs for people the user requests in their language", which could pass for any doc meant for people. It now says the agent talks in the user's language and writes files in English, docs for people included; a doc for people is in another language only when the user explicitly asks for one. publishing-documents says the same for a report or proposal and its `lang`, and ARCHITECTURE's principle 6 is reworded to match. The install pins move to v0.35.1.
