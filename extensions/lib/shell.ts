@@ -522,7 +522,9 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
 		const at = commandIndex(words);
-		for (let i = at + 1; dir !== undefined && at !== -1 && commandName(words[at]!) === "git" && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
+		// git as a bare word or a path from the root or `./` (as gitLike reads it): `tools/git` may be anything.
+		const git = at !== -1 && commandName(words[at]!) === "git" && (!words[at]!.includes("/") || /^(\/|\.\/)/.test(words[at]!));
+		for (let i = at + 1; dir !== undefined && git && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
 			if (words[i] === "-C") dir = follow(dir, words[i + 1]);
 		}
 		return { raw, dir, move: shell.move(raw, alone, before) !== undefined };

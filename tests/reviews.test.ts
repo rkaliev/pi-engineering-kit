@@ -1407,6 +1407,7 @@ test("segmentFolders: git and env in any case, builtins as written", () => {
 	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
 	assert.equal(segmentFolders("GIT -C b status", ws)[0]!.dir, join(ws, "b"));
 	assert.equal(segmentFolders("/usr/bin/GIT -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("tools/git -C b status", ws)[0]!.dir, ws, "a relative path to a program named git is not git, as gitLike says");
 	for (const command of ["ENV -C b git push", "npm run x GIT -C b", 'BASH -c "cd b"', "GIT --git-dir=b/.git log"]) {
 		assert.equal(segmentFolders(command, ws)[0]!.dir, undefined, command);
 	}
