@@ -305,6 +305,54 @@ test("guard: without a session_start, the baseline is the folder at the first ch
 	assert.equal((await emit("tool_call", { toolName: "bash", input: { command: "git -C c push" } }, ctx(dir, { confirm: false })))?.block, true);
 });
 
+/** A pi write of `file` under `dir`, refused at its question: what the guard asked, if anything. */
+async function writeAsks(emit: ReturnType<typeof fakePi>["emit"], dir: string, cwd: string, file: string): Promise<string | undefined> {
+	const c = ctx(cwd, { confirm: false });
+	await emit("tool_call", { toolName: "write", input: { path: join(dir, file), content: "x" } }, c);
+	return c.asked[0];
+}
+
+test("guard: the hooks folder a repository configures asks, as the session read it at its start", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const dir = project({});
+	execFileSync("git", ["init", "-q"], { cwd: dir });
+	execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: dir });
+	await emit("session_start", { reason: "startup" }, ctx(dir));
+	assert.match((await writeAsks(emit, dir, dir, "tools/hooks/pre-commit")) ?? "", /git hook/);
+	execFileSync("git", ["config", "core.hooksPath", "other"], { cwd: dir });
+	assert.equal(await writeAsks(emit, dir, dir, "other/pre-commit"), undefined, "read once, at the start");
+});
+
+test("guard: a child keeps its parent's hooks folders; an older parent's record without them reads as none", async () => {
+	const saved = process.env.ENG_KIT_GUARD_BASELINE;
+	delete process.env.ENG_KIT_GUARD_BASELINE;
+	try {
+		const dir = project({});
+		execFileSync("git", ["init", "-q"], { cwd: dir });
+		execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: dir });
+		const parent = fakePi();
+		guard(parent.pi);
+		await parent.emit("session_start", { reason: "startup" }, ctx(dir));
+		execFileSync("git", ["config", "--unset", "core.hooksPath"], { cwd: dir });
+		const child = fakePi();
+		guard(child.pi);
+		await child.emit("session_start", { reason: "startup" }, ctx(dir));
+		assert.match((await writeAsks(child.emit, dir, dir, "tools/hooks/pre-commit")) ?? "", /git hook/, "the parent's record");
+
+		const { dir: ws, git } = workspaceProject({});
+		git("a", "config", "core.hooksPath", "h");
+		process.env.ENG_KIT_GUARD_BASELINE = JSON.stringify({ cwd: ws, trusted: true, baseline: {} });
+		const older = fakePi();
+		guard(older.pi);
+		await older.emit("session_start", { reason: "startup" }, ctx(join(ws, "a")));
+		assert.match((await writeAsks(older.emit, join(ws, "a"), join(ws, "a"), "h/pre-commit")) ?? "", /git hook/, "its own checkout's folder");
+	} finally {
+		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
+		else process.env.ENG_KIT_GUARD_BASELINE = saved;
+	}
+});
+
 test("guard: a child pi process in the same folder takes its parent's baseline", async () => {
 	const { dir } = workspaceProject();
 	const saved = process.env.ENG_KIT_GUARD_BASELINE;

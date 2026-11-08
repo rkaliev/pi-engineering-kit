@@ -172,12 +172,12 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 **Files:** Modify `src/extensions/guard.ts` · Test `src/tests/extensions.test.ts`
 **Interfaces:** Consumes `hooksPaths` (Task 4) · Produces `BaselineRecord.hooks: Record<string, string>`
 
-- [ ] Write failing test `guard: the hooks folder a repository configures asks, from the session start`: as in Task 5 through `session_start` and a `write` `tool_call` (headless ctx → blocked with "Needs human confirmation"); a later config change is not seen
-- [ ] Write failing test `guard: a child keeps its parent's hooks folders; an older parent's record without them reads as none`: `ENG_KIT_GUARD_BASELINE` with `hooks` → child asks for that folder; a record without `hooks` → the child still starts and a write under the configured folder of its own checkout asks (the own-checkout judgement reads `hooksPaths(top)` once per `top`)
-- [ ] Run `npm test --prefix src` → expect FAIL: `expected block, actual undefined`
-- [ ] `take()` adds `hooks: hooksPaths(ctx.cwd)` to a new record; `inherited()` accepts a record without `hooks` as `{}`; `judge()` receives the hooks map and wraps `loadConfig` as in Task 5; the own-checkout call uses a `Map<string, Record<string,string>>` memo of `hooksPaths(top)`
-- [ ] Run → expect PASS
-- [ ] Commit `feat(guard): the session's hooks folders ask (pi)`
+- [x] Write failing test `guard: the hooks folder a repository configures asks, from the session start`: as in Task 5 through `session_start` and a `write` `tool_call` (headless ctx → blocked with "Needs human confirmation"); a later config change is not seen
+- [x] Write failing test `guard: a child keeps its parent's hooks folders; an older parent's record without them reads as none`: `ENG_KIT_GUARD_BASELINE` with `hooks` → child asks for that folder; a record without `hooks` → the child still starts and a write under the configured folder of its own checkout asks (the own-checkout judgement reads `hooksPaths(top)` once per `top`)
+- [x] Run `npm test --prefix src` → expect FAIL: `expected block, actual undefined`
+- [x] `take()` adds `hooks: hooksPaths(ctx.cwd)` to a new record; `inherited()` accepts a record without `hooks` as `{}`; `judge()` receives the hooks map and wraps `loadConfig` as in Task 5; the own-checkout call uses a `Map<string, Record<string,string>>` memo of `hooksPaths(top)`
+- [x] Run → expect PASS
+- [x] Commit `feat(guard): the session's hooks folders ask (pi)`
 
 ### Task 7: run records protected like review records (criteria 6, 7, 8)
 
@@ -211,3 +211,5 @@ None beyond the release: branch `feat/guard-hooks` in both repos, 0.37.0, PRs op
 - Ruling: `hooksPaths` measures the hooks folder from the session folder, not the repository top (git resolves a relative `core.hooksPath` from the top; `checkPath` measures from the session folder), so a session started in a subfolder gets the folder relative to it, and one above the session folder counts as outside — the description's "relative to the root" read for a session in a subfolder — cost if wrong: a hooks folder above a subfolder session goes unprotected by path, still covered by the known list and the `git config` ask. Real paths are compared, via the nearest existing folder (a hooks folder not made yet).
 - Task 4: complete (scope.ts byte-identical; kit verify script → all 4 checks PASS; RED seen: `actual {}` for the configured repo; the failing-git test passed on the stub, was rewritten to reach the config read (a workspace, found without git), and then caught the mutation `throw value.error`)
 - Task 5: complete (eng-kit only; kit verify script → all 4 checks PASS; RED seen: 3 tests `actual undefined, expected 'ask'`). Only the PreToolUse `guardScope` call gets the hooks folders; the Stop one reads task-file folders only.
+- Task 6: complete (pi only; kit verify script → all 4 checks PASS; RED seen: 2 tests `actual '', expected /git hook/`).
+- Flakes during Task 6: two full verify runs failed in pi on timing tests ("…share one deadline…" and "…late twice running…"); pi suite alone on the branch 1 of 4 red (the deadline test), on main 0 of 4 (plus the baseline run, red on main code). Neither test reaches the new code: the deadline test's `tool_result` path takes no record, and the other loads only the verify extension. Treated as the known load-sensitive family (§11.45, §11.47 follow-ups), not fixed here.
