@@ -188,7 +188,7 @@ test("paths: every path rule ignores case, as macOS and Windows file systems do"
 	}
 	assert.equal(checkPath("read", ".ENV", cwd, none).action, "block");
 	assert.equal(checkPath("read", "keys/ID_RSA", cwd, none).action, "block");
-	assert.equal(checkPath("read", ".env.EXAMPLE", cwd, none).action, "allow");
+	assert.equal(checkPath("read", ".env.EXAMPLE", cwd, none).action, "block", "only the lowercase example names are exempt, as before 0.37.0");
 	assert.equal(checkPath("write", "INFRA/main.tf", cwd, { protectedPaths: ["infra/"] }).action, "block");
 });
 
@@ -226,6 +226,29 @@ test("paths: verify-run records are written only by the verify script", () => {
 		assert.equal(decision.action, "block", path);
 		assert.match(String(decision.reason), /verify script/, path);
 	}
+});
+
+test("git -c core.hooksPath blocks only as git's own option, for git by path or a variable too", () => {
+	for (const cmd of ["/usr/bin/git -c core.hooksPath=/dev/null commit -m x", "G=git; $G -c core.hooksPath=x commit -m x", "git -C sub -c core.hooksPath=x commit -m x"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["git grep -c core.hooksPath", "git log -S core.hooksPath -c", "bash -c 'echo core.hooksPath=x'"]) {
+		assert.notEqual(action(cmd), "block", cmd);
+	}
+});
+
+test("git config removing or renaming a watched section asks", () => {
+	for (const cmd of ["git config --remove-section core", "git config --rename-section core x", "git config remove-section core", "git config rename-section core x", "git config --local --remove-section remote.origin", "git config --remove-section CORE"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("git config --remove-section user"), "allow");
+});
+
+test("paths: every lefthook config name asks", () => {
+	for (const path of ["lefthook.toml", ".lefthook.json", "lefthook.jsonc", ".lefthook.toml", "lefthook-local.json", ".config/lefthook.yml", ".config/lefthook-local.toml"]) {
+		assert.equal(checkPath("write", path, cwd, none).action, "confirm", path);
+	}
+	assert.equal(checkPath("write", "docs/lefthook.toml", cwd, none).action, "allow");
 });
 
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).

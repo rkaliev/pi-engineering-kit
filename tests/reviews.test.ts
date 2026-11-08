@@ -952,6 +952,21 @@ test("gate files: shell writes to the verify-run records are blocked; reading th
 	assert.equal(check("cat $TMPDIR/eng-kit/runs/x.json"), undefined);
 });
 
+test("gate files: the records and the guard config are found in any letter case, as macOS and Windows open them", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action;
+	for (const write of [
+		"echo x > $TMPDIR/ENG-KIT/runs/x.json",
+		"echo x > ${TMPDIR}/eng-kit/RUNS/x.json",
+		`echo x > ${join(tmpdir(), "ENG-KIT", "Runs", "x.json")}`,
+		`echo x > ${join(tmpdir(), "Eng-Kit", "reviews", "h", "x.json")}`,
+		"echo x > $TMPDIR/eng-kit/REVIEWS/h/x.json",
+	]) {
+		assert.equal(check(write), "block", write);
+	}
+	assert.equal(check("echo '{}' > .CLAUDE/guard.json"), "confirm");
+});
+
 test("gate files: >| and >&file are writes too", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");

@@ -53,7 +53,7 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const inside = parent !== undefined && (parent.cwd === ctx.cwd || within(parent.cwd, ctx.cwd));
 			parentTrusted = parent?.trusted ?? true;
 			const trusted = ctx.isProjectTrusted() && parentTrusted;
-			record = inside ? parent : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)), hooks: hooksPaths(ctx.cwd) };
+			record = inside ? { ...parent, hooks: parent.hooks ?? hooksPaths(parent.cwd) } : { cwd: ctx.cwd, trusted, baseline: guardBaseline(ctx.cwd, GUARD_FILE, (root) => loadConfig(ctx, root, ctx.cwd, trusted)), hooks: hooksPaths(ctx.cwd) };
 			// A record of another folder stays for the processes this one starts: a grandchild back in the workspace keeps it.
 			if (!inside) process.env[BASELINE_ENV] = JSON.stringify(record);
 		}
@@ -264,12 +264,11 @@ interface BaselineRecord {
 	hooks: Record<string, string>;
 }
 
-/** The record a parent pi process left in the environment, if it has the right shape. */
-function inherited(): BaselineRecord | undefined {
+/** The record a parent pi process left in the environment, if it has the right shape; `hooks` is absent in one from before 0.37.0. */
+function inherited(): (Omit<BaselineRecord, "hooks"> & { hooks?: Record<string, string> }) | undefined {
 	try {
 		const parsed = JSON.parse(process.env[BASELINE_ENV] ?? "") as { cwd?: unknown; trusted?: unknown; baseline?: unknown; hooks?: unknown };
-		// A parent from before 0.37.0 left no hooks folders: none, as for a session that read none.
-		const hooks = parsed.hooks && typeof parsed.hooks === "object" && Object.values(parsed.hooks).every((v) => typeof v === "string") ? (parsed.hooks as Record<string, string>) : {};
+		const hooks = parsed.hooks && typeof parsed.hooks === "object" && Object.values(parsed.hooks).every((v) => typeof v === "string") ? (parsed.hooks as Record<string, string>) : undefined;
 		return typeof parsed.cwd === "string" && isGuardBaseline(parsed.baseline) ? { cwd: parsed.cwd, trusted: parsed.trusted === true, baseline: parsed.baseline, hooks } : undefined;
 	} catch {
 		return undefined;

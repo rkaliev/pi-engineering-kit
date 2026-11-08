@@ -699,12 +699,16 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		// zsh's `>!` loses only its `>` to the tokens.
 		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
 		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
-		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(p)));
-		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
+		// On macOS and Windows a path in any letter case, or with a letter the file system folds, opens the same folder:
+		// compare lowercased, as written and by the real path.
+		const folded = [...paths, ...dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")))].map((p) => p.toLowerCase());
+		const under = (roots: string[]) => folded.some((p) => roots.some((r) => p === r.toLowerCase() || p.startsWith(`${r.toLowerCase()}/`)));
+		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/i.test(p)));
+		if (named || under(records)) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
 		}
-		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/runs(\/|$)/.test(p)));
-		if (namedRuns || paths.some((p) => runRecords.some((r) => p === r || p.startsWith(`${r}/`)))) {
+		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/runs(\/|$)/i.test(p)));
+		if (namedRuns || under(runRecords)) {
 			return { action: "block", reason: "Verify-run records are written only by the verify script. Run it instead." };
 		}
 		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
@@ -718,7 +722,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 				return { action: "block", reason: "The kit's session state is written only by its hooks." };
 			}
 		}
-		if (paths.includes(config) || tokens.some((t) => t.endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
+		if (folded.includes(config.toLowerCase()) || tokens.some((t) => t.toLowerCase().endsWith(guardConfig)) || (children && paths.some((p) => childConfig(projectDir, p, guardConfig)))) {
 			ask ??= { action: "confirm", reason: `This command may change ${guardConfig}, which decides what the guard blocks. Loosening it is the user's call; show them the change first.` };
 		}
 		if (unknown) {

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { slowGit } from "./slow-git.ts";
 import test, { after } from "node:test";
 import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
 import { guardBaseline, guardScope, hooksPaths, scopedConfig, scopedPath, strictest } from "../extensions/lib/scope.ts";
@@ -303,4 +304,65 @@ test("hooksPaths: a git that can't run leaves nothing, without throwing", () => 
 	} finally {
 		process.env.PATH = saved;
 	}
+});
+
+test("scopedPath: outside a workspace too, a write is judged where it really leads: a symlink to a hook folder asks", () => {
+	const dir = temp("scope-real-");
+	mkdirSync(join(dir, ".husky"));
+	symlinkSync(".husky", join(dir, "h"));
+	mkdirSync(join(dir, "tools", "git-hooks"), { recursive: true });
+	symlinkSync(join("tools", "git-hooks"), join(dir, ".hooks"));
+	const scope = guardScope(dir, () => ({ hooksPath: "tools/git-hooks" }), ".claude/guard.json");
+	assert.equal(scopedPath("write", join(dir, "h", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(dir, ".hooks", "pre-commit"), scope).action, "confirm");
+	assert.equal(scopedPath("write", join(dir, "src.ts"), scope).action, "allow");
+});
+
+// APFS opens `.huſky` (long s, U+017F) as `.husky`; a file system that doesn't has nothing to bypass.
+const folds = (() => {
+	const dir = temp("scope-fold-");
+	mkdirSync(join(dir, ".husky"));
+	return existsSync(join(dir, ".hu\u017fky"));
+})();
+test("scopedPath: a letter the file system folds onto a protected name is judged by the name on disk", { skip: !folds && "platform: needs a file system that folds U+017F onto s (APFS)" }, () => {
+	const dir = temp("scope-fold-");
+	mkdirSync(join(dir, ".husky"));
+	const scope = guardScope(dir, () => ({}), ".claude/guard.json");
+	assert.equal(scopedPath("write", join(dir, ".hu\u017fky", "pre-commit"), scope).action, "confirm");
+});
+
+test("hooksPaths: a configured folder with a trailing slash, or reached through a symlink, is kept by its real path", () => {
+	const isolatedEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+	const saved = { ...process.env };
+	Object.assign(process.env, isolatedEnv);
+	try {
+		const slashed = gitRepo(join(temp("hooks-"), "r"), "tools/hooks/");
+		assert.deepEqual(hooksPaths(slashed), { [slashed]: "tools/hooks" });
+		const linked = gitRepo(join(temp("hooks-"), "r"), ".hooks");
+		mkdirSync(join(linked, "tools", "git-hooks"), { recursive: true });
+		symlinkSync(join("tools", "git-hooks"), join(linked, ".hooks"));
+		assert.deepEqual(hooksPaths(linked), { [linked]: "tools/git-hooks" });
+		const deep = gitRepo(join(temp("hooks-"), "r"), Array.from({ length: 12000 }, () => "a").join("/"));
+		assert.doesNotThrow(() => hooksPaths(deep), "a very deep folder that doesn't exist yet");
+	} finally {
+		for (const k of Object.keys(isolatedEnv)) {
+			if (saved[k] === undefined) delete process.env[k];
+			else process.env[k] = saved[k];
+		}
+	}
+});
+
+test("hooksPaths: the reads share one budget, so hanging repositories can't hold the session start past it", () => {
+	const ws = temp("hooks-ws-");
+	const names = ["a", "b", "c", "d"];
+	for (const name of names) gitRepo(join(ws, name), "h");
+	// Every repository hangs; with a timeout per read only, four reads would take four times as long at least.
+	const slow = names.map((name) => slowGit(realpathSync(join(ws, name)), "", 10));
+	const started = Date.now();
+	try {
+		assert.deepEqual(hooksPaths(ws, 1000), {});
+	} finally {
+		for (const s of slow.reverse()) s.restore();
+	}
+	assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms, past the 1000 ms budget`);
 });

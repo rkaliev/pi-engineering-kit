@@ -324,7 +324,7 @@ test("guard: the hooks folder a repository configures asks, as the session read 
 	assert.equal(await writeAsks(emit, dir, dir, "other/pre-commit"), undefined, "read once, at the start");
 });
 
-test("guard: a child keeps its parent's hooks folders; an older parent's record without them reads as none", async () => {
+test("guard: a child keeps its parent's hooks folders; an older parent's record without them keeps its trust, and the child reads the parent folder's hooks itself", async () => {
 	const saved = process.env.ENG_KIT_GUARD_BASELINE;
 	delete process.env.ENG_KIT_GUARD_BASELINE;
 	try {
@@ -340,17 +340,32 @@ test("guard: a child keeps its parent's hooks folders; an older parent's record 
 		await child.emit("session_start", { reason: "startup" }, ctx(dir));
 		assert.match((await writeAsks(child.emit, dir, dir, "tools/hooks/pre-commit")) ?? "", /git hook/, "the parent's record");
 
-		const { dir: ws, git } = workspaceProject({});
-		git("a", "config", "core.hooksPath", "h");
-		process.env.ENG_KIT_GUARD_BASELINE = JSON.stringify({ cwd: ws, trusted: true, baseline: {} });
+		// An older parent's record (no hooks): the child keeps it, its trust included, and reads the parent folder's hooks itself.
+		const old = project({ ".pi/guard.json": JSON.stringify({ allow: ["^npm publish"] }) });
+		execFileSync("git", ["init", "-q"], { cwd: old });
+		execFileSync("git", ["config", "core.hooksPath", "tools/hooks"], { cwd: old });
+		process.env.ENG_KIT_GUARD_BASELINE = JSON.stringify({ cwd: old, trusted: false, baseline: {} });
 		const older = fakePi();
 		guard(older.pi);
-		await older.emit("session_start", { reason: "startup" }, ctx(join(ws, "a")));
-		assert.match((await writeAsks(older.emit, join(ws, "a"), join(ws, "a"), "h/pre-commit")) ?? "", /git hook/, "its own checkout's folder");
+		await older.emit("session_start", { reason: "startup" }, ctx(old));
+		const publish = ctx(old, { confirm: false });
+		await older.emit("tool_call", { toolName: "bash", input: { command: "npm publish" } }, publish);
+		assert.match(publish.asked[0] ?? "", /publishes a release/, "the parent's distrust is kept: the allow rule doesn't loosen");
+		assert.match((await writeAsks(older.emit, old, old, "tools/hooks/pre-commit")) ?? "", /git hook/, "the parent folder's hooks, read by the child");
 	} finally {
 		if (saved === undefined) delete process.env.ENG_KIT_GUARD_BASELINE;
 		else process.env.ENG_KIT_GUARD_BASELINE = saved;
 	}
+});
+
+test("guard: in a workspace, each repository's own hooks folder asks under it", async () => {
+	const { pi, emit } = fakePi();
+	guard(pi);
+	const { dir, git } = workspaceProject({});
+	git("a", "config", "core.hooksPath", "h");
+	await emit("session_start", { reason: "startup" }, ctx(dir));
+	assert.match((await writeAsks(emit, dir, dir, "a/h/pre-commit")) ?? "", /git hook/);
+	assert.equal(await writeAsks(emit, dir, dir, "b/h/pre-commit"), undefined);
 });
 
 test("guard: a child pi process in the same folder takes its parent's baseline", async () => {
