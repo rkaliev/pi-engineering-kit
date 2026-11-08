@@ -1,6 +1,6 @@
 # Guard judges command names in any case and ANSI-C quoted words as the shell runs them
 
-Status: design approved (2026-11-08)
+Status: plan approved (2026-11-08)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 3c5336e7cb3ca89d7093a570f1836af79a6c89c6, pi 8729545f00492d89e4a0ca8323ba782fbb07541a
 Links: FRAMEWORK-SOURCES §11.48 ("Follow-ups после 0.37.0" and "Добавлено в 0.38.0 по отчёту пользователя")
