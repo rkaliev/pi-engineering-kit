@@ -1094,8 +1094,9 @@ test("tokenize decodes ANSI-C quoting as the shell does", () => {
 		["$'\\g\\it'", ["git"]],
 		// A NUL stays in the word: bash and zsh read it differently, so the guard asks about it.
 		["$'a\\0b'", ["a\0b"]],
-		["$'\\x'", ["\\x"]],
-		["$'\\u'", ["\\u"]],
+		// zsh reads `\x` or `\u` without digits as NUL (probed 2026-11-08), which makes the word ask.
+		["$'\\x'", ["\0"]],
+		["$'\\u'", ["\0"]],
 		// A decoded `;` is a character of the word, not a separator.
 		["echo $'a\\x3bgit'", ["echo", "a;git"]],
 	];
@@ -1163,4 +1164,30 @@ test("a word with a NUL byte asks: the shells read it differently", () => {
 test("the folded view keeps options as written, so rules that name -D or -R still match", () => {
 	for (const cmd of ["GIT branch -D x", "$'\\x67it' branch -D x", "CHMOD -R 777 ."]) assert.equal(action(cmd), "confirm", cmd);
 	assert.equal(action("GIT branch -d x"), "allow");
+});
+
+// Probed 2026-11-08: bash reads `$$'` as the PID and a plain quote, zsh as `$` and a `$'…'` word; zsh reads `\x`, `\u`,
+// `\U` without digits and `\C-@` as NUL; `$'\xc5\xbf'h` runs ſh (sh on APFS) in both. Where the shells disagree, ask.
+test("$'…' words the shells read differently ask, and escapes are bytes read as UTF-8", () => {
+	for (const cmd of ["echo $$'\\' ; rm -rf ~ ; echo '\\'", "rm$'\\x' -rf ~", "rm$'\\u' -rf ~", "rm$'\\C-@' -rf ~"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("echo $$$'\\x67it' ok"), "allow", "an odd run: `$$` then a $'…' word in both shells");
+	assert.deepEqual(tokenize("$'\\xc5\\xbf'h"), ["ſh"]);
+	assert.deepEqual(tokenize("$'\\305\\277'udo"), ["ſudo"]);
+	assert.equal(action("curl x | ba$'\\xc5\\xbf'h"), "confirm");
+	assert.deepEqual(tokenize("$'\\C-a'"), ["\x01"]);
+});
+
+test("a quoted heredoc's body is data: its target is judged first and a NUL in the body doesn't ask", () => {
+	const body = "while IFS= read -r -d $'\\0' f; do echo \"$f\"; done\nEOF";
+	assert.equal(action(`cat > .git/hooks/pre-commit <<'EOF'\n${body}`), "block");
+	assert.equal(action(`cat > src/a.sh <<'EOF'\n${body}`), "allow");
+});
+
+test("a command glued to an option is still read with its name folded", () => {
+	for (const cmd of [`python3 -c"import os; os.system('GIT push --force')"`, `node --eval="require('child_process').execSync('GIT reset --hard')"`]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action(`env -S" TERRAFORM destroy"`, { block: ["terraform destroy"] }), "block");
 });

@@ -101,12 +101,15 @@ export function checkCommand(
 	const target = write !== undefined && !isOutside(write.startsWith("~") ? write : resolve(dir, write), cwd) ? resolve(dir, write) : undefined;
 	const text = target ? heredoc!.head : command;
 	const segments = splitSegments(tokenize(text));
-	// The command as the shell runs it: decoded words, with every word but an option folded (`NPM publish`,
-	// `$'\x67it' reset --hard`; `-D` stays `-D`). Rules that block or ask also read it; `allow` and the own-branch push
-	// never do, so it can't loosen anything.
-	const fold = (s: string) => tokenize(s).map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" ");
-	const view = fold(text);
-	const commandView = text === command ? view : fold(command);
+	// The command as the shell runs it, decoded and folded twice: every word but an option (`-D` stays `-D`), and every
+	// word (a command glued to an option, `-c"…('GIT push')"`). Rules that block or ask read the text and both views;
+	// `allow` and the own-branch push read only the text, so the views can't loosen anything.
+	const viewsOf = (s: string) => {
+		const words = tokenize(s);
+		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" "))];
+	};
+	const views = viewsOf(text);
+	const commandViews = text === command ? views : viewsOf(command);
 
 	// An interpreter heredoc's body is code, not shell: the block rules, which read shell words, read its first line;
 	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
@@ -118,26 +121,27 @@ export function checkCommand(
 	}
 	for (const source of config.block ?? []) {
 		const re = new RegExp(source);
-		if (re.test(command) || re.test(commandView)) {
+		if (commandViews.some((v) => re.test(v))) {
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
-	// Before `allow`, so no rule skips it: no real command needs a NUL byte.
-	if (tokenize(command).some((t) => t.includes("\0"))) {
-		return { action: "confirm", reason: "A word in this command holds a NUL byte, which bash and zsh read differently, so the guard can't tell what runs." };
-	}
 	const written = target ? judgeWrite(target) : ALLOW;
 	if (written.action !== "allow") return written;
+	// A word bash and zsh read differently (a NUL byte, `$$'`) asks, before `allow` so no rule skips it. It reads `text`:
+	// a quoted heredoc's body is data. The cost: `read -d $'\0'` asks too.
+	if (tokenize(text).some((t) => t.includes("\0"))) {
+		return { action: "confirm", reason: "A word in this command is read differently by bash and zsh (a NUL byte or `$$'`), so the guard can't tell what runs." };
+	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments, text) ?? checkPushes(text, view, segments, cwd, dir, env, config.pushOwners);
+	const push = checkPushSetup(segments, text) ?? checkPushes(text, views, segments, cwd, dir, env, config.pushOwners);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
-		if (re.test(text) || re.test(view)) return { action: "confirm", reason: `This command ${what}.` };
+		if (views.some((v) => re.test(v))) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
 		const re = new RegExp(source);
-		if (re.test(command) || re.test(commandView)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
+		if (commandViews.some((v) => re.test(v))) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
 	}
 	if (segments.some((segment) => segment.some(isSecretPath))) {
 		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
@@ -363,8 +367,12 @@ export function tokenize(command: string): string[] {
 			// closes it) and only then decodes it, so no escape reaches past the quote.
 			let end = i + 2;
 			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
-			// A decoded NUL stays in the word: bash ends only the quoted part there, zsh and exec the whole word, so the
-			// guard asks about it instead of picking one reading.
+			// A NUL in the word marks a reading the shells disagree on, and the guard asks about it: a decoded NUL (bash
+			// ends only the quoted part there, zsh and exec the whole word), or `$$'` (bash reads the PID and a plain
+			// quote, zsh a `$` and this word), found as an even run of `$` ending here.
+			let dollars = 0;
+			while (command[i - dollars] === "$") dollars++;
+			if (dollars % 2 === 0) current += "\0";
 			current += decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
 			has = true;
 			i = end;
@@ -411,50 +419,58 @@ export function tokenize(command: string): string[] {
 	return tokens;
 }
 
-const ANSI_SIMPLE: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
-const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
-
-/** The text of a `$'…'` word's body (between its quotes) with its escapes decoded. */
+/**
+ * The text of a `$'…'` word's body with its escapes decoded. Escapes give bytes (`\xc5\xbf` is `ſ`), and the bytes are read
+ * as UTF-8, as the program receives them.
+ */
 function decodeAnsi(body: string): string {
-	let out = "";
+	const bytes: number[] = [];
 	for (let i = 0; i < body.length; i++) {
 		if (body[i] !== "\\" || i + 1 >= body.length) {
-			out += body[i];
+			bytes.push(...Buffer.from(body[i]!, "utf8"));
 			continue;
 		}
-		const { text, end } = ansiEscape(body, i);
-		out += text;
-		i = end;
+		const escape = ansiEscape(body, i);
+		bytes.push(...escape.bytes);
+		i = escape.end;
 	}
-	return out;
+	return Buffer.from(bytes).toString("utf8");
 }
 
+const ANSI_SIMPLE: Record<string, number> = { a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
+const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
+
 /**
- * The escape at `command[i]` (a backslash inside a `$'…'` body): the text it stands for and the index of its last character.
- * Where bash and zsh differ, the reading that can spell a command name wins: an unknown escape is its character
- * (zsh; bash keeps the backslash), and `\x`, `\u` or `\U` without digits stays as written (bash).
+ * The escape at `body[i]` (a backslash inside a `$'…'` body): its bytes and the index of its last character. Where bash
+ * and zsh differ, the reading that can spell a command name or holds a NUL wins: an unknown escape is its character,
+ * and `\x`, `\u` or `\U` without digits is a NUL (zsh). zsh's `\C-X` and `\M-X` count too.
  */
-function ansiEscape(command: string, i: number): { text: string; end: number } {
-	const ch = command[i + 1]!;
-	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { text: ANSI_SIMPLE[ch]!, end: i + 1 };
+function ansiEscape(body: string, i: number): { bytes: number[]; end: number } {
+	const ch = body[i + 1]!;
+	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { bytes: [ANSI_SIMPLE[ch]!], end: i + 1 };
 	const run = (digit: RegExp, from: number, max: number) => {
 		let j = from;
-		while (j < from + max && digit.test(command[j] ?? "")) j++;
+		while (j < from + max && digit.test(body[j] ?? "")) j++;
 		return j;
 	};
 	if (/[0-7]/.test(ch)) {
 		const j = run(/[0-7]/, i + 1, 3);
-		return { text: String.fromCharCode(parseInt(command.slice(i + 1, j), 8) & 0xff), end: j - 1 };
+		return { bytes: [parseInt(body.slice(i + 1, j), 8) & 0xff], end: j - 1 };
 	}
 	if (Object.hasOwn(ANSI_HEX, ch)) {
 		const j = run(/[0-9a-fA-F]/, i + 2, ANSI_HEX[ch]!);
-		if (j === i + 2) return { text: `\\${ch}`, end: i + 1 };
-		const code = parseInt(command.slice(i + 2, j), 16);
-		return { text: code <= 0x10ffff ? String.fromCodePoint(code) : "", end: j - 1 };
+		if (j === i + 2) return { bytes: [0], end: i + 1 };
+		const code = parseInt(body.slice(i + 2, j), 16);
+		if (ch === "x") return { bytes: [code], end: j - 1 };
+		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1 };
 	}
 	// `\cX` is control-X; in `\c\\` the escaped backslash is the X.
-	if (ch === "c" && i + 2 < command.length) return { text: String.fromCharCode(command.charCodeAt(i + 2) & 0x1f), end: command[i + 2] === "\\" && i + 3 < command.length ? i + 3 : i + 2 };
-	return { text: ch, end: i + 1 };
+	if (ch === "c" && i + 2 < body.length) return { bytes: [body.charCodeAt(i + 2) & 0x1f], end: body[i + 2] === "\\" && i + 3 < body.length ? i + 3 : i + 2 };
+	if ((ch === "C" || ch === "M") && body[i + 2] === "-" && i + 3 < body.length) {
+		const code = body.charCodeAt(i + 3);
+		return { bytes: [ch === "C" ? code & 0x1f : (code | 0x80) & 0xff], end: i + 3 };
+	}
+	return { bytes: [...Buffer.from(ch, "utf8")], end: i + 1 };
 }
 
 /** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
@@ -486,8 +502,8 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 /** The kit's branch naming (git-workflow): only such a branch is pushed without a question. */
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
-/** Anything that mentions `git … push`, as written or in `view` (decoded and folded), asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, view: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
+/** Anything that mentions `git … push`, as written or in a decoded, folded view, asks, unless the command is the plain own-branch push (see ownBranchPush). */
+function checkPushes(command: string, views: string[], segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
 	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
 	const pushToken = segments.some((tokens) =>
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
@@ -499,7 +515,7 @@ function checkPushes(command: string, view: string, segments: string[][], projec
 		const at = words.findIndex(gitLike);
 		return at !== -1 && words.slice(at + 1).some((t) => PUSH_VERBS.has(t));
 	});
-	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command) && !PUSH_WORDS.test(view)) return undefined;
+	if (!pushToken && !pushAfterGit && !views.some((v) => PUSH_WORDS.test(v))) return undefined;
 	return ownBranchPush(command, dir, env, project, owners) ? undefined : PUSH_CONFIRM;
 }
 
