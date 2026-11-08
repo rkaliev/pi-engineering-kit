@@ -307,7 +307,7 @@ const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 export function tokenize(command: string): string[] {
 	const tokens: string[] = [];
 	let current = "";
-	let quote: "'" | '"' | "$'" | null = null;
+	let quote: "'" | '"' | null = null;
 	let has = false;
 	// Where a decoded NUL ends the word: the program gets the text before it (zsh keeps the rest, exec drops it).
 	let cut = -1;
@@ -329,22 +329,17 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (quote) {
-			// In "…" a backslash escapes only " \ $ ` and a newline; in $'…' it escapes anything.
+			// In "…" a backslash escapes only " \ $ ` and a newline.
 			const next = command[i + 1];
 			// A backslash-newline inside "…" is a line continuation: both characters vanish.
-			if (ch === "\\" && next === "\n" && quote === '"') {
+			if (ch === "\\" && next === "\n") {
 				i++;
 				continue;
 			}
-			if (ch === "\\" && next !== undefined && quote === "$'") {
-				const { text, end } = ansiEscape(command, i);
-				if (cut === -1 && text.includes("\0")) cut = current.length + text.indexOf("\0");
-				current += text;
-				i = end;
-			} else if (ch === "\\" && next !== undefined && /["\\$`\n]/.test(next)) {
+			if (ch === "\\" && next !== undefined && /["\\$`\n]/.test(next)) {
 				current += next;
 				i++;
-			} else if (ch === (quote === "$'" ? "'" : '"')) quote = null;
+			} else if (ch === '"') quote = null;
 			else current += ch;
 			continue;
 		}
@@ -358,9 +353,21 @@ export function tokenize(command: string): string[] {
 			has = true;
 			continue;
 		}
-		if (ch === "$" && (command[i + 1] === "'" || command[i + 1] === '"')) {
+		if (ch === "$" && command[i + 1] === "'") {
+			// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
+			// closes it) and only then decodes it, so no escape reaches past the quote.
+			let end = i + 2;
+			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
+			const decoded = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
+			if (cut === -1 && decoded.includes("\0")) cut = current.length + decoded.indexOf("\0");
+			current += decoded;
+			has = true;
+			i = end;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === '"') {
 			// bash reads `$"…"` as `"…"` (a translation that is usually the same text); zsh as `$` and a quoted word.
-			quote = command[i + 1] === "'" ? "$'" : '"';
+			quote = '"';
 			has = true;
 			i++;
 			continue;
@@ -402,8 +409,23 @@ export function tokenize(command: string): string[] {
 const ANSI_SIMPLE: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
 const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
 
+/** The text of a `$'…'` word's body (between its quotes) with its escapes decoded. */
+function decodeAnsi(body: string): string {
+	let out = "";
+	for (let i = 0; i < body.length; i++) {
+		if (body[i] !== "\\" || i + 1 >= body.length) {
+			out += body[i];
+			continue;
+		}
+		const { text, end } = ansiEscape(body, i);
+		out += text;
+		i = end;
+	}
+	return out;
+}
+
 /**
- * The escape at `command[i]` (a backslash inside `$'…'`): the text it stands for and the index of its last character.
+ * The escape at `command[i]` (a backslash inside a `$'…'` body): the text it stands for and the index of its last character.
  * Where bash and zsh differ, the reading that can spell a command name wins: an unknown escape is its character
  * (zsh; bash keeps the backslash), and `\x`, `\u` or `\U` without digits stays as written (bash).
  */
@@ -425,7 +447,8 @@ function ansiEscape(command: string, i: number): { text: string; end: number } {
 		const code = parseInt(command.slice(i + 2, j), 16);
 		return { text: code <= 0x10ffff ? String.fromCodePoint(code) : "", end: j - 1 };
 	}
-	if (ch === "c" && i + 2 < command.length) return { text: String.fromCharCode(command.charCodeAt(i + 2) & 0x1f), end: i + 2 };
+	// `\cX` is control-X; in `\c\\` the escaped backslash is the X.
+	if (ch === "c" && i + 2 < command.length) return { text: String.fromCharCode(command.charCodeAt(i + 2) & 0x1f), end: command[i + 2] === "\\" && i + 3 < command.length ? i + 3 : i + 2 };
 	return { text: ch, end: i + 1 };
 }
 

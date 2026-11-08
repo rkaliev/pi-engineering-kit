@@ -1133,3 +1133,12 @@ test("folding never reaches arguments or paths", () => {
 	for (const cmd of ["git branch -d x", "git checkout -b X", "ls ~/Git", "cat Git.md"]) assert.equal(action(cmd), "allow", cmd);
 	assert.equal(checkCommand("rm -rf /work/App/build", "/work/App", none).action, "allow");
 });
+
+// bash and zsh pair a backslash with one character while they find the word's end, so `\c` never reaches past the `'`
+// (bash ran the command after `echo $'\c';`, 2026-11-08).
+test("an escape in $'…' never reaches past its closing quote", () => {
+	for (const cmd of ["echo $'\\c'; rm -rf ~", "echo $'\\c\\\\'; git commit -n -m x", "echo $'\\c' ; rm -rf ~ ; echo ''", "echo $'\\c' && git push --force"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	assert.equal(tokenize("echo $'\\c' x").length, 3);
+});
