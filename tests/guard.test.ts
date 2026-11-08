@@ -1159,3 +1159,8 @@ test("a word with a NUL byte asks: the shells read it differently", () => {
 	}
 	assert.equal(action("$'\\0'rm -rf ~", { allow: ["rm"] }), "confirm", "an allow rule doesn't skip it");
 });
+
+test("the folded view keeps options as written, so rules that name -D or -R still match", () => {
+	for (const cmd of ["GIT branch -D x", "$'\\x67it' branch -D x", "CHMOD -R 777 ."]) assert.equal(action(cmd), "confirm", cmd);
+	assert.equal(action("GIT branch -d x"), "allow");
+});

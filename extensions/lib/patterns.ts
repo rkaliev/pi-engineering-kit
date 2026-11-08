@@ -101,10 +101,12 @@ export function checkCommand(
 	const target = write !== undefined && !isOutside(write.startsWith("~") ? write : resolve(dir, write), cwd) ? resolve(dir, write) : undefined;
 	const text = target ? heredoc!.head : command;
 	const segments = splitSegments(tokenize(text));
-	// The command as the shell runs it: decoded words, every letter folded (`NPM publish`, `$'\x67it' reset --hard`).
-	// Rules that block or ask also read it; `allow` and the own-branch push never do, so it can't loosen anything.
-	const view = foldPath(tokenize(text).join(" "));
-	const commandView = text === command ? view : foldPath(tokenize(command).join(" "));
+	// The command as the shell runs it: decoded words, with every word but an option folded (`NPM publish`,
+	// `$'\x67it' reset --hard`; `-D` stays `-D`). Rules that block or ask also read it; `allow` and the own-branch push
+	// never do, so it can't loosen anything.
+	const fold = (s: string) => tokenize(s).map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" ");
+	const view = fold(text);
+	const commandView = text === command ? view : fold(command);
 
 	// An interpreter heredoc's body is code, not shell: the block rules, which read shell words, read its first line;
 	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
