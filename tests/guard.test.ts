@@ -220,6 +220,14 @@ test("paths: the hooks folder the caller configures asks, in any case; a root ho
 	assert.equal(checkPath("read", "tools/hooks/pre-commit", cwd, hooks).action, "allow");
 });
 
+test("paths: verify-run records are written only by the verify script", () => {
+	for (const path of [join(tmpdir(), "eng-kit", "runs", "x.json"), "/tmp/ENG-KIT/Runs/x.json"]) {
+		const decision = checkPath("write", path, cwd, none);
+		assert.equal(decision.action, "block", path);
+		assert.match(String(decision.reason), /verify script/, path);
+	}
+});
+
 // Isolate git from the machine's own config (the guard's git calls inherit this process's environment).
 process.env.HOME = mkdtempSync(join(tmpdir(), "home-"));
 process.env.XDG_CONFIG_HOME = join(process.env.HOME, ".config");

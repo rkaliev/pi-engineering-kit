@@ -933,6 +933,25 @@ test("a PR opened but not confirmed by the tool result isn't registered; an old 
 	assert.deepEqual(openPrBranches(dir, dir, "origin", "refs/remotes/origin/main", root, Date.now() + 31 * 24 * 60 * 60 * 1000), []);
 });
 
+test("gate files: shell writes to the verify-run records are blocked; reading them passes", () => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json");
+	const runs = join(tmpdir(), "eng-kit", "runs");
+	for (const write of [
+		`echo '{"ok":true}' > ${runs}/x.json`,
+		"echo '{\"ok\":true}' > $TMPDIR/eng-kit/runs/x.json",
+		"cp f ${TMPDIR}/eng-kit/runs/",
+		`cd ${join(tmpdir(), "eng-kit")} && tee runs/x.json < f`,
+		`echo x > ${realpathSync(tmpdir())}/eng-kit/runs/x.json`,
+	]) {
+		const decision = check(write);
+		assert.equal(decision?.action, "block", write);
+		assert.match(String(decision?.reason), /verify script/, write);
+	}
+	assert.equal(check(`ls ${runs}`), undefined);
+	assert.equal(check("cat $TMPDIR/eng-kit/runs/x.json"), undefined);
+});
+
 test("gate files: >| and >&file are writes too", () => {
 	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
 	const records = join(tmpdir(), "eng-kit", "reviews");

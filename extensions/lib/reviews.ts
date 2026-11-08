@@ -675,6 +675,8 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
+	// The verify script's run records (the Claude edition's verify gate reads them) are as forgeable as the review records.
+	const runRecords = [join(tmpdir(), "eng-kit", "runs"), safeRealpath(tmpdir()) + "/eng-kit/runs"].map((p) => p.replaceAll("\\", "/"));
 	const { dirs, unknown } = reachable(command, cwd);
 	// The tokens lose the `<` of `<(…)`, so a process substitution is found in the text.
 	const processSubst = /[<>]\(/.test(blankQuoted(command).replace(/\\./g, ""));
@@ -700,6 +702,10 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		const named = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/reviews(\/|$)/.test(p)));
 		if (named || paths.some((p) => records.some((r) => p === r || p.startsWith(`${r}/`)))) {
 			return { action: "block", reason: "Review records are written only by the guard, from the reviewer's own report. Dispatch the reviewer instead." };
+		}
+		const namedRuns = candidates.some((t) => [t, posix.normalize(t)].some((p) => /^\$\{?TMPDIR\}?\/*eng-kit\/runs(\/|$)/.test(p)));
+		if (namedRuns || paths.some((p) => runRecords.some((r) => p === r || p.startsWith(`${r}/`)))) {
+			return { action: "block", reason: "Verify-run records are written only by the verify script. Run it instead." };
 		}
 		// The kit's session state by its path as written, its real path, `~` or a `$HOME`, `$TMPDIR` or
 		// `$CLAUDE_PLUGIN_DATA` word; a parent folder only when the command removes or moves it.
