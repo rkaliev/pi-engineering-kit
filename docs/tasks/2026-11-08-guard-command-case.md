@@ -149,11 +149,11 @@ None. Released as 0.38.0 in both editions by CI on merge.
 **Files:** Modify `lib/shell.ts` (`segmentFolders`, `hidesFolder`), copy to `src/extensions/lib/shell.ts` · Test `tests/reviews.test.ts` in both, next to `segmentFolders: git's -C counts…`
 **Interfaces:** Consumes `commandName` (Task 2)
 
-- [ ] Write failing test `segmentFolders: git and env in any case, builtins as written`: in workspace `ws` with folder `b`: `GIT -C b status` → `join(ws, "b")`; `/usr/bin/GIT -C b status` → `join(ws, "b")`; `ENV -C b git push` → `undefined`; `npm run x GIT -C b` → `undefined`; `BASH -c "cd b"` → `undefined`; `CD b && git status` → second segment `ws`; `PUSHD b; git status` → `ws`
-- [ ] Run → expect FAIL: `ws` vs `join(ws, "b")` on the first row
-- [ ] Implement: `commandName(words[at]) === "git"` in the `-C` loop; in `hidesFolder`, `commandName(w)` for `git`, `env` and the `sh` pattern, and the git-is-not-the-command test by index; `MOVES`, `PREFIXES`, `eval`, `export` stay exact
-- [ ] Run both editions → PASS; `cmp` the two `shell.ts` → same; full suites → pass
-- [ ] Commit `fix(guard): workspace folders follow git and env in any case`
+- [x] Write failing test `segmentFolders: git and env in any case, builtins as written`: in workspace `ws` with folder `b`: `GIT -C b status` → `join(ws, "b")`; `/usr/bin/GIT -C b status` → `join(ws, "b")`; `ENV -C b git push` → `undefined`; `npm run x GIT -C b` → `undefined`; `BASH -c "cd b"` → `undefined`; `CD b && git status` → second segment `ws`; `PUSHD b; git status` → `ws`
+- [x] Run → expect FAIL: `ws` vs `join(ws, "b")` on the first row
+- [x] Implement: `commandName(words[at]) === "git"` in the `-C` loop; in `hidesFolder`, `commandName(w)` for `git`, `env` and the `sh` pattern, and the git-is-not-the-command test by index; `MOVES`, `PREFIXES`, `eval`, `export` stay exact
+- [x] Run both editions → PASS; `cmp` the two `shell.ts` → same; full suites → pass
+- [x] Commit `fix(guard): workspace folders follow git and env in any case`
 
 ### Task 5: review-gate landings and the verify fallback in any case
 
@@ -195,3 +195,4 @@ None. Released as 0.38.0 in both editions by CI on merge.
 - Ruling: Task 2's table differs from the plan's: `SUDO git push` and `ſudo ls` move to Task 3 (sudo is a regex rule; lowercase git push already asks), `GIT commit --no-verify` is dropped (the flag blocks whatever the command word), and `NICE git -c core.sshCommand=x fetch`, `XARGS git log`, `BASH -c \"git status\"`, `Git-remote add x y` are added, each the only row that fails when its site is reverted; the `xargs`/`parallel` input check (not in the plan's list) is folded too — cost if wrong: none, every row mirrors a lowercase decision checked on the same code. Probe: `ſh -c` runs sh on APFS, so `foldPath` (NFKC + case) is the right fold.
 - Task 2: complete (eng-kit c5b5428..HEAD, pi 93883af..HEAD; `external command names are judged in any case` failed first on `GIT push --force` allow vs block and on `XARGS git log`; mutants: reverting any folded site fails the test except `gh`/`glab`, which were already lowercased (equivalent for ASCII); kit verify → all 4 checks pass).
 - Task 3: complete (eng-kit 6d45f47..HEAD, pi 1887fc0..HEAD; the regex test failed first on `NPM publish` allow vs confirm; `folding never reaches arguments or paths` passes before and after by design (it pins today's decisions the view must not change); added row `python3 -c \"…os.system('GIT push')\"` (git inside an interpreter string, decided only by PUSH_WORDS on the view); mutants — dropping the view from CONFIRM_RULES, project block, project confirm or PUSH_WORDS, or letting allow read it — each fail the test; kit verify → all 4 checks pass).
+- Task 4: complete (eng-kit 4c1cb29..HEAD, pi 581f848..HEAD; `segmentFolders: git and env in any case, builtins as written` failed first on `GIT -C b status` → ws vs ws/b; added row `GIT --git-dir=b/.git log` → unknown; `/usr/bin/git -C b` was judged in the session folder before too (an absolute path failed open), now followed; the git-is-not-the-command test compares indexes, so a second git word after the command with `-C` now hides the folder (stricter); mutants on the -C loop, sh -c, env, --git-dir and not-the-command each fail the test; shell.ts identical in both editions; kit verify → all 4 checks pass).

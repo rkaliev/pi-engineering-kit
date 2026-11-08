@@ -1400,3 +1400,16 @@ test("segmentFolders: each segment runs where the moves before it and its git -C
 	const hidden = segmentFolders("echo $(cd b && npm publish)", ws);
 	assert.ok(hidden.length > 0 && hidden.every((s) => s.dir === undefined), "a move in a substitution hides every folder");
 });
+
+// A program runs in any letter case on macOS and Windows; a builtin doesn't (`CD b` runs /usr/bin/cd in a child).
+test("segmentFolders: git and env in any case, builtins as written", () => {
+	const ws = temp("reviews-ws-");
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
+	assert.equal(segmentFolders("GIT -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("/usr/bin/GIT -C b status", ws)[0]!.dir, join(ws, "b"));
+	for (const command of ["ENV -C b git push", "npm run x GIT -C b", 'BASH -c "cd b"', "GIT --git-dir=b/.git log"]) {
+		assert.equal(segmentFolders(command, ws)[0]!.dir, undefined, command);
+	}
+	assert.equal(segmentFolders("CD b && git status", ws)[1]!.dir, ws);
+	assert.equal(segmentFolders("PUSHD b; git status", ws)[1]!.dir, ws);
+});
