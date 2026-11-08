@@ -647,8 +647,9 @@ test("shellWriteTargets: only a plain word with names bound once is expanded", (
 	assert.deepEqual(targets("echo x | tee ~/log $TMPDIR/b", { HOME: "/tmp/h", TMPDIR: "/tmp/t" }), ["~/log", "$TMPDIR/b"], "tee operands aren't expanded");
 });
 
-test("shellWriteTargets counts TEE and SED -i targets: the programs run in any letter case", () => {
+test("shellWriteTargets counts TEE and SED -i targets: the programs run in any letter case", (t) => {
 	const project = mkdtempSync(join(tmpdir(), "no-git-"));
+	t.after(() => rmSync(project, { recursive: true, force: true }));
 	assert.deepEqual(shellWriteTargets("echo x | TEE src/c.ts", project, project), ["src/c.ts"]);
 	assert.deepEqual(shellWriteTargets("SED -i '' 's/a/b/' src/d.ts", project, project), ["src/d.ts"]);
 });
