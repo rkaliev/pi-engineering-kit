@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
-import { checkCommand, checkPath, type GuardConfig, tokenize } from "../extensions/lib/patterns.ts";
+import { checkCommand, checkPath, type GuardConfig, splitSegments, tokenize } from "../extensions/lib/patterns.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -1141,4 +1141,13 @@ test("an escape in $'…' never reaches past its closing quote", () => {
 		assert.equal(action(cmd), "block", cmd);
 	}
 	assert.equal(tokenize("echo $'\\c' x").length, 3);
+});
+
+// A quoted or escaped `;` is an argument: bash runs `rm -rf ';' ~` as one command that deletes ~.
+test("a quoted or escaped operator is a word, not a separator", () => {
+	for (const cmd of ["rm -rf $'\\x3b' ~", "rm -rf ';' ~", "rm -rf \\; ~", "git commit -m $'\\n' -n", "git commit -m '&&' -n"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	assert.equal(splitSegments(tokenize("echo ';' x")).length, 1);
+	assert.equal(splitSegments(tokenize("echo a; echo b")).length, 2);
 });

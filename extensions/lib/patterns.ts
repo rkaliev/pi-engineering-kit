@@ -314,7 +314,10 @@ export function tokenize(command: string): string[] {
 	// The unquoted, unescaped `<` or `>` just before this character, if any: `>&`, `<&` and `>|` continue it.
 	let operator = "";
 	const push = () => {
-		if (has) tokens.push(cut === -1 ? current : current.slice(0, cut));
+		// A word that reads as an operator was quoted or escaped (a bare operator never joins a word): it stays an
+		// argument, written in quotes so no consumer splits on it (`rm -rf ';' ~` deletes ~).
+		const word = cut === -1 ? current : current.slice(0, cut);
+		if (has) tokens.push(OPERATORS.has(word) ? `'${word}'` : word);
 		current = "";
 		has = false;
 		cut = -1;
