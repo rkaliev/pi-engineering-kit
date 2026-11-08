@@ -245,7 +245,7 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 	if ([...tokens, ...words].some((t) => /^--no-veri(?:fy?)?$/.test(t))) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
-	const gitAt = words.indexOf("git");
+	const gitAt = words.findIndex((w) => commandName(w) === "git");
 	if (overridesHooksPath(tokens)) {
 		return { action: "block", reason: "Overriding core.hooksPath on the command line skips or replaces the git hooks. Fix what the hook reports instead." };
 	}
@@ -265,7 +265,7 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 		}
 	}
 
-	const rmAt = words.indexOf("rm");
+	const rmAt = words.findIndex((w) => commandName(w) === "rm");
 	if (rmAt !== -1) {
 		const args = words.slice(rmAt + 1);
 		const recursive = args.some((t) => t === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(t));
@@ -548,6 +548,14 @@ const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--na
 /** Git's own options that take no value. Any other option before the subcommand is unknown, so it asks. */
 const GIT_FLAG_OPTIONS = new Set(["-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice", "--version", "--help", "-h"]);
 const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
+/**
+ * The program a command word names, as macOS and Windows find it: its base name folded like a path (`GIT`, `/usr/bin/Git`
+ * and `ſh` run git and sh there). Only for external programs: a builtin or keyword in another case is not one (`CD x`
+ * runs `/usr/bin/cd` in a child, `EVAL` isn't found), so `cd`, `eval`, `export` and the keywords compare as written.
+ */
+export function commandName(token: string): string {
+	return foldPath(BASE_NAME(token));
+}
 /** Config keys whose value is a command git runs (pager, editor, helpers, drivers, filters). */
 const COMMAND_KEYS =
 	"core[.](pager|editor|askpass)|sequence[.]editor|diff[.]external|gpg[.]([^.]+[.])?program|filter[.]|pager[.]|diff[.].+[.](command|textconv)|merge[.].+[.]driver|(difftool|mergetool)[.].+[.]cmd|submodule[.].+[.]update|credential[.](.+[.])?helper";
@@ -568,7 +576,7 @@ const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "un
 const OPENS_COMMAND = /^([A-Za-z_][A-Za-z0-9_]*=)?(\$\(|[(`{])/;
 /** `git`, `git-<sub>`, or a path to one that is absolute or starts with `./`; `skills/git-workflow` is not git. */
 function gitLike(token: string): boolean {
-	if (!/^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(token))) return false;
+	if (!/^git(-[a-z][a-z-]*)?$/.test(commandName(token))) return false;
 	return !token.includes("/") || /^(\/|\.\/)/.test(token);
 }
 /** Config keys that move where git pushes, fetches from, or what it executes. */
@@ -596,7 +604,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 	tokens.forEach((t, i) => {
 		const opens = OPENS_COMMAND.test(raw[i]!);
 		if (gitLike(t) && (territory || wrapped || opens)) positions.push(i);
-		const word = BASE_NAME(t);
+		const word = commandName(t);
 		if ((territory || wrapped) && WRAPPERS.has(word) && !(word === "command" && /^-[vV]$/.test(tokens[i + 1] ?? ""))) wrapped = true;
 		else if (!wrapped) territory = t === "" || SHELL_KEYWORDS.has(t) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(raw[i]!) || opens;
 	});
@@ -606,7 +614,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 		const call = parseGit(raw, tokens, at);
 		if (!OPENS_COMMAND.test(raw[at]!)) {
 			if (plain.length > 1) call.issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
-			else if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) call.issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
+			else if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(commandName(t)))) call.issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
 		}
 		return call;
 	});
@@ -615,7 +623,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 	let issue: GuardDecision | undefined;
 	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
-	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
+	const direct = /^git-([a-z][a-z-]*)$/.exec(commandName(tokens[at]!));
 	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1) };
 	let v = at + 1;
 	let bare = true; // only --version/--help/-h so far
@@ -748,15 +756,15 @@ function checkPushSetup(segments: string[][], command: string): GuardDecision | 
 	for (const tokens of segments) {
 		const lower = tokens.map((t) => unwrapToken(t).toLowerCase());
 		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
-			const at = lower.findIndex((t) => BASE_NAME(t) === tool);
+			const at = lower.findIndex((t) => commandName(t) === tool);
 			const n = at === -1 ? -1 : lower.indexOf(noun, at + 1);
 			if (n !== -1 && lower.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
 			if (at !== -1 && apiWrite(tokens.map(unwrapToken), at, command)) return { action: "confirm", reason: "This command calls the API with a write method." };
 		}
-		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
+		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(commandName(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
 		const evalAt = tokens.findIndex((t) => t === "eval");
 		const from = shell !== -1 ? shell : evalAt;
-		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(t))) return { action: "confirm", reason: "This command runs git through a shell string." };
+		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(foldPath(t)))) return { action: "confirm", reason: "This command runs git through a shell string." };
 		const calls = parseGitCalls(tokens);
 		const envAsk = gitEnvDecision(tokens, calls);
 		if (envAsk) return envAsk;

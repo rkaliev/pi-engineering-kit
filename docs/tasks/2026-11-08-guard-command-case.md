@@ -126,11 +126,11 @@ None. Released as 0.38.0 in both editions by CI on merge.
 **Files:** Modify `patterns.ts` (both): add `export function commandName(token: string): string`; use it in `checkSegment` (`git`, `rm`), `gitLike`, `parseGit` (the `git-<sub>` form), `parseGitCalls` (`WRAPPERS`), `checkPushSetup` (`gh`/`glab`, the `sh -c` base name, and the shell-string git test through `foldPath(t)`) · Test `tests/guard.test.ts` in both
 **Interfaces:** Produces `commandName(token) = foldPath(BASE_NAME(token))`, consumed by Tasks 4–5
 
-- [ ] Write failing test `external command names are judged in any case`: block — `GIT push --force`, `Git commit -n`, `GIT -c core.hooksPath=x commit`, `/usr/bin/GIT push --mirror`, `RM -rf ~`, `rM -rf ~`, `GIT commit --no-verify`; confirm — `GH pr merge 1`, `GLAB mr merge 1`, `GIT remote add x y`, `BASH -c "git push"`, `bash -c "GIT push"`, `SUDO git push`, `GIT_SSH_COMMAND=x GIT fetch`, `ſudo ls`; allow — `GIT status`
-- [ ] Run → expect FAIL on the first row: `allow` vs `block`
-- [ ] Implement `commandName` and replace the exact compares listed in Files; `SHELL_KEYWORDS`, `eval` and variable names stay exact
-- [ ] Run the test file in both editions → PASS; full suites → pass
-- [ ] Commit `fix(guard): command names count in any letter case`
+- [x] Write failing test `external command names are judged in any case`: block — `GIT push --force`, `Git commit -n`, `GIT -c core.hooksPath=x commit`, `/usr/bin/GIT push --mirror`, `RM -rf ~`, `rM -rf ~`, `GIT commit --no-verify`; confirm — `GH pr merge 1`, `GLAB mr merge 1`, `GIT remote add x y`, `BASH -c "git push"`, `bash -c "GIT push"`, `SUDO git push`, `GIT_SSH_COMMAND=x GIT fetch`, `ſudo ls`; allow — `GIT status`
+- [x] Run → expect FAIL on the first row: `allow` vs `block`
+- [x] Implement `commandName` and replace the exact compares listed in Files; `SHELL_KEYWORDS`, `eval` and variable names stay exact
+- [x] Run the test file in both editions → PASS; full suites → pass
+- [x] Commit `fix(guard): command names count in any letter case`
 
 ### Task 3: regex rules see the folded view; nothing loosens
 
@@ -192,3 +192,5 @@ None. Released as 0.38.0 in both editions by CI on merge.
 - Baseline (eng-kit c696145, pi 9922161): kit verify from the workspace root → typecheck and tests pass in both editions. No drift since Base (only the task file changed).
 - Ruling: `$'…'` follows the stricter of bash and zsh, not the plan's bash-only reading: an unknown escape is its character (zsh: `$'\g\it'` runs git) and a decoded NUL ends the whole word (zsh/exec: `$'git\0'push` runs git); `\x`/`\u`/`\U` without digits stay as written (bash) — the description asks for the word the shell runs, and zsh is the user's shell — cost if wrong: a bash-only false positive. Ruling: the `$'\x67it' reset --hard` → confirm assertion moved to Task 3, because regex rules read the raw text until Task 3 builds the view — cost if wrong: none, Task 3 asserts it.
 - Task 1: complete (eng-kit c696145..HEAD, pi 9922161..HEAD; `tokenize decodes ANSI-C quoting…` failed first on ["147it","push"], `ANSI-C quoted git is judged as git` on allow vs block; the pi copy is the same code and test; kit verify → all 4 checks pass).
+- Ruling: Task 2's table differs from the plan's: `SUDO git push` and `ſudo ls` move to Task 3 (sudo is a regex rule; lowercase git push already asks), `GIT commit --no-verify` is dropped (the flag blocks whatever the command word), and `NICE git -c core.sshCommand=x fetch`, `XARGS git log`, `BASH -c \"git status\"`, `Git-remote add x y` are added, each the only row that fails when its site is reverted; the `xargs`/`parallel` input check (not in the plan's list) is folded too — cost if wrong: none, every row mirrors a lowercase decision checked on the same code. Probe: `ſh -c` runs sh on APFS, so `foldPath` (NFKC + case) is the right fold.
+- Task 2: complete (eng-kit c5b5428..HEAD, pi 93883af..HEAD; `external command names are judged in any case` failed first on `GIT push --force` allow vs block and on `XARGS git log`; mutants: reverting any folded site fails the test except `gh`/`glab`, which were already lowercased (equivalent for ASCII); kit verify → all 4 checks pass).

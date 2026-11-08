@@ -1107,3 +1107,14 @@ test("ANSI-C quoted git is judged as git", () => {
 	assert.equal(action("$'\\147it' push --force"), "block");
 	assert.equal(action('$"git" commit -n -m x'), "block");
 });
+
+// macOS and Windows find a program in any letter case (`GIT`, `ſh` ran git and sh on APFS, 2026-11-08).
+test("external command names are judged in any case", () => {
+	for (const cmd of ["GIT push --force", "Git commit -n -m x", "GIT -c core.hooksPath=x commit -m x", "/usr/bin/GIT push --mirror", "RM -rf ~", "rM -rf ~"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["GH pr merge 1", "GLAB mr merge 1", "GIT remote add x y", 'BASH -c "git push"', 'bash -c "GIT push"', "NICE git -c core.sshCommand=x fetch", "GIT_SSH_COMMAND=x GIT fetch", "XARGS git log", 'BASH -c "git status"', "Git-remote add x y"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("GIT status"), "allow");
+});
