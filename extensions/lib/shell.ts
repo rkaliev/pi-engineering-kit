@@ -414,7 +414,8 @@ function expandDir(arg: string, vars: boolean): string | undefined {
 	let path = arg.replace(/^~(?=\/|$)/, homedir());
 	// The shell's TMPDIR keeps its trailing slash (macOS), so `${TMPDIR}eng-kit` resolves as the shell sees it.
 	if (vars) path = path.replace(/^\$(?:\{HOME\}|HOME\b)/, homedir()).replace(/^\$(?:\{TMPDIR\}|TMPDIR\b)/, process.env.TMPDIR || `${tmpdir()}/`);
-	return /[$`(]/.test(path) ? undefined : path;
+	// A NUL byte is read differently by bash and zsh: the folder is unknown.
+	return /[$`(\0]/.test(path) ? undefined : path;
 }
 
 function isDir(path: string): boolean {
@@ -427,7 +428,7 @@ function isDir(path: string): boolean {
 
 /** The directory `cd <arg>` moves to, or undefined when the guard can't know it. */
 export function follow(dir: string, arg: string | undefined): string | undefined {
-	if (arg === undefined || /[$`(]/.test(arg)) return undefined;
+	if (arg === undefined || /[$`(\0]/.test(arg)) return undefined;
 	const target = resolve(dir, arg.replace(/^~(?=\/|$)/, homedir()));
 	return existsSync(target) ? target : undefined;
 }

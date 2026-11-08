@@ -1411,5 +1411,6 @@ test("segmentFolders: git and env in any case, builtins as written", () => {
 		assert.equal(segmentFolders(command, ws)[0]!.dir, undefined, command);
 	}
 	assert.equal(segmentFolders("CD b && git status", ws)[1]!.dir, ws);
+	assert.equal(segmentFolders("cd $'b\\0'x && git status", ws)[1]!.dir, undefined, "a NUL makes the folder unknown");
 	assert.equal(segmentFolders("PUSHD b; git status", ws)[1]!.dir, ws);
 });

@@ -1092,9 +1092,8 @@ test("tokenize decodes ANSI-C quoting as the shell does", () => {
 		["$'\\x414'", ["A4"]],
 		// zsh drops the backslash of an unknown escape: `$'\g\it'` runs git there.
 		["$'\\g\\it'", ["git"]],
-		// A NUL ends the argument the program gets: `$'git\0'push` runs git in zsh.
-		["$'a\\0b'", ["a"]],
-		["$'git\\0'push x", ["git", "x"]],
+		// A NUL stays in the word: bash and zsh read it differently, so the guard asks about it.
+		["$'a\\0b'", ["a\0b"]],
 		["$'\\x'", ["\\x"]],
 		["$'\\u'", ["\\u"]],
 		// A decoded `;` is a character of the word, not a separator.
@@ -1150,4 +1149,13 @@ test("a quoted or escaped operator is a word, not a separator", () => {
 	}
 	assert.equal(splitSegments(tokenize("echo ';' x")).length, 1);
 	assert.equal(splitSegments(tokenize("echo a; echo b")).length, 2);
+});
+
+// bash ends only the quoted part at a NUL (`$'r\0'm` runs rm), zsh and exec the whole word: a word with one asks
+// (user ruling 2026-11-08).
+test("a word with a NUL byte asks: the shells read it differently", () => {
+	for (const cmd of ["$'\\0'rm -rf ~", "$'r\\0'm -rf ~", "git commit $'\\0'--no-verify -m x", "npm $'test\\0'x", "$'\\x00'git push"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("$'\\0'rm -rf ~", { allow: ["rm"] }), "confirm", "an allow rule doesn't skip it");
 });

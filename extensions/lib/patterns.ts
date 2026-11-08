@@ -120,6 +120,10 @@ export function checkCommand(
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
+	// Before `allow`, so no rule skips it: no real command needs a NUL byte.
+	if (tokenize(command).some((t) => t.includes("\0"))) {
+		return { action: "confirm", reason: "A word in this command holds a NUL byte, which bash and zsh read differently, so the guard can't tell what runs." };
+	}
 	const written = target ? judgeWrite(target) : ALLOW;
 	if (written.action !== "allow") return written;
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
@@ -309,18 +313,14 @@ export function tokenize(command: string): string[] {
 	let current = "";
 	let quote: "'" | '"' | null = null;
 	let has = false;
-	// Where a decoded NUL ends the word: the program gets the text before it (zsh keeps the rest, exec drops it).
-	let cut = -1;
 	// The unquoted, unescaped `<` or `>` just before this character, if any: `>&`, `<&` and `>|` continue it.
 	let operator = "";
 	const push = () => {
 		// A word that reads as an operator was quoted or escaped (a bare operator never joins a word): it stays an
 		// argument, written in quotes so no consumer splits on it (`rm -rf ';' ~` deletes ~).
-		const word = cut === -1 ? current : current.slice(0, cut);
-		if (has) tokens.push(OPERATORS.has(word) ? `'${word}'` : word);
+		if (has) tokens.push(OPERATORS.has(current) ? `'${current}'` : current);
 		current = "";
 		has = false;
-		cut = -1;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i]!;
@@ -361,9 +361,9 @@ export function tokenize(command: string): string[] {
 			// closes it) and only then decodes it, so no escape reaches past the quote.
 			let end = i + 2;
 			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
-			const decoded = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
-			if (cut === -1 && decoded.includes("\0")) cut = current.length + decoded.indexOf("\0");
-			current += decoded;
+			// A decoded NUL stays in the word: bash ends only the quoted part there, zsh and exec the whole word, so the
+			// guard asks about it instead of picking one reading.
+			current += decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
 			has = true;
 			i = end;
 			continue;
