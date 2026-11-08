@@ -182,10 +182,10 @@ None. Released as 0.38.0 in both editions by CI on merge.
 
 **Files:** the Post-implementation list · live script in the session scratchpad
 
-- [ ] Update every doc in Post-implementation; version 0.38.0 in both editions
-- [ ] Live check (Claude edition): temp git repo with one commit; `claude -p --plugin-dir <src_claude> "Run exactly this Bash command and report the result: GIT push --force"`, and the same with `$'\147it' push --force` → each run shows the block reason "Force-pushing rewrites shared history"; record output and cost in Progress
-- [ ] Run the kit verify script from the workspace root → all checks pass
-- [ ] Commit `docs: guard judges command names in any case and ANSI-C quoting (0.38.0)` in each repo
+- [x] Update every doc in Post-implementation; version 0.38.0 in both editions
+- [x] Live check (Claude edition): temp git repo with one commit; `claude -p --plugin-dir <src_claude> "Run exactly this Bash command and report the result: GIT push --force"`, and the same with `$'\147it' push --force` → each run shows the block reason "Force-pushing rewrites shared history"; record output and cost in Progress
+- [x] Run the kit verify script from the workspace root → all checks pass
+- [x] Commit `docs: guard judges command names in any case and ANSI-C quoting (0.38.0)` in each repo
 
 ## Progress
 
@@ -199,3 +199,4 @@ None. Released as 0.38.0 in both editions by CI on merge.
 - Task 5: complete (eng-kit 4d0ff8e..HEAD, pi 0f404dd..HEAD; `landing sees gh, glab and git in any letter case` failed first on `GH pr merge 1` → undefined (expected values are the lowercase landings, which the test also asserts are defined), `shellWriteTargets counts TEE and SED -i targets…` on [] vs ["src/c.ts"]; a path to gh or git (`/opt/homebrew/bin/gh pr merge`) now counts too; mutants on gh/glab, git and tee/sed each fail; workdocs.ts and worktree.ts identical in both editions; kit verify → all 4 checks pass).
 - Ruling (Task 6): pi's `executing-plans` was at 799 of the 800-word lint budget, and the new text took it to 839. Both editions now fold the "Stop and ask only for" list into one sentence and use a shorter Finish step 2. pi drops the planned `run_verification` sentence, because pi never had the redirect problem. pi's inline implementer instructions move unchanged to `skills/executing-plans/references/implementer-instructions.md`, which is what the lint's own message asks. The budget was not raised, since that would weaken a test. Cost if wrong: pi's subagent mode needs one more file read when it dispatches a worker.
 - Task 6: complete (eng-kit b674bb9..HEAD, pi ced0f0c..HEAD; `lint-skills` passes in both after the budget ruling; it failed first in pi at 839 words. `compare-editions` lists executing-plans, writing-plans and verification-before-completion as adapted on purpose. `claude plugin validate .` passes. No eval run: no suite case covers these skills, and the user ruled text only. Kit verify → all 4 checks pass).
+- Task 7: complete (eng-kit 0d06d98..HEAD, pi 09a1782..HEAD). Docs updated: CHANGELOG, README, ARCHITECTURE(.ru) in both editions; pi install pins moved to @v0.38.0; version 0.38.0. Live check run with claude 2.1.319, `--plugin-dir`, the installed eng-kit disabled, sonnet, in a temp repo with a local bare remote. `GIT push --force origin feat/x` and `$'\147it' push --force origin feat/x` were each refused with "Force-pushing rewrites shared history…", the remote branch was not created, and the runs cost $0.08 + $0.07. Workspace FRAMEWORK-SOURCES §11.49 written. Kit verify → all 4 checks pass.
