@@ -334,3 +334,14 @@ test("landing sees gh, glab and git in any letter case", () => {
 		assert.deepEqual(landing(upper.split(" ")), landing(lower.split(" ")), upper);
 	}
 });
+
+test("landing skips an assignment or argument whose base name is git or gh and finds the real call", () => {
+	for (const [before, plain] of [
+		[["HOME=/srv/git", "git", "push", "origin", "main"], ["git", "push", "origin", "main"]],
+		[["GIT_SSH_COMMAND=ssh -i ~/.ssh/git", "git", "push", "origin", "main"], ["git", "push", "origin", "main"]],
+		[["sudo", "-u", "Git", "git", "merge", "x"], ["git", "merge", "x"]],
+		[["flock", "/tmp/gh", "gh", "pr", "merge", "1"], ["gh", "pr", "merge", "1"]],
+	]) {
+		assert.deepEqual(landing(before), landing(plain), before.join(" "));
+	}
+});

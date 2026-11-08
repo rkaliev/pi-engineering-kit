@@ -200,26 +200,38 @@ export function currentBranch(projectDir: string, timeout?: number): string | un
 export function landing(raw: string[]): Landing | undefined {
 	// A group or substitution around the command does not hide it.
 	const tokens = raw.map(unwrapToken).filter(Boolean);
-	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
-	// gh, glab and git run in any letter case on macOS and Windows.
-	const named = (name: string) => (t: string) => commandName(t) === name;
-	for (const tool of ["gh", "glab"]) {
-		const at = words.findIndex(named(tool));
-		if (at === -1) continue;
-		const args = tokens.slice(tokens.findIndex(named(tool)) + 1);
-		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
-		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
-		const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
-		if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
-		const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
-		const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));
-		if (head === -1) return { kind: "pr", merge: false, repo };
-		const flag = args[head]!;
-		return { kind: "pr", merge: false, target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1], repo };
+	const isWord = (t: string) => !t.includes("=") || t.startsWith("-");
+	// gh, glab and git run in any letter case on macOS and Windows. Every word that names one is a candidate, so an
+	// argument or assignment with such a base name (`HOME=/srv/git git push`, `flock /tmp/gh gh pr merge`) hides nothing.
+	const calls = (name: string) => tokens.flatMap((t, i) => (isWord(t) && commandName(t) === name ? [i] : []));
+	for (const tool of ["gh", "glab"] as const) {
+		for (const at of calls(tool)) {
+			const found = prLanding(tool, tokens.slice(at + 1), isWord);
+			if (found) return found;
+		}
 	}
-	if (!words.some(named("git"))) return undefined;
-	// Raw tokens after git: `-c key=value` keeps its value, so options and their values pair up.
-	const rest = tokens.slice(tokens.findIndex(named("git")) + 1);
+	for (const at of calls("git")) {
+		const found = gitLanding(tokens.slice(at + 1));
+		if (found) return found;
+	}
+	return undefined;
+}
+
+/** `gh pr create|merge` or `glab mr create|merge` from the tokens after the tool. */
+function prLanding(tool: "gh" | "glab", args: string[], isWord: (t: string) => boolean): Landing | undefined {
+	const [noun, verb, first] = args.filter((t) => isWord(t) && !t.startsWith("-"));
+	if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) return undefined;
+	const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
+	if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
+	const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
+	const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));
+	if (head === -1) return { kind: "pr", merge: false, repo };
+	const flag = args[head]!;
+	return { kind: "pr", merge: false, target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1], repo };
+}
+
+/** A git commit, merge or push from the raw tokens after git: `-c key=value` keeps its value, so options and their values pair up. */
+function gitLanding(rest: string[]): Landing | undefined {
 	// The subcommand is the first word after git's own options (`-C <dir>` and `-c <key=value>` take a value).
 	let verb = 0;
 	let dir: string | undefined;
