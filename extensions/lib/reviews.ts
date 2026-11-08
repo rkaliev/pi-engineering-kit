@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { commandName, foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { baseBranch, currentBranch, landing, pushedToBase, type Landing } from "./workdocs.ts";
@@ -719,7 +719,8 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (state.length > 0) {
 			const shallow = new Set(["/", homedir(), tmpdir(), canonical(tmpdir())].map((p) => p.replaceAll("\\", "/")));
 			const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
-			const removes = ["rm", "rmdir", "mv", "unlink"].includes(head.slice(head.lastIndexOf("/") + 1));
+			// The programs run in any letter case on macOS and Windows.
+			const removes = ["rm", "rmdir", "mv", "unlink"].includes(commandName(head));
 			if (real.some((p) => state.some((s) => p === s || p.startsWith(`${s}/`) || (removes && s.startsWith(`${p}/`) && !shallow.has(p))))) {
 				return { action: "block", reason: "The kit's session state is written only by its hooks." };
 			}
