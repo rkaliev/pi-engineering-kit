@@ -294,20 +294,24 @@ function isOutside(target: string, cwd: string): boolean {
 const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
- * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$'…'`) and backslash escapes, and splits out
- * control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows `cmd`.
+ * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as `"…"`, and `$'…'` with its escapes decoded) and
+ * backslash escapes, and splits out control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows
+ * `cmd`.
  */
 export function tokenize(command: string): string[] {
 	const tokens: string[] = [];
 	let current = "";
 	let quote: "'" | '"' | "$'" | null = null;
 	let has = false;
+	// Where a decoded NUL ends the word: the program gets the text before it (zsh keeps the rest, exec drops it).
+	let cut = -1;
 	// The unquoted, unescaped `<` or `>` just before this character, if any: `>&`, `<&` and `>|` continue it.
 	let operator = "";
 	const push = () => {
-		if (has) tokens.push(current);
+		if (has) tokens.push(cut === -1 ? current : current.slice(0, cut));
 		current = "";
 		has = false;
+		cut = -1;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i]!;
@@ -326,7 +330,12 @@ export function tokenize(command: string): string[] {
 				i++;
 				continue;
 			}
-			if (ch === "\\" && next !== undefined && (quote === "$'" || /["\\$`\n]/.test(next))) {
+			if (ch === "\\" && next !== undefined && quote === "$'") {
+				const { text, end } = ansiEscape(command, i);
+				if (cut === -1 && text.includes("\0")) cut = current.length + text.indexOf("\0");
+				current += text;
+				i = end;
+			} else if (ch === "\\" && next !== undefined && /["\\$`\n]/.test(next)) {
 				current += next;
 				i++;
 			} else if (ch === (quote === "$'" ? "'" : '"')) quote = null;
@@ -343,8 +352,9 @@ export function tokenize(command: string): string[] {
 			has = true;
 			continue;
 		}
-		if (ch === "$" && command[i + 1] === "'") {
-			quote = "$'";
+		if (ch === "$" && (command[i + 1] === "'" || command[i + 1] === '"')) {
+			// bash reads `$"…"` as `"…"` (a translation that is usually the same text); zsh as `$` and a quoted word.
+			quote = command[i + 1] === "'" ? "$'" : '"';
 			has = true;
 			i++;
 			continue;
@@ -381,6 +391,36 @@ export function tokenize(command: string): string[] {
 	}
 	push();
 	return tokens;
+}
+
+const ANSI_SIMPLE: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
+
+/**
+ * The escape at `command[i]` (a backslash inside `$'…'`): the text it stands for and the index of its last character.
+ * Where bash and zsh differ, the reading that can spell a command name wins: an unknown escape is its character
+ * (zsh; bash keeps the backslash), and `\x`, `\u` or `\U` without digits stays as written (bash).
+ */
+function ansiEscape(command: string, i: number): { text: string; end: number } {
+	const ch = command[i + 1]!;
+	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { text: ANSI_SIMPLE[ch]!, end: i + 1 };
+	const run = (digit: RegExp, from: number, max: number) => {
+		let j = from;
+		while (j < from + max && digit.test(command[j] ?? "")) j++;
+		return j;
+	};
+	if (/[0-7]/.test(ch)) {
+		const j = run(/[0-7]/, i + 1, 3);
+		return { text: String.fromCharCode(parseInt(command.slice(i + 1, j), 8) & 0xff), end: j - 1 };
+	}
+	if (Object.hasOwn(ANSI_HEX, ch)) {
+		const j = run(/[0-9a-fA-F]/, i + 2, ANSI_HEX[ch]!);
+		if (j === i + 2) return { text: `\\${ch}`, end: i + 1 };
+		const code = parseInt(command.slice(i + 2, j), 16);
+		return { text: code <= 0x10ffff ? String.fromCodePoint(code) : "", end: j - 1 };
+	}
+	if (ch === "c" && i + 2 < command.length) return { text: String.fromCharCode(command.charCodeAt(i + 2) & 0x1f), end: i + 2 };
+	return { text: ch, end: i + 1 };
 }
 
 /** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */

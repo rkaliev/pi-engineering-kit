@@ -1,6 +1,6 @@
 # Guard judges command names in any case and ANSI-C quoted words as the shell runs them
 
-Status: plan approved (2026-11-08)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 3c5336e7cb3ca89d7093a570f1836af79a6c89c6, pi 8729545f00492d89e4a0ca8323ba782fbb07541a
 Links: FRAMEWORK-SOURCES §11.48 ("Follow-ups после 0.37.0" and "Добавлено в 0.38.0 по отчёту пользователя")
@@ -115,11 +115,11 @@ None. Released as 0.38.0 in both editions by CI on merge.
 **Files:** Modify `lib/patterns.ts` (Claude), `extensions/lib/patterns.ts` (pi), `tokenize` only · Test `tests/guard.test.ts` in both
 **Interfaces:** Produces `tokenize(command: string): string[]` with decoded words (signature unchanged)
 
-- [ ] Write failing test `tokenize decodes ANSI-C quoting as bash does`: `tokenize("$'\\147it' push")` → `["git", "push"]`; the same for `$'\\x67it'`, `$'g\\u0069t'`, `$'\\U00000067it'`, `$"git"`; `$'a\\tb'` → `["a\tb"]`; `$'\\cA'` → `["\x01"]`; `$'\\q'` → `["\\q"]` (an unknown escape keeps its backslash); `$'a\\0b'` → `["a"]`; `$'\\x'` → `["\\x"]`; `$'\\u'` → `["\\u"]`; `echo $'a\\x3bgit'` → `["echo", "a;git"]`. And test `ANSI-C quoted git is judged as git`: `$'\\147it' push --force` and `$"git" commit -n` → `block`; `$'\\x67it' reset --hard` → `confirm`.
-- [ ] Run `node --test tests/guard.test.ts` in `src_claude` → expect FAIL: `["147it", "push"]` vs `["git", "push"]`
-- [ ] Implement in `tokenize`: inside `$'…'` decode `\a \b \e \E \f \n \r \t \v \\ \' \" \?`, octal `\nnn` (1–3 digits), `\xHH` (1–2), `\uHHHH` (1–4), `\UHHHHHHHH` (1–8), `\cX` (`X & 0x1f`); a NUL drops the rest of the quoted content; `\x`, `\u`, `\U` without digits and unknown escapes keep the backslash. `$"` opens a double-quoted word like `"`.
-- [ ] Run the test file in both editions → PASS; then `npm test` in both → all pass
-- [ ] Commit `fix(guard): decode $'…' and $"…" words as the shell does`
+- [x] Write failing test `tokenize decodes ANSI-C quoting as bash does`: `tokenize("$'\\147it' push")` → `["git", "push"]`; the same for `$'\\x67it'`, `$'g\\u0069t'`, `$'\\U00000067it'`, `$"git"`; `$'a\\tb'` → `["a\tb"]`; `$'\\cA'` → `["\x01"]`; `$'\\q'` → `["\\q"]` (an unknown escape keeps its backslash); `$'a\\0b'` → `["a"]`; `$'\\x'` → `["\\x"]`; `$'\\u'` → `["\\u"]`; `echo $'a\\x3bgit'` → `["echo", "a;git"]`. And test `ANSI-C quoted git is judged as git`: `$'\\147it' push --force` and `$"git" commit -n` → `block`; `$'\\x67it' reset --hard` → `confirm`.
+- [x] Run `node --test tests/guard.test.ts` in `src_claude` → expect FAIL: `["147it", "push"]` vs `["git", "push"]`
+- [x] Implement in `tokenize`: inside `$'…'` decode `\a \b \e \E \f \n \r \t \v \\ \' \" \?`, octal `\nnn` (1–3 digits), `\xHH` (1–2), `\uHHHH` (1–4), `\UHHHHHHHH` (1–8), `\cX` (`X & 0x1f`); a NUL drops the rest of the quoted content; `\x`, `\u`, `\U` without digits and unknown escapes keep the backslash. `$"` opens a double-quoted word like `"`.
+- [x] Run the test file in both editions → PASS; then `npm test` in both → all pass
+- [x] Commit `fix(guard): decode $'…' and $"…" words as the shell does`
 
 ### Task 2: token checks fold external command names
 
@@ -189,4 +189,6 @@ None. Released as 0.38.0 in both editions by CI on merge.
 
 ## Progress
 
-None yet
+- Baseline (eng-kit c696145, pi 9922161): kit verify from the workspace root → typecheck and tests pass in both editions. No drift since Base (only the task file changed).
+- Ruling: `$'…'` follows the stricter of bash and zsh, not the plan's bash-only reading: an unknown escape is its character (zsh: `$'\g\it'` runs git) and a decoded NUL ends the whole word (zsh/exec: `$'git\0'push` runs git); `\x`/`\u`/`\U` without digits stay as written (bash) — the description asks for the word the shell runs, and zsh is the user's shell — cost if wrong: a bash-only false positive. Ruling: the `$'\x67it' reset --hard` → confirm assertion moved to Task 3, because regex rules read the raw text until Task 3 builds the view — cost if wrong: none, Task 3 asserts it.
+- Task 1: complete (eng-kit c696145..HEAD, pi 9922161..HEAD; `tokenize decodes ANSI-C quoting…` failed first on ["147it","push"], `ANSI-C quoted git is judged as git` on allow vs block; the pi copy is the same code and test; kit verify → all 4 checks pass).

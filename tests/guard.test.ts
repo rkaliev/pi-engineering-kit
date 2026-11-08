@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
-import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
+import { checkCommand, checkPath, type GuardConfig, tokenize } from "../extensions/lib/patterns.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -1075,4 +1075,35 @@ test("guard: other interpreter forms are judged as before", () => {
 	]) {
 		assert.equal(action(command), "block", JSON.stringify(command));
 	}
+});
+
+// Expected words are what bash and zsh run (probed 2026-11-08); where they differ, the one that can spell a command name.
+test("tokenize decodes ANSI-C quoting as the shell does", () => {
+	const cases: Array<[string, string[]]> = [
+		["$'\\147it' push", ["git", "push"]],
+		["$'\\x67it' push", ["git", "push"]],
+		["$'g\\u0069t' push", ["git", "push"]],
+		["$'\\U00000067it' push", ["git", "push"]],
+		['$"git" push', ["git", "push"]],
+		["$'a\\tb'", ["a\tb"]],
+		["$'\\cA'", ["\x01"]],
+		["$'\\E'", ["\x1b"]],
+		["$'\\1010'", ["A0"]],
+		["$'\\x414'", ["A4"]],
+		// zsh drops the backslash of an unknown escape: `$'\g\it'` runs git there.
+		["$'\\g\\it'", ["git"]],
+		// A NUL ends the argument the program gets: `$'git\0'push` runs git in zsh.
+		["$'a\\0b'", ["a"]],
+		["$'git\\0'push x", ["git", "x"]],
+		["$'\\x'", ["\\x"]],
+		["$'\\u'", ["\\u"]],
+		// A decoded `;` is a character of the word, not a separator.
+		["echo $'a\\x3bgit'", ["echo", "a;git"]],
+	];
+	for (const [command, tokens] of cases) assert.deepEqual(tokenize(command), tokens, command);
+});
+
+test("ANSI-C quoted git is judged as git", () => {
+	assert.equal(action("$'\\147it' push --force"), "block");
+	assert.equal(action('$"git" commit -n -m x'), "block");
 });
