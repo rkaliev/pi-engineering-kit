@@ -216,11 +216,6 @@ export function allLandings(raw: string[]): Landing[] {
 	return found;
 }
 
-/** The first commit, merge, push or PR call in one segment (see allLandings). */
-export function landing(raw: string[]): Landing | undefined {
-	return allLandings(raw)[0];
-}
-
 /** `gh pr create|merge` or `glab mr create|merge` from the tokens after the tool. */
 function prLanding(tool: "gh" | "glab", args: string[], isWord: (t: string) => boolean): Landing | undefined {
 	const [noun, verb, first] = args.filter((t) => isWord(t) && !t.startsWith("-"));

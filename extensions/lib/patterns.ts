@@ -101,12 +101,13 @@ export function checkCommand(
 	const target = write !== undefined && !isOutside(write.startsWith("~") ? write : resolve(dir, write), cwd) ? resolve(dir, write) : undefined;
 	const text = target ? heredoc!.head : command;
 	const segments = splitSegments(tokenize(text));
-	// The command as the shell runs it, decoded and folded twice: every word but an option (`-D` stays `-D`), and every
-	// word (a command glued to an option, `-c"…('GIT push')"`). Rules that block or ask read the text and both views;
+	// The command as the shell runs it, decoded and folded: every word but an option (`-D` stays `-D`), every word (a
+	// command glued to an option, `-c"…('GIT push')"`), and the raw text. Rules that block or ask read the text and the views;
 	// `allow` and the own-branch push read only the text, so the views can't loosen anything.
 	const viewsOf = (s: string) => {
 		const words = tokenize(s);
-		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" "))];
+		// The raw text folded too, quotes kept: `env -S"GIT push"` has its word boundary there.
+		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" ")), foldPath(s)];
 	};
 	const views = viewsOf(text);
 	const commandViews = text === command ? views : viewsOf(command);
@@ -353,8 +354,13 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "\\") {
-			// A backslash-newline is a line continuation: the shell joins the lines.
+			// A backslash-newline is a line continuation: the shell joins the lines. Right after a `$` the shells may read
+			// the `$` with what follows (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks.
 			if (command[i + 1] === "\n") {
+				if (command[i - 1] === "$") {
+					current += "\0";
+					has = true;
+				}
 				i++;
 				continue;
 			}
@@ -367,13 +373,13 @@ export function tokenize(command: string): string[] {
 			// closes it) and only then decodes it, so no escape reaches past the quote.
 			let end = i + 2;
 			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
-			// A NUL in the word marks a reading the shells disagree on, and the guard asks about it: a decoded NUL (bash
-			// ends only the quoted part there, zsh and exec the whole word), or `$$'` (bash reads the PID and a plain
-			// quote, zsh a `$` and this word), found as an even run of `$` ending here.
-			let dollars = 0;
-			while (command[i - dollars] === "$") dollars++;
-			if (dollars % 2 === 0) current += "\0";
-			current += decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
+			// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling after
+			// review round 3): a `$` just before this one (`$$'`, `\$$$'`: bash may read the PID and a plain quote, zsh a
+			// `$` and this word), an escape the two decode differently, bytes that aren't UTF-8 on their own (bash and zsh
+			// join them with the next part), or a decoded NUL (bash ends only the quoted part there, zsh the whole word).
+			const { text: decoded, agreed } = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
+			if (command[i - 1] === "$" || !agreed) current += "\0";
+			current += decoded;
 			has = true;
 			i = end;
 			continue;
@@ -420,34 +426,44 @@ export function tokenize(command: string): string[] {
 }
 
 /**
- * The text of a `$'…'` word's body with its escapes decoded. Escapes give bytes (`\xc5\xbf` is `ſ`), and the bytes are read
- * as UTF-8, as the program receives them.
+ * A `$'…'` word's body with its escapes decoded, and whether bash and zsh agree on all of it. Escapes give bytes (`\xc5\xbf`
+ * is `ſ`), read as UTF-8 as the program receives them; bytes that aren't valid UTF-8 on their own may join the next part.
  */
-function decodeAnsi(body: string): string {
+function decodeAnsi(body: string): { text: string; agreed: boolean } {
 	const bytes: number[] = [];
+	let agreed = true;
 	for (let i = 0; i < body.length; i++) {
 		if (body[i] !== "\\" || i + 1 >= body.length) {
-			bytes.push(...Buffer.from(body[i]!, "utf8"));
+			// By code point, so a character outside the BMP stays whole.
+			const char = String.fromCodePoint(body.codePointAt(i)!);
+			bytes.push(...Buffer.from(char, "utf8"));
+			i += char.length - 1;
 			continue;
 		}
 		const escape = ansiEscape(body, i);
 		bytes.push(...escape.bytes);
+		agreed &&= escape.agreed;
 		i = escape.end;
 	}
-	return Buffer.from(bytes).toString("utf8");
+	try {
+		return { text: new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)), agreed: agreed && !bytes.includes(0) };
+	} catch {
+		return { text: Buffer.from(bytes).toString("utf8"), agreed: false };
+	}
 }
 
-const ANSI_SIMPLE: Record<string, number> = { a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
+const ANSI_SIMPLE: Record<string, number> = { a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b, "\\": 0x5c, "'": 0x27, '"': 0x22, "?": 0x3f };
 const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
 
 /**
- * The escape at `body[i]` (a backslash inside a `$'…'` body): its bytes and the index of its last character. Where bash
- * and zsh differ, the reading that can spell a command name or holds a NUL wins: an unknown escape is its character,
- * and `\x`, `\u` or `\U` without digits is a NUL (zsh). zsh's `\C-X` and `\M-X` count too.
+ * The escape at `body[i]` (a backslash inside a `$'…'` body): its bytes, the index of its last character, and whether bash
+ * and zsh read it the same. They agree on the letters above, `\\`, `\'`, `\"`, `\?`, octal, and `\x`, `\u` and `\U` with
+ * digits. Anything else (`\c`, zsh's `\C` and `\M`, an unknown letter, `\x` without digits) is read differently, and its
+ * bytes are only a best guess.
  */
-function ansiEscape(body: string, i: number): { bytes: number[]; end: number } {
+function ansiEscape(body: string, i: number): { bytes: number[]; end: number; agreed: boolean } {
 	const ch = body[i + 1]!;
-	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { bytes: [ANSI_SIMPLE[ch]!], end: i + 1 };
+	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { bytes: [ANSI_SIMPLE[ch]!], end: i + 1, agreed: true };
 	const run = (digit: RegExp, from: number, max: number) => {
 		let j = from;
 		while (j < from + max && digit.test(body[j] ?? "")) j++;
@@ -455,22 +471,17 @@ function ansiEscape(body: string, i: number): { bytes: number[]; end: number } {
 	};
 	if (/[0-7]/.test(ch)) {
 		const j = run(/[0-7]/, i + 1, 3);
-		return { bytes: [parseInt(body.slice(i + 1, j), 8) & 0xff], end: j - 1 };
+		return { bytes: [parseInt(body.slice(i + 1, j), 8) & 0xff], end: j - 1, agreed: true };
 	}
 	if (Object.hasOwn(ANSI_HEX, ch)) {
 		const j = run(/[0-9a-fA-F]/, i + 2, ANSI_HEX[ch]!);
-		if (j === i + 2) return { bytes: [0], end: i + 1 };
+		if (j === i + 2) return { bytes: [0], end: i + 1, agreed: false };
 		const code = parseInt(body.slice(i + 2, j), 16);
-		if (ch === "x") return { bytes: [code], end: j - 1 };
-		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1 };
+		if (ch === "x") return { bytes: [code], end: j - 1, agreed: true };
+		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1, agreed: true };
 	}
-	// `\cX` is control-X; in `\c\\` the escaped backslash is the X.
-	if (ch === "c" && i + 2 < body.length) return { bytes: [body.charCodeAt(i + 2) & 0x1f], end: body[i + 2] === "\\" && i + 3 < body.length ? i + 3 : i + 2 };
-	if ((ch === "C" || ch === "M") && body[i + 2] === "-" && i + 3 < body.length) {
-		const code = body.charCodeAt(i + 3);
-		return { bytes: [ch === "C" ? code & 0x1f : (code | 0x80) & 0xff], end: i + 3 };
-	}
-	return { bytes: [...Buffer.from(ch, "utf8")], end: i + 1 };
+	const char = String.fromCodePoint(body.codePointAt(i + 1)!);
+	return { bytes: [...Buffer.from(char, "utf8")], end: i + char.length, agreed: false };
 }
 
 /** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */

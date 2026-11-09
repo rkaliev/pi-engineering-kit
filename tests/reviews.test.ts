@@ -1432,3 +1432,12 @@ test("gate files: a segment holding a quoted operator word is never read-only", 
 	assert.equal(check("cat x \\; Set-Content .claude/guard.json '{}'"), "confirm");
 	assert.equal(check("cat .claude/guard.json"), "allow");
 });
+
+// A quoted operator word means one segment runs several commands (`find … -exec … \; -exec …`, or PowerShell's `\;`), so
+// nothing in it counts as a safe step before a landing.
+test("a segment holding a quoted operator word is never a safe step before a landing", () => {
+	const { git, check } = repo();
+	assert.equal(action(check("find . -maxdepth 0 -exec git switch main \\; -exec git merge feat/a \\;")), "block");
+	git("switch", "-q", "main");
+	assert.equal(action(check("cat x \\; git switch main; git merge feat/a")), "block");
+});

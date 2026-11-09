@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
 import { slowGit } from "./slow-git.ts";
-import { allLandings, baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
+import { allLandings, baseBranch, checkWorkDocs, finishedWorkDocs, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -151,7 +151,7 @@ test("finished task files: every box in the Plan section ticked, in the working 
 
 test("push options that take a separate value don't name the remote or a refspec", () => {
 	const push = (command: string) => {
-		const l = landing(command.split(" "));
+		const l = allLandings(command.split(" "))[0];
 		return l?.kind === "push" ? { remote: l.remote, refspecs: l.refspecs } : l;
 	};
 	for (const flag of ["-o", "--push-option", "--repo", "--receive-pack", "--exec"]) {
@@ -330,8 +330,8 @@ test("landing sees gh, glab and git in any letter case", () => {
 		["GIT merge x", "git merge x"],
 		["GIT commit -m x", "git commit -m x"],
 	]) {
-		assert.notEqual(landing(lower.split(" ")), undefined, lower);
-		assert.deepEqual(landing(upper.split(" ")), landing(lower.split(" ")), upper);
+		assert.notEqual(allLandings(lower.split(" "))[0], undefined, lower);
+		assert.deepEqual(allLandings(upper.split(" "))[0], allLandings(lower.split(" "))[0], upper);
 	}
 });
 
@@ -342,7 +342,7 @@ test("landing skips an assignment or argument whose base name is git or gh and f
 		[["sudo", "-u", "Git", "git", "merge", "x"], ["git", "merge", "x"]],
 		[["flock", "/tmp/gh", "gh", "pr", "merge", "1"], ["gh", "pr", "merge", "1"]],
 	]) {
-		assert.deepEqual(landing(before), landing(plain), before.join(" "));
+		assert.deepEqual(allLandings(before)[0], allLandings(plain)[0], before.join(" "));
 	}
 });
 

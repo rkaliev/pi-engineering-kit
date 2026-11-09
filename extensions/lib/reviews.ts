@@ -493,6 +493,9 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 	return visible;
 }
 
+/** An operator the tokenizer re-quoted because it was quoted or escaped (`';'`): an argument to bash, a separator elsewhere. */
+const OPERATOR_WORD = /^'(&&|\|\||;|\||&|\n)'$/;
+
 /** The review gate over the landings the command's segments show. */
 function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const shell = new Subshells(cwd, command);
@@ -504,11 +507,15 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
 		// Every call in the segment counts: `find … -exec git commit … \; -exec git merge …` runs both.
 		const found = allLandings(tokens);
+		// A quoted operator word means the segment runs several commands (`find … -exec … \; -exec …`, PowerShell's `\;`):
+		// none of it is a safe step, and a landing in it may follow a switch or a commit.
+		const several = tokens.some((t) => OPERATOR_WORD.test(t));
 		if (found.every((l) => l.kind === "commit")) {
-			if (shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) unsafeBefore = true;
+			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) || several) unsafeBefore = true;
 			continue;
 		}
 		const dir = shell.dir;
+		if (several) unsafeBefore = true;
 		for (const l of found) {
 			if (l.kind === "commit") {
 				unsafeBefore = true;
@@ -700,7 +707,7 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		// A re-quoted operator word (`\;`) is a separator in PowerShell, so such a segment is never read-only.
-		const operatorWord = tokens.some((t) => /^'(&&|\|\||;|\||&|\n)'$/.test(t));
+		const operatorWord = tokens.some((t) => OPERATOR_WORD.test(t));
 		const readOnly = readable && !redirects && !runs && !operatorWord && ((READ_ONLY.has(tokens[0] ?? "") && !tokens.some((t) => WRITING[tokens[0]!]?.test(t))) || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
 		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.

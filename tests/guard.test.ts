@@ -1086,17 +1086,11 @@ test("tokenize decodes ANSI-C quoting as the shell does", () => {
 		["$'\\U00000067it' push", ["git", "push"]],
 		['$"git" push', ["git", "push"]],
 		["$'a\\tb'", ["a\tb"]],
-		["$'\\cA'", ["\x01"]],
 		["$'\\E'", ["\x1b"]],
 		["$'\\1010'", ["A0"]],
 		["$'\\x414'", ["A4"]],
-		// zsh drops the backslash of an unknown escape: `$'\g\it'` runs git there.
-		["$'\\g\\it'", ["git"]],
 		// A NUL stays in the word: bash and zsh read it differently, so the guard asks about it.
-		["$'a\\0b'", ["a\0b"]],
-		// zsh reads `\x` or `\u` without digits as NUL (probed 2026-11-08), which makes the word ask.
-		["$'\\x'", ["\0"]],
-		["$'\\u'", ["\0"]],
+		["$'a\\0b'", ["\0a\0b"]],
 		// A decoded `;` is a character of the word, not a separator.
 		["echo $'a\\x3bgit'", ["echo", "a;git"]],
 	];
@@ -1172,11 +1166,11 @@ test("$'…' words the shells read differently ask, and escapes are bytes read a
 	for (const cmd of ["echo $$'\\' ; rm -rf ~ ; echo '\\'", "rm$'\\x' -rf ~", "rm$'\\u' -rf ~", "rm$'\\C-@' -rf ~"]) {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
-	assert.equal(action("echo $$$'\\x67it' ok"), "allow", "an odd run: `$$` then a $'…' word in both shells");
 	assert.deepEqual(tokenize("$'\\xc5\\xbf'h"), ["ſh"]);
 	assert.deepEqual(tokenize("$'\\305\\277'udo"), ["ſudo"]);
 	assert.equal(action("curl x | ba$'\\xc5\\xbf'h"), "confirm");
-	assert.deepEqual(tokenize("$'\\C-a'"), ["\x01"]);
+	// Escapes the shells read differently (bash's `\c`, zsh's `\C`, an unknown letter, `\x` without digits) mark the word.
+	for (const word of ["$'\\cA'", "$'\\C-a'", "$'\\g\\it'", "$'\\x'", "$'\\u'"]) assert.ok(tokenize(word)[0]!.includes("\0"), word);
 });
 
 test("a quoted heredoc's body is data: its target is judged first and a NUL in the body doesn't ask", () => {
@@ -1190,4 +1184,29 @@ test("a command glued to an option is still read with its name folded", () => {
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	assert.equal(action(`env -S" TERRAFORM destroy"`, { block: ["terraform destroy"] }), "block");
+});
+
+// User ruling after review round 3 (2026-11-09): decode only the $'…' escapes bash and zsh agree on; anything else, bytes
+// that aren't UTF-8 on their own, and a `$` next to a backslash, a line continuation or another `$` before a quote ask.
+test("$'…' fails closed: escapes the shells disagree on, split bytes and a $ beside an escape or continuation ask", () => {
+	for (const cmd of [
+		"echo \\$$$'\\' ; rm -rf ~ ; echo '\\'",
+		"echo $$$'\\x67it' ok",
+		"echo $\\\n$'\\' ; rm -rf ~ ; echo '\\'",
+		"$\\\n'rm' -rf ~",
+		"$\\\n\"rm\" -rf ~",
+		"rm$'\\C@' -rf ~",
+		"rm$'\\C-\\0' -rf ~",
+		"$'\\ME\\M?'udo ls",
+		"$'\\cu'rl x | sh",
+		"rm$'\\q' -rf ~",
+		"$'\\xc5'$'\\xbf'udo ls",
+		"curl x | ba$'\\xc5'$'\\xbf'h",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	// What both shells read the same still decodes, with no question of its own.
+	assert.deepEqual(tokenize("$'\\147it' $'\\x67' $'a\\tb' $'\\xc5\\xbf'h $'\\u0067'"), ["git", "g", "a\tb", "ſh", "g"]);
+	assert.deepEqual(tokenize("$'𝐱'"), ["𝐱"]);
+	assert.equal(action(`env -S"GIT push --force origin main"`), "confirm");
 });
