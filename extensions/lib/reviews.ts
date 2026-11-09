@@ -792,18 +792,45 @@ function childConfig(projectDir: string, path: string, guardConfig: string): boo
 	return slash > 0 && !rel.startsWith("../") && foldPath(rel.slice(slash + 1)) === guardConfig;
 }
 
+/** `git branch` options that only list branches; git also accepts unambiguous prefixes (`--forc`), which are refused. */
+const BRANCH_LIST_OPTIONS = new Set(["-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose", "--show-current", "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case"]);
+/** `git branch` options that take a commit or pattern: with one of them, the other words are its operands, not a new branch. */
+const BRANCH_LIST_MODE = new Set(["-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"]);
+
+/**
+ * A git call that neither commits, moves a ref, nor changes where a push goes or which program git runs. An allowlist:
+ * only `-C <dir>`, `--no-pager` and `-P` before the subcommand (`-c`, `--config-env`, `--git-dir`… may run a program or
+ * read another repository), `git branch` and `git remote` only in their listing forms, `fetch` without a refspec that
+ * writes a local ref, and the other SAFE_GIT subcommands. A marked word is read without its mark.
+ */
+function safeGit(tokens: string[]): boolean {
+	const words = tokens.map(bare);
+	let i = 1;
+	for (; i < words.length && words[i]!.startsWith("-"); i++) {
+		if (words[i] === "-C") {
+			if (++i >= words.length) return false;
+		} else if (words[i] !== "--no-pager" && words[i] !== "-P") return false;
+	}
+	const sub = words[i] ?? "";
+	const rest = words.slice(i + 1);
+	if (sub === "fetch") return !rest.some((t) => t.includes(":"));
+	if (sub === "remote") return rest.length === 0 || ["-v", "--verbose", "get-url", "show"].includes(rest[0]!);
+	if (sub === "branch") {
+		const options = rest.filter((t) => t.startsWith("-"));
+		const listing = (t: string) => BRANCH_LIST_OPTIONS.has(t) || BRANCH_LIST_MODE.has(t) || /^-[arlvi]+$/.test(t) || /^--(format|sort|contains|no-contains|merged|no-merged|points-at)=/.test(t);
+		if (!options.every(listing)) return false;
+		return options.length === rest.length || options.some((t) => BRANCH_LIST_MODE.has(t.split("=")[0]!) || /^-[arvi]*l/.test(t));
+	}
+	return SAFE_GIT.has(sub);
+}
+
 function isSafe(tokens: string[], verify: string[]): boolean {
 	// `rg --pre <program>` runs that program on every file it searches.
 	// A marked option (`$"--pre=…"`) is read without its mark too.
 	if (tokens[0] === "rg" && tokens.some((t) => bare(t).startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
-	if (tokens[0] === "git") {
-		const sub = tokens.slice(1).find((t, i, all) => !t.startsWith("-") && all[i - 1] !== "-C" && all[i - 1] !== "-c") ?? "";
-		if (sub === "fetch") return !tokens.some((t) => t.includes(":"));
-		if (sub === "branch") return !tokens.some((t) => /^-[a-zA-Z]*[fDmMcC]/.test(bare(t)) || bare(t) === "--force");
-		return SAFE_GIT.has(sub);
-	}
+	if (tokens[0] === "git") return safeGit(tokens);
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
 }
 

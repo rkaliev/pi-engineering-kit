@@ -1564,6 +1564,28 @@ test("the review gate reads a marked program-running or ref-moving option withou
 	assert.equal(action(check('git branch $"-f" main feat/a && git push origin main')), "block");
 });
 
+test("the review gate trusts only listing forms of git branch and remote, and only -C, --no-pager and -P, before a landing", () => {
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
+	const safe = [
+		"git branch", "git branch --show-current", "git branch -av", "git branch --list 'feat/*'", "git branch --contains=HEAD", "git branch --contains HEAD feat/a",
+		"git remote -v", "git remote get-url origin", "git --no-pager log -1", "git -C . status",
+	];
+	for (const step of safe) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
+	// Each of these moves or deletes a ref, changes the upstream or a remote's URL, or lets git run a program or read another repository.
+	const unsafe = [
+		"git branch --forc main feat/a", "git branch -d x", "git branch --delete x", "git branch --move x y", "git branch -u origin/main",
+		"git branch --set-upstream-to=origin/main", "git branch feat/x main", "git branch -dv x", "git branch --sort -x",
+		"git remote set-url origin /tmp/x", "git remote add x /tmp/x",
+		"git -c core.fsmonitor=x status", "git --config-env=core.pager=X log", "git --git-dir=x status", "git --work-tree=x status", "git --exec-path=x status", "git -C",
+	];
+	for (const step of unsafe) {
+		const found = check(`${step} && gh pr create --fill`);
+		assert.equal(action(found), "block", step);
+		assert.match(String(found?.reason), /runs a step before it lands/, step);
+	}
+});
+
 test("the PR record reads PowerShell's split", () => {
 	const { dir, root, commit, head, base, check, review } = repo();
 	review(report(head, "Yes", base));
