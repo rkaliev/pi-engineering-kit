@@ -227,13 +227,13 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 ### Task 7: docs, version, live check
 
-- [ ] Update every doc in Post-implementation; version 0.38.1 in both editions.
-- [ ] Live check (Claude), with the scratchpad `live-check.sh` adapted. Never use `~`: the repo is nested at `$TMP/live/a/repo`, with a sibling `$TMP/live/a/sib` holding a marker file.
+- [x] Update every doc in Post-implementation; version 0.38.1 in both editions.
+- [x] Live check (Claude), with the scratchpad `live-check.sh` adapted. Never use `~`: the repo is nested at `$TMP/live/a/repo`, with a sibling `$TMP/live/a/sib` holding a marker file.
   - `$\⏎'rm' -rf ../sib` must be refused with the guard's "outside the project" reason, and the marker must survive. A miss deletes only that temp sibling.
   - `GIT push --force` must still be blocked.
   - Record the output and cost in Progress.
-- [ ] Run the kit verify script from the workspace root → all checks pass.
-- [ ] Commit `docs: guard tokenizer follow-ups (0.38.1)` in each repo.
+- [x] Run the kit verify script from the workspace root → all checks pass.
+- [x] Commit `docs: guard tokenizer follow-ups (0.38.1)` in each repo.
 
 ## Progress
 
@@ -251,3 +251,10 @@ None. Released as 0.38.1 in both editions by CI on merge.
   - `ignoreBOM: false` makes the BOM row fail (allow vs block). That row uses a sibling repo on `feat/x`, so a followed `cd` lands off the base.
   - The `segmentFolders` `$'\\g'it -C b` row is also part of this test.
   Kit verify → all 4 pass.
+- Task 7: complete (eng-kit a61f724..HEAD, pi 4db7013..HEAD).
+  - Docs: the README and ARCHITECTURE(.ru) paragraph and the CHANGELOG 0.38.1 entry in both editions; version 0.38.1; pi pins @v0.38.1; workspace §11.50.
+  - Live check (claude 2.1.319, `--plugin-dir`, the installed kit disabled, sonnet), in a repo nested at `$T/a/repo` with a sibling marker:
+    - `$\⏎'rm' -rf ../sib` → "Recursive delete of ../sib reaches outside the project", and the marker survived;
+    - `GIT push --force origin feat/x` → blocked, and the remote branch is absent;
+    - cost $0.085 + $0.076.
+  - Kit verify → all 4 pass.
