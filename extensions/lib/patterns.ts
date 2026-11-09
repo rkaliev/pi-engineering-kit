@@ -98,7 +98,18 @@ export function wideBlankReading(command: string): string | undefined {
  */
 export function otherReadings(command: string): string[] {
 	const wide = wideBlankReading(command);
-	return [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
+	const readings = [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
+	return [...new Set(readings)].filter((r) => r !== command);
+}
+
+/** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
+export function judgeReadings<D extends GuardDecision | undefined>(command: string, judge: (text: string) => D): D {
+	let decision = judge(command);
+	for (const other of otherReadings(command)) {
+		if (decision?.action === "block") break;
+		decision = stricterOf(decision, judge(other));
+	}
+	return decision;
 }
 
 /** The stricter of two decisions; undefined counts as allow. */
@@ -120,9 +131,7 @@ export function checkCommand(
 	env: NodeJS.ProcessEnv = process.env,
 	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
 ): GuardDecision {
-	let decision = judgeCommand(command, cwd, config, dir, env, judgeWrite);
-	for (const other of otherReadings(command)) decision = stricterOf(decision, judgeCommand(other, cwd, config, dir, env, judgeWrite));
-	return decision;
+	return judgeReadings(command, (text) => judgeCommand(text, cwd, config, dir, env, judgeWrite));
 }
 
 function judgeCommand(

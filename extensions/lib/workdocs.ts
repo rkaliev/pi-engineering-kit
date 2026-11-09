@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { commandName, otherReadings, quotedHeredoc, splitSegments, stricterOf, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { commandName, judgeReadings, quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
 import { bare, safeRealpath, segmentFolders } from "./shell.ts";
 
@@ -46,9 +46,7 @@ export function checkWorkDocs(
 	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
 ): GuardDecision | undefined {
 	// Also as other shells read it (otherReadings); the stricter decision wins.
-	let decision = workDocsGate(command, projectDir, dirs, workspace);
-	for (const other of otherReadings(command)) decision = stricterOf(decision, workDocsGate(other, projectDir, dirs, workspace));
-	return decision;
+	return judgeReadings(command, (text) => workDocsGate(text, projectDir, dirs, workspace));
 }
 
 function workDocsGate(

@@ -1232,6 +1232,7 @@ test("$ with continuations before a quote reads as both shells read it", () => {
 	for (const cmd of ["$\\\n'rm' -rf ~", "$\\\n'a\\'' ; rm -rf ~"]) assert.equal(action(cmd), "block", cmd);
 	for (const cmd of ['$"cd" /tmp; git status', '$\\\n"cd" /tmp; git status']) assert.equal(action(cmd), "confirm", cmd);
 	assert.equal(action("echo $\\\nHOME"), "allow");
+	assert.equal(action("rm -rf $\\\n{HOME}"), "block", "`$\\⏎{HOME}` is `${HOME}` in both shells");
 	assert.deepEqual(tokenize("echo $\\\n"), ["echo", "$"]);
 });
 
@@ -1250,8 +1251,8 @@ test("the mark's question names its causes", () => {
 	assert.doesNotMatch(reason('$"cd" x'), /`\$` before a quote/);
 });
 
-// PowerShell, and bash with `igncr`, split words on Unicode blanks and end a line at `\r`; blocks also read that split
-// (user ruling after 0.38.1 review round 1: «Блоки читают оба деления»), the stricter decision wins.
+// PowerShell splits words on Unicode blanks and ends a line at `\r`; blocks also read that split (user ruling after
+// 0.38.1 review round 1: «Блоки читают оба деления»), the stricter decision wins.
 test("blocks also read words split on every blank, as PowerShell does", () => {
 	for (const cmd of ["rm -r ~", "rm -rf ..\r", "git commit -m x --no-verify\r", "git push --force"]) {
 		assert.equal(action(cmd), "block", JSON.stringify(cmd));
@@ -1268,5 +1269,4 @@ test("a project confirm rule reads a marked word without its mark inside a hered
 // прочтение без `\r`»): blocks read both, and the stricter decision wins.
 test("blocks read U+0085 as a blank and a command with its carriage returns dropped", () => {
 	for (const cmd of ["rm -r\u0085~", "rm -rf\r ~", "rm -r\rf ../x"]) assert.equal(action(cmd), "block", JSON.stringify(cmd));
-	assert.equal(action("rm -rf $\\\n{HOME}"), "block", "`$\\⏎{HOME}` is `${HOME}` in both shells");
 });
