@@ -1,6 +1,6 @@
 # Guard reads words as the shells split and quote them, and asks where they disagree
 
-Status: design approved (2026-11-09)
+Status: plan approved (2026-11-09)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 4ff782d2b63ba0469db83ab4d09e0b30c1f8944d, pi 047dab04393e6d397a0ee7cb6bdea7cc1d292317
 Links: FRAMEWORK-SOURCES §11.49 ("Задача 0.38.1"); workspace docs/review-rounds/0.38.0/round5-findings.md (W1–W4 and the out-of-scope list)
