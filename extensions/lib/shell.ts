@@ -20,6 +20,13 @@ export function writes(command: string): boolean {
 	);
 }
 
+/** Where the `'` of a `$'…'` word opened by the `$` at `command[i]` is, past any line continuations (as tokenize reads it); -1 for none. */
+function ansiQuoteAt(command: string, i: number): number {
+	let at = i + 1;
+	while (command[at] === "\\" && command[at + 1] === "\n") at += 2;
+	return command[at] === "'" ? at : -1;
+}
+
 /** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
 export function blankQuoted(command: string): string {
 	let out = "";
@@ -40,10 +47,11 @@ export function blankQuoted(command: string): string {
 		if (ch === "\\" && i + 1 < command.length) {
 			out += command.slice(i, i + 2);
 			i++;
-		} else if (ch === "$" && command[i + 1] === "'") {
+		} else if (ch === "$" && ansiQuoteAt(command, i) !== -1) {
+			const at = ansiQuoteAt(command, i);
 			quote = "$'";
-			out += "$'";
-			i++;
+			out += command.slice(i, at + 1);
+			i = at;
 		} else {
 			if (ch === "'" || ch === '"') quote = ch;
 			out += ch;
@@ -73,12 +81,14 @@ export function reachable(command: string, cwd: string): { dirs: string[]; unkno
 		const plain = move !== "other" && alone && simple && !redirected && !(move.physical && move.arg?.split("/").includes(".."));
 		if (!plain) unknown = true;
 		// A move the guard doesn't follow still adds its literal words: more candidates only block more.
-		const args = move === "other" ? words.filter((w) => !MOVES.has(w)) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
+		const args = move === "other" ? words.filter((w) => !MOVES.has(bare(w))) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
 		for (const arg of args) {
 			// Before any move in this command, the previous folder is one an earlier command left in OLDPWD.
 			if ((arg === "-" || /^~-(?=\/|$)/.test(arg)) && !moved) unknown = true;
 			if (arg === "-" || arg === "") continue;
-			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true);
+			// A marked folder (`$"…"`) leaves the set unknown, and its likely reading is added: more folders only block more.
+			if (arg.includes("\0")) unknown = true;
+			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true) ?? (arg.includes("\0") ? expandDir(bare(arg).replace(/^~[+-](?=\/|$)/, "."), true) : undefined);
 			if (path === undefined) {
 				unknown = true;
 				continue;
@@ -139,16 +149,24 @@ export const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
 
 /** Whether a command the guard can't follow (see plainShell) names a move anywhere, as in `echo $( cd x )`. */
 function hiddenMove(command: string): boolean {
-	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(t.replace(/\)+$/, "").split(/\$\(|`|\(/).pop()!));
+	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(bare(t).replace(/\)+$/, "").split(/\$\(|`|\(/).pop()!));
 }
 /** Prefixes whose own options come before the command: `command -p cd`, `time -p cd`. */
 const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 /** Words that may stand before a command in the same segment. */
 const PREFIXES = new Set(["{", "}", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 
+/**
+ * A word without the mark tokenize puts on a reading the shells may disagree on (`$"builtin"` is `builtin` in bash).
+ * Names, options and refs are compared this way; the mark itself still asks in the guard.
+ */
+export function bare(word: string): string {
+	return word.replaceAll("\0", "");
+}
+
 /** Where a segment's command word is: after reserved words, `builtin`-style prefixes and assignments; -1 for none. */
 function commandIndex(words: string[]): number {
-	return words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
+	return words.findIndex((w, i) => !PREFIXES.has(bare(w)) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(bare(w)) && !(bare(w).startsWith("-") && OPTION_PREFIXES.has(bare(words[i - 1] ?? ""))));
 }
 
 /** A move the guard follows exactly. */
@@ -161,7 +179,10 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  */
 export function parseMove(words: string[]): Move | "other" | undefined {
 	const at = commandIndex(words);
-	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
+	if (at === -1) return undefined;
+	// A word marked as read differently by the shells (see tokenize) that is a move without its mark may or may not move.
+	if (words[at]!.includes("\0") && MOVES.has(words[at]!.replaceAll("\0", ""))) return "other";
+	if (!MOVES.has(words[at]!)) return undefined;
 	if (at > 0 || words[at] === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;
@@ -247,10 +268,11 @@ export function stripRedirects(command: string): string {
 			i += 2;
 			continue;
 		}
-		if (ch === "$" && command[i + 1] === "'") {
+		if (ch === "$" && ansiQuoteAt(command, i) !== -1) {
+			const at = ansiQuoteAt(command, i);
 			quote = "$'";
-			out += "$'";
-			i += 2;
+			out += command.slice(i, at + 1);
+			i = at + 1;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {
@@ -519,13 +541,14 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 		const literal = words.map((w) => !open.includes(w));
 		if (hidesFolder(words, literal)) dir = undefined;
 		const head = words[commandIndex(words)];
-		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
+		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(bare(w))) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(bare(head)))) exported = true;
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
 		const at = commandIndex(words);
 		// git as a bare word or a path from the root or `./` (as gitLike reads it): `tools/git` may be anything.
-		const git = at !== -1 && commandName(words[at]!) === "git" && (!words[at]!.includes("/") || /^(\/|\.\/)/.test(words[at]!));
-		for (let i = at + 1; dir !== undefined && git && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
-			if (words[i] === "-C") dir = follow(dir, words[i + 1]);
+		const git = at !== -1 && commandName(words[at]!) === "git" && (!bare(words[at]!).includes("/") || /^(\/|\.\/)/.test(bare(words[at]!)));
+		// Options compare without the mark; a marked folder value stays as written, so follow() refuses it.
+		for (let i = at + 1; dir !== undefined && git && i < words.length && bare(words[i]!).startsWith("-"); i += bare(words[i]!) === "-C" || bare(words[i]!) === "-c" ? 2 : 1) {
+			if (bare(words[i]!) === "-C") dir = follow(dir, words[i + 1]);
 		}
 		return { raw, dir, move: shell.move(raw, alone, before) !== undefined };
 	});
@@ -535,7 +558,8 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
  * Words that run the segment, or a git call in it, somewhere the folder doesn't show. Programs (git, env, a shell) count
  * in any letter case, as macOS and Windows find them; `eval` is a builtin and only counts as written.
  */
-function hidesFolder(words: string[], literal: boolean[] = []): boolean {
+function hidesFolder(marked: string[], literal: boolean[] = []): boolean {
+	const words = marked.map(bare);
 	const at = commandIndex(words);
 	const git = (w: string) => commandName(w) === "git";
 	return words.some((w, i) => {

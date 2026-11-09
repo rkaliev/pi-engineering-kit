@@ -61,6 +61,8 @@ test("scopedConfig: a repository's allow applies only when the whole command run
 	assert.equal(command("cd b && npm run deploy"), "confirm");
 	assert.equal(command("cd a && npm run deploy && cd ../b && npm run deploy"), "confirm");
 	assert.equal(workspace({ "": { allow: ["npm run deploy"] } }).command("cd b && npm run deploy"), "allow");
+	// Review round 3 of 0.38.1: bash with `igncr` reads `c\rd .\r.` as `cd ..`, so the deploy may run outside `a`.
+	assert.equal(command("cd a && c\rd .\r. && npm run deploy"), "confirm", "every reading must run in the repository");
 });
 
 test("strictest: block, then confirm, then allow; a tie keeps the first", () => {

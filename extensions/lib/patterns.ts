@@ -83,8 +83,45 @@ export function isSecretPath(path: string): boolean {
 }
 
 /**
+ * The command as PowerShell splits it: every blank bash and zsh keep inside a word (U+00A0, U+0085, `\v`, `\f`, the
+ * Unicode spaces) read as a space and `\r` as a line end. Undefined when the command has none.
+ */
+export function wideBlankReading(command: string): string | undefined {
+	if (!/[^\S \t\n]|\u0085/u.test(command)) return undefined;
+	return command.replace(/\r/g, "\n").replace(/[^\S \t\n]|\u0085/gu, " ");
+}
+
+/**
+ * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), and with every `\r` dropped,
+ * as bash with `igncr` (Cygwin, MSYS) does. The guard and the gates judge each and keep the stricter decision (user
+ * rulings after 0.38.1 review rounds 1 and 2).
+ */
+export function otherReadings(command: string): string[] {
+	const wide = wideBlankReading(command);
+	const readings = [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
+	return [...new Set(readings)].filter((r) => r !== command);
+}
+
+/** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
+export function judgeReadings<D extends GuardDecision | undefined>(command: string, judge: (text: string) => D): D {
+	let decision = judge(command);
+	for (const other of otherReadings(command)) {
+		if (decision?.action === "block") break;
+		decision = stricterOf(decision, judge(other));
+	}
+	return decision;
+}
+
+/** The stricter of two decisions; undefined counts as allow. */
+export function stricterOf<D extends GuardDecision | undefined>(a: D, b: D): D {
+	const rank = (d: GuardDecision | undefined) => (d === undefined ? 0 : { allow: 0, confirm: 1, block: 2 }[d.action]);
+	return rank(b) > rank(a) ? b : a;
+}
+
+/**
  * Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. `judgeWrite`
- * judges a heredoc's write target (in a workspace, from the repository it lands in).
+ * judges a heredoc's write target (in a workspace, from the repository it lands in). The command is also judged as
+ * other shells read it (otherReadings), and the stricter decision wins.
  */
 export function checkCommand(
 	command: string,
@@ -93,6 +130,17 @@ export function checkCommand(
 	dir: string = cwd,
 	env: NodeJS.ProcessEnv = process.env,
 	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
+): GuardDecision {
+	return judgeReadings(command, (text) => judgeCommand(text, cwd, config, dir, env, judgeWrite));
+}
+
+function judgeCommand(
+	command: string,
+	cwd: string,
+	config: GuardConfig,
+	dir: string,
+	env: NodeJS.ProcessEnv,
+	judgeWrite: (target: string) => GuardDecision,
 ): GuardDecision {
 	// A command that only writes a project file through a quoted heredoc runs nothing from its body: judge its first
 	// line, and its target as a Write would be. A target outside the project (a shell rc file) leaves it judged whole.
@@ -107,7 +155,16 @@ export function checkCommand(
 	const viewsOf = (s: string) => {
 		const words = tokenize(s);
 		// The raw text folded too, quotes kept: `env -S"GIT push"` has its word boundary there.
-		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" ")), foldPath(s)];
+		// A marked word (see tokenize) is also read without its mark, its likely reading: more matches, never fewer.
+		const bare = words.map((t) => t.replaceAll("\0", ""));
+		return [
+			s,
+			words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "),
+			foldPath(words.join(" ")),
+			foldPath(s),
+			bare.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "),
+			foldPath(bare.join(" ")),
+		];
 	};
 	const views = viewsOf(text);
 	const commandViews = text === command ? views : viewsOf(command);
@@ -135,7 +192,7 @@ export function checkCommand(
 	if (tokenize(text).some((t) => t.includes("\0"))) {
 		return {
 			action: "confirm",
-			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$` before a quote, or a line continuation after `$`), so the guard can't tell what runs. Write the word in plain quotes.",
+			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$$'`, `$\"…\"`, or a line continuation between two `$`), so the guard can't tell what runs. Write the word in plain quotes.",
 		};
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
@@ -316,7 +373,7 @@ function isOutside(target: string, cwd: string): boolean {
 const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
- * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as `"…"`, and `$'…'` with its escapes decoded) and
+ * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as a marked `"…"`, and `$'…'` with its escapes decoded) and
  * backslash escapes, and splits out control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows
  * `cmd`.
  */
@@ -359,16 +416,8 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "\\") {
-			// A backslash-newline is a line continuation: the shell joins the lines. Between a `$` and a quote or another
-			// `$` the shells may read them together (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks;
-			// `$\⏎HOME` and `$\⏎(…)` read as `$HOME` and `$(…)` in both.
+			// A backslash-newline is a line continuation: the shell joins the lines.
 			if (command[i + 1] === "\n") {
-				let next = i + 2;
-				while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
-				if (command[i - 1] === "$" && /['"$]/.test(command[next] ?? "")) {
-					current += "\0";
-					has = true;
-				}
 				i++;
 				continue;
 			}
@@ -376,27 +425,41 @@ export function tokenize(command: string): string[] {
 			has = true;
 			continue;
 		}
-		if (ch === "$" && command[i + 1] === "'") {
-			// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
-			// closes it) and only then decodes it, so no escape reaches past the quote.
-			let end = i + 2;
-			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
-			// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling after
-			// review round 3): a `$` just before this one (`$$'`, `\$$$'`: bash may read the PID and a plain quote, zsh a
-			// `$` and this word), an escape the two decode differently, bytes that aren't UTF-8 on their own (bash and zsh
-			// join them with the next part), or a decoded NUL (bash ends only the quoted part there, zsh the whole word).
-			const { text: decoded, agreed } = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
-			if (command[i - 1] === "$" || !agreed) current += "\0";
-			current += decoded;
+		if (ch === "$") {
+			// What follows the `$`, past any line continuations: both shells read `$\⏎'…'` as a `$'…'` word and `$\⏎HOME`
+			// as `$HOME` (probed 2026-11-09).
+			let quoteAt = i + 1;
+			while (command[quoteAt] === "\\" && command[quoteAt + 1] === "\n") quoteAt += 2;
+			if (command[quoteAt] === "'") {
+				// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
+				// closes it) and only then decodes it, so no escape reaches past the quote.
+				let end = quoteAt + 1;
+				while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
+				// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling
+				// after review round 3): a `$` just before this one, also across continuations (`$$'`, `\$$$'`, `$\⏎$'`:
+				// bash may read the PID and a plain quote, zsh a `$` and this word), an escape the two decode differently,
+				// bytes that aren't UTF-8 on their own (bash and zsh join them with the next part), or a decoded NUL (bash
+				// ends only the quoted part there, zsh the whole word).
+				let before = i - 1;
+				while (command[before] === "\n" && command[before - 1] === "\\") before -= 2;
+				const { text: decoded, agreed } = decodeAnsi(command.slice(quoteAt + 1, Math.min(end, command.length)));
+				if (command[before] === "$" || !agreed) current += "\0";
+				current += decoded;
+				has = true;
+				i = end;
+				continue;
+			}
+			if (command[quoteAt] === '"') {
+				// bash reads `$"…"` as `"…"` (a translation, usually the same text), zsh as `$` and a quoted word: it asks.
+				current += "\0";
+				quote = '"';
+				has = true;
+				i = quoteAt;
+				continue;
+			}
+			current += "$";
 			has = true;
-			i = end;
-			continue;
-		}
-		if (ch === "$" && command[i + 1] === '"') {
-			// bash reads `$"…"` as `"…"` (a translation that is usually the same text); zsh as `$` and a quoted word.
-			quote = '"';
-			has = true;
-			i++;
+			i = quoteAt - 1;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {
@@ -421,7 +484,8 @@ export function tokenize(command: string): string[] {
 			tokens.push(ch);
 			continue;
 		}
-		if (/\s/.test(ch) || ch === "<" || ch === ">") {
+		// Only blanks end a word, as in bash and zsh: U+00A0, U+FEFF, `\r`, `\v` and `\f` stay inside it.
+		if (ch === " " || ch === "\t" || ch === "<" || ch === ">") {
 			push();
 			if (ch === "<" || ch === ">") operator = ch;
 			continue;

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import { checkPath, foldPath, type GuardConfig, type GuardDecision } from "./patterns.ts";
+import { checkPath, foldPath, otherReadings, type GuardConfig, type GuardDecision } from "./patterns.ts";
 import { canonical, placeIn, projectRepos, repoOf } from "./repos.ts";
 import { blankQuoted, segmentFolders } from "./shell.ts";
 
@@ -87,6 +87,27 @@ export function scopedPath(tool: "read" | "write" | "edit", path: string, scope:
  */
 export function scopedConfig(command: string, cwd: string, scope: GuardScope, powershell = false): GuardConfig {
 	if (scope.repos.size === 0) return scope.config;
+	// Every reading a shell may run (otherReadings) adds its restrictions; a repository's allow holds only when every
+	// reading runs there alone.
+	const placed = [command, ...otherReadings(command)].map((text) => placeCommand(text, cwd, scope, powershell));
+	const touched = [...new Set(placed.flatMap((p) => p.touched))];
+	const only = placed.every((p) => p.only !== undefined && p.only === placed[0]!.only) ? placed[0]!.only : undefined;
+	const rules = touched.map((dir) => scope.repos.get(dir)!);
+	// Which file each rule came from, for the reason; the session folder's first.
+	const sources: Record<string, string> = {};
+	for (const c of [scope.config, ...rules]) for (const rule of [...(c.block ?? []), ...(c.confirm ?? [])]) if (!Object.hasOwn(sources, rule)) sources[rule] = c.label ?? scope.guardFile;
+	return {
+		...scope.config,
+		sources,
+		pushOwners: scope.owners,
+		block: [...(scope.config.block ?? []), ...rules.flatMap((c) => c.block ?? [])],
+		confirm: [...(scope.config.confirm ?? []), ...rules.flatMap((c) => c.confirm ?? [])],
+		allow: [...(scope.config.allow ?? []), ...(only === undefined ? [] : (scope.repos.get(only)!.allow ?? []))],
+	};
+}
+
+/** The repositories one reading of a command touches, and the one it runs in alone, if any. */
+function placeCommand(command: string, cwd: string, scope: GuardScope, powershell: boolean): { touched: string[]; only: string | undefined } {
 	const segments = segmentFolders(command, cwd, powershell);
 	// Where each working segment runs; a move only leads there.
 	const working = segments.filter((s) => !s.move);
@@ -107,18 +128,7 @@ export function scopedConfig(command: string, cwd: string, scope: GuardScope, po
 	// A repository named outside quotes is a target, so it takes the allow away; a name in a quoted message isn't.
 	const said = [...scope.repos.keys()].filter((dir) => mentions(blankQuoted(command), basename(dir)));
 	const only = !anywhere && ran.length > 0 && ran.every((r) => r === ran[0]) && [...reached, ...said].every((r) => r === ran[0]) ? ran[0] : undefined;
-	const rules = touched.map((dir) => scope.repos.get(dir)!);
-	// Which file each rule came from, for the reason; the session folder's first.
-	const sources: Record<string, string> = {};
-	for (const c of [scope.config, ...rules]) for (const rule of [...(c.block ?? []), ...(c.confirm ?? [])]) if (!Object.hasOwn(sources, rule)) sources[rule] = c.label ?? scope.guardFile;
-	return {
-		...scope.config,
-		sources,
-		pushOwners: scope.owners,
-		block: [...(scope.config.block ?? []), ...rules.flatMap((c) => c.block ?? [])],
-		confirm: [...(scope.config.confirm ?? []), ...rules.flatMap((c) => c.confirm ?? [])],
-		allow: [...(scope.config.allow ?? []), ...(only === undefined ? [] : (scope.repos.get(only)!.allow ?? []))],
-	};
+	return { touched, only };
 }
 
 /** Whether `text` names the folder `name` as a path segment (`a`, `a/x`, `../a`, `--prefix=a`, `-Ca`), in any case. */

@@ -13,8 +13,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
-import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { commandName, foldPath, judgeReadings, otherReadings, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { bare, blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
 
@@ -289,6 +289,17 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
+	// Every reading a shell may run (otherReadings): a PR any of them opens is noted.
+	const notes = [command, ...otherReadings(command)].map((text) => prNotes(text, cwd));
+	const unique = [...new Map(notes.flatMap((n) => n.branches).filter((b) => b.branch !== undefined).map((b) => [`${b.dir}\0${b.branch}`, b])).values()];
+	if (unique.length === 0) return;
+	const pending = readJson(projectDir, PENDING_FILE, root);
+	pending[callId] = { prs: unique, at: Date.now(), last: notes.every((n) => n.last) };
+	writeJson(projectDir, PENDING_FILE, pending, root);
+}
+
+/** The PR branches one reading of a command opens, and whether the PR step is its last. */
+function prNotes(command: string, cwd: string): { branches: Array<{ branch: string | undefined; dir: string }>; last: boolean } {
 	const branches: Array<{ branch: string | undefined; dir: string }> = [];
 	// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
 	let last = true;
@@ -322,11 +333,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 			if (index !== segments.length - 1) last = false;
 		}
 	});
-	const unique = [...new Map(branches.filter((b) => b.branch !== undefined).map((b) => [`${b.dir}\0${b.branch}`, b])).values()];
-	if (unique.length === 0) return;
-	const pending = readJson(projectDir, PENDING_FILE, root);
-	pending[callId] = { prs: unique, at: Date.now(), last };
-	writeJson(projectDir, PENDING_FILE, pending, root);
+	return { branches, last };
 }
 
 /** After the call: register its noted PR branches if it succeeded (or failed after the PR step), forget them if not. */
@@ -484,6 +491,11 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
+	// Also as other shells read it (otherReadings); the stricter decision wins.
+	return judgeReadings(command, (text) => reviewGate(text, cwd, projectDir, options, root));
+}
+
+function reviewGate(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const visible = checkSegments(command, cwd, projectDir, options, root);
 	if (hiddenLanding(command)) {
 		// A question must still say why a landing the guard can see isn't covered.
@@ -495,6 +507,8 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 
 /** An operator the tokenizer re-quoted because it was quoted or escaped (`';'`): an argument to bash, a separator elsewhere. */
 const OPERATOR_WORD = /^'(&&|\|\||;|\||&|\n)'$/;
+/** The operators a marked word (`$'\;'` is `\0;`) may read as without its mark. */
+const BARE_OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /** The review gate over the landings the command's segments show. */
 function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
@@ -509,7 +523,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		const found = allLandings(tokens);
 		// A quoted operator word means the segment runs several commands (`find … -exec … \; -exec …`, PowerShell's `\;`):
 		// none of it is a safe step, and a landing in it may follow a switch or a commit.
-		const several = tokens.some((t) => OPERATOR_WORD.test(t));
+		const several = tokens.some((t) => OPERATOR_WORD.test(t) || BARE_OPERATORS.has(t.replaceAll("\0", "")));
 		if (found.every((l) => l.kind === "commit")) {
 			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) || several) unsafeBefore = true;
 			continue;
@@ -597,10 +611,10 @@ function hiddenLanding(command: string): boolean {
 function namedFolders(command: string, cwd: string): string[] {
 	const tokens = tokenize(command);
 	return tokens.flatMap((t, i) => {
-		if (!MOVES.has(t.split(/\$\(|`|\(/).pop()!)) return [];
-		const arg = tokens.slice(i + 1).find((w) => !w.startsWith("-"))?.replace(/[)`]+$/, "");
-		const dir = arg === undefined ? undefined : follow(cwd, arg);
-		return dir === undefined ? [] : [dir];
+		if (!MOVES.has(bare(t).split(/\$\(|`|\(/).pop()!)) return [];
+		const arg = tokens.slice(i + 1).find((w) => !bare(w).startsWith("-"))?.replace(/[)`]+$/, "");
+		// A marked folder (`$"…"`) also as it likely reads without its mark: more folders only check more branches.
+		return arg === undefined ? [] : [...new Set([arg, bare(arg)])].flatMap((a) => follow(cwd, a) ?? []);
 	});
 }
 
@@ -618,6 +632,8 @@ export function checkReviewerCommand(command: string, cwd: string, verify: strin
 	});
 	// A glob (`*`, `?`, `[`) could expand into a planted file name such as `--output=a.txt`.
 	if (/[\\$`(){}<*?[]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces, `<` or a glob");
+	// PowerShell splits words on other blanks, and bash with `igncr` drops `\r` (otherReadings): the allowlist reads one split.
+	if (/[^\S \t\n]|\u0085/u.test(command)) return refuse("a blank other than a space, tab or line end");
 	const bare = command.replace(/(^|\s)(?:2>&1|2>\/dev\/null|&?>\/dev\/null)(?=\s|$)/g, " ");
 	if (bare.includes(">") || /\btee\b/.test(bare)) return refuse("a writing redirection or tee");
 	const all = tokenize(bare);
@@ -685,6 +701,11 @@ function inTemp(path: string): boolean {
  * `git init`) is a gate file too.
  */
 export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false, stateDir?: string): GuardDecision | undefined {
+	// Also as other shells read it (otherReadings); the stricter decision wins.
+	return judgeReadings(command, (text) => gateFiles(text, cwd, projectDir, guardConfig, children, stateDir));
+}
+
+function gateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children: boolean, stateDir?: string): GuardDecision | undefined {
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));
@@ -703,17 +724,19 @@ export function checkGateFiles(command: string, cwd: string, projectDir: string,
 		// A plain move writes nothing; a move with a redirection on it is checked like any command.
 		const move = parseMove(words.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean));
 		// A substitution runs its own command, and `--output` (or an abbreviation git accepts) makes git write a file.
-		const runs = processSubst || tokens.some((t) => /\$\(|`/.test(t) || t.startsWith("--ou"));
+		// A marked option (`$"--output=…"`) is read without its mark too.
+		const runs = processSubst || tokens.some((t) => /\$\(|`/.test(t) || bare(t).startsWith("--ou"));
 		if (move !== undefined && move !== "other" && !redirected && !runs) continue;
 		const sub = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
 		// A re-quoted operator word (`\;`) is a separator in PowerShell, so such a segment is never read-only.
 		const operatorWord = tokens.some((t) => OPERATOR_WORD.test(t));
-		const readOnly = readable && !redirects && !runs && !operatorWord && ((READ_ONLY.has(tokens[0] ?? "") && !tokens.some((t) => WRITING[tokens[0]!]?.test(t))) || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
+		const readOnly = readable && !redirects && !runs && !operatorWord && ((READ_ONLY.has(tokens[0] ?? "") && !tokens.some((t) => WRITING[tokens[0]!]?.test(bare(t)))) || (tokens[0] === "git" && READ_ONLY_GIT.has(sub ?? "")));
 		if (readOnly) continue;
 		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.
 		const inner = (t: string) => (/\$\(|`/.test(t) ? tokenize(t.replace(/^.*?(\$\(|`)/, "").replace(/[)`]+$/, "")) : []);
 		// zsh's `>!` loses only its `>` to the tokens.
-		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
+		// A marked word (`$"…"`) also counts without its mark, each form with its derived paths: more candidates only block more.
+		const candidates = [...new Set(tokens.flatMap((t) => [t, bare(t)]))].flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
 		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
 		// Each word where it really leads: `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` expanded, symlinks resolved.
 		const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));
@@ -771,13 +794,14 @@ function childConfig(projectDir: string, path: string, guardConfig: string): boo
 
 function isSafe(tokens: string[], verify: string[]): boolean {
 	// `rg --pre <program>` runs that program on every file it searches.
-	if (tokens[0] === "rg" && tokens.some((t) => t.startsWith("--pre"))) return false;
+	// A marked option (`$"--pre=…"`) is read without its mark too.
+	if (tokens[0] === "rg" && tokens.some((t) => bare(t).startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
 	if (tokens[0] === "git") {
 		const sub = tokens.slice(1).find((t, i, all) => !t.startsWith("-") && all[i - 1] !== "-C" && all[i - 1] !== "-c") ?? "";
 		if (sub === "fetch") return !tokens.some((t) => t.includes(":"));
-		if (sub === "branch") return !tokens.some((t) => /^-[a-zA-Z]*[fDmMcC]/.test(t) || t === "--force");
+		if (sub === "branch") return !tokens.some((t) => /^-[a-zA-Z]*[fDmMcC]/.test(bare(t)) || bare(t) === "--force");
 		return SAFE_GIT.has(sub);
 	}
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));

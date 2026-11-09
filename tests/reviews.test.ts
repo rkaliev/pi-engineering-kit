@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
+import { blankQuoted, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -854,6 +854,8 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	];
 	for (const command of bad) assert.equal(check(command), "block", command);
 	assert.match(String(checkReviewerCommand("rm f", project, [], kit)?.reason), /reviewer is read-only/);
+	// Review round 3 of 0.38.1: another shell may split on other blanks or drop `\r` (otherReadings).
+	for (const split of ["git diff --out\rput=src/a.ts", "git diff\u00a0--output=x", "git log\u0085--ou=x"]) assert.equal(check(split), "block", JSON.stringify(split));
 });
 
 test("a project reached through a symlink keeps its review records", () => {
@@ -1259,6 +1261,14 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(dir, "t5", `PR=$(cd ${wk} && gh pr create --fill)`, dir, root);
 	settlePr(dir, "t5", true, root);
 	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m", "feat/k"], "a move inside an unquoted substitution names the PR's folder");
+	for (const [n, cmd] of [["j", (p: string) => `PR=$($"cd" ${p} && gh pr create --fill)`], ["i", (p: string) => `PR=$(cd $"${p}" && gh pr create --fill)`]] as const) {
+		const w = join(dir, ".worktrees", n);
+		git("worktree", "add", "-q", "-b", `feat/${n}`, w, "main");
+		commit({ [`src/${n}.ts`]: "export const x = 1;\n" }, w);
+		notePr(dir, `t5${n}`, cmd(w), dir, root);
+		settlePr(dir, `t5${n}`, true, root);
+		assert.ok(open().includes(`feat/${n}`), `a marked move or folder in a substitution names the PR's folder: ${cmd(w)}`);
+	}
 	writeFileSync(join(reviewsDir(dir, root), "prs-pending.json"), JSON.stringify({ t6: { branch: "feat/old", at: Date.now(), last: true } }));
 	settlePr(dir, "t6", true, root);
 	assert.ok(open().includes("feat/old"), "an entry noted by 0.21.1 keeps its branch");
@@ -1440,4 +1450,125 @@ test("a segment holding a quoted operator word is never a safe step before a lan
 	assert.equal(action(check("find . -maxdepth 0 -exec git switch main \\; -exec git merge feat/a \\;")), "block");
 	// On the work branch the merge alone is not a landing on the base; only the switch in the first segment makes it unsafe.
 	assert.equal(action(check("cat x \\; git switch main; git merge feat/a")), "block");
+});
+
+test("a word joined by Unicode whitespace is not a move", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("cd /tmp; git merge feat/a")), "block");
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders("cd b; git status", ws)[1]!.dir, ws);
+});
+
+// In `$\⏎'a\' b' c` the shells read one $'…' word up to the last quote; a plain quote would end at `\'`.
+test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
+	assert.ok(blankQuoted("$\\\n'a\\' b' c").endsWith("' c"));
+	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
+});
+
+// A marked word that is a move without its mark (`$'\u0063d'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
+// not move the shell: the folder is unknown.
+test("a marked cd leaves the folder unknown", () => {
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	for (const command of ["$'\\u0063d' b; git status", "c$'\\d' b; git status", '$"cd" b; git status']) {
+		assert.equal(segmentFolders(command, ws)[1]!.dir, undefined, command);
+	}
+	const { git, check } = repo();
+	const main = join(temp("reviews-wt-"), "main");
+	git("worktree", "add", "-q", main, "main");
+	assert.equal(check("git push"), undefined, "a plain push of the work branch is not a landing");
+	assert.equal(action(check(`$'\\u0063d' ${main}; git push`)), "block");
+});
+
+test("the review gate reads a marked subcommand and a marked operator word without the mark", () => {
+	const { git, check } = repo();
+	assert.equal(action(check("find . -maxdepth 0 -exec git switch main $'\\;' -exec git merge feat/a $'\\;'")), "block");
+	git("switch", "-q", "main");
+	assert.equal(action(check("git $'\\m'erge feat/a")), "block");
+});
+
+// Pins for 0.38.0 code that had no test failing without it (round-5 W2): the mark-stripping in commandName, and the
+// BOM kept and marked by the decoder.
+test("the review gate judges marked git words and BOM-led words as the shells run them", () => {
+	const { git, check } = repo();
+	// A checkout on a work branch: a merge judged there would not land on a base.
+	const other = temp("reviews-other-");
+	spawnSync("git", ["init", "-q", "-b", "feat/x", other]);
+	spawnSync("git", ["-C", other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"]);
+	git("switch", "-q", "main");
+	assert.equal(action(check("$'\\g'it merge feat/a")), "block");
+	assert.equal(action(check(`$'\\xef\\xbb\\xbf'cd ${other}; git merge feat/a`)), "block");
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders("$'\\g'it -C b status", ws)[0]!.dir, join(ws, "b"));
+});
+
+test("the review gate also reads words split on every blank", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("git merge feat/a")), "block");
+});
+
+// A marked word (`$"…"` is `"…"` in bash) is compared without its mark wherever a gate or the folder tracking reads a
+// name, an option or a ref (user ruling after 0.38.1 review round 1: «Гейты читают без пометки»).
+test("gates and folder tracking read marked words without the mark", () => {
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	const last = (command: string) => segmentFolders(command, ws).at(-1)!.dir;
+	for (const command of ['$"builtin" cd b; git status', 'case x in x) $"cd" b;; esac; git status', 'f() { $"cd" b; }; f; git status']) {
+		assert.equal(last(command), undefined, command);
+	}
+	assert.equal(segmentFolders('$"eval" "cd b"; git status', ws)[0]!.dir, undefined, "eval hides its own segment's folder");
+	assert.equal(segmentFolders('git $"-C" b status', ws)[0]!.dir, join(ws, "b"));
+	const { git, check } = repo();
+	assert.equal(action(check('git push origin HEAD:$"main"')), "block");
+	assert.equal(action(check('gh pr $"merge" 1')), "confirm");
+	git("switch", "-q", "main");
+	assert.equal(action(check('git merge $"feat/a"')), "block");
+});
+
+/** A project folder with a `.claude` folder, and its gate-file decision for a command run there. */
+function gateFilesIn(): (command: string) => string {
+	const project = temp("gate-files-");
+	mkdirSync(join(project, ".claude"));
+	return (command) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
+}
+
+// Review rounds 2 and 3 of 0.38.1: the gates read every reading and a marked word without its mark.
+test("gate files read PowerShell's split, a marked path or folder, and a marked writing option", () => {
+	const gate = gateFilesIn();
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	assert.equal(gate(`cp x\u00a0${records}/a.json`), "block", "PowerShell reads two words");
+	assert.equal(gate(`cp f.json $"${records}/x.json"`), "block", "a marked path");
+	assert.equal(gate(`cd $"${records}" && cp f.json x.json`), "block", "a marked cd operand");
+	assert.equal(gate(`dd if=x of=$"${records}/x.json"`), "block", "a marked path after `=`");
+	assert.equal(gate(`git log $"--output=${records}/x.json"`), "block", "a marked --output");
+	assert.equal(gate(`less $"-o" ${records}/x.json f`), "block", "a marked writing option of a read-only command");
+});
+
+test("folder tracking reads a marked export or git path without its mark", () => {
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders('$"export" GIT_DIR=x; git status', ws)[1]!.dir, undefined);
+	assert.equal(segmentFolders('export $"GIT_DIR"=x; git status', ws)[1]!.dir, undefined);
+	assert.equal(segmentFolders('$"/usr/bin/git" -C b status', ws)[0]!.dir, join(ws, "b"));
+});
+
+test("the review gate reads a marked program-running or ref-moving option without its mark", () => {
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
+	assert.equal(check("rg x . && gh pr create --fill"), undefined, "a reviewed head lands after a read-only step");
+	assert.equal(action(check('rg $"--pre=sh" x . && gh pr create --fill')), "block");
+	assert.equal(action(check('git branch $"-f" main feat/a && git push origin main')), "block");
+});
+
+test("the PR record reads PowerShell's split", () => {
+	const { dir, root, commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	notePr(dir, "t1", "gh pr create --fill", dir, root);
+	settlePr(dir, "t1", true, root);
+	commit({ "src/a.ts": "export const a = 3;\n" });
+	assert.match(String(check("git push")?.reason), /no reviewer verdict recorded/);
 });

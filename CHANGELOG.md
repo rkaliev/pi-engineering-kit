@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.38.1
+
+- **Words split as the shells split them.** The tokenizer split words on any whitespace, so `cd` + U+00A0 + `/tmp; git merge …` made the review gate judge the merge in `/tmp`, while bash and zsh run nothing there. Only spaces and tabs end a word; U+00A0, U+FEFF, `\r`, `\v` and `\f` stay inside it. Because PowerShell splits on such blanks (U+0085 too) and ends a line at `\r`, and bash with `igncr` drops `\r`, the blocks, questions, the gates and the PR record also judge both readings and keep the stricter decision (`rm -r` + U+00A0 + `~` stays blocked). In a folder of repositories, a repository's `allow` holds only when every reading runs in it.
+- **`$\⏎'…'` is a `$'…'` word, and `$"…"` asks.** Both shells read a `$'…'` word across line continuations, so `$\⏎'rm' -rf ~` is blocked rather than asked about. `$"…"` is `"…"` in bash and `$…` in zsh, so it asks like other forms the shells read differently. The shell helpers find the same word boundaries.
+- **A marked `cd` leaves the folder unknown.** `$"cd" x; git push` (or `$'\u0063d'`) no longer leaves the review gate judging the session's checkout.
+- **A marked word's likely reading reaches the blocks and the gates.** Your `block` and `confirm` patterns, the git subcommand of a landing (`git $'\m'erge`), the quoted-operator check (`$'\;'`), and options that write a file or run a program (`$"--output=…"`, `rg $"--pre=…"`, `git branch $"-f"`) read it too. `allow` and the own-branch push still read only the command as written.
+- **The question names its causes,** and tests now pin the 0.38.0 mark-stripping and BOM handling.
+
 ## 0.38.0
 
 - **Command names count in any letter case.** macOS and Windows run `GIT`, `/usr/bin/Git` or `ſh` as git and sh, so `GIT push --force`, `RM -rf ~` or `NPM publish` got past the guard without a word, and the review gate didn't see `GH pr merge`. Every check that names a program now compares the word's base name folded like a path: the guard's blocks and questions, your `block` and `confirm` patterns, the review gate's landings, `git -C` and `env -C` in a folder of repositories, and the verify gate's tee and sed fallback. Builtins such as `cd`, `eval` and `export` count only as written, since in another case they aren't builtins. `allow` and the own-branch push still see only the command as written, so nothing gets looser.
