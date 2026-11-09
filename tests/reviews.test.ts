@@ -856,6 +856,8 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	assert.match(String(checkReviewerCommand("rm f", project, [], kit)?.reason), /reviewer is read-only/);
 	// Review round 3 of 0.38.1: another shell may split on other blanks or drop `\r` (otherReadings).
 	for (const split of ["git diff --out\rput=src/a.ts", "git diff\u00a0--output=x", "git log\u0085--ou=x"]) assert.equal(check(split), "block", JSON.stringify(split));
+	// Review round 4 of 0.38.1: bash reads one revision word here, so only the blank refusal stops PowerShell's `--output=x`.
+	assert.equal(check("git diff a..b\u00a0--output=x"), "block");
 });
 
 test("a project reached through a symlink keeps its review records", () => {
@@ -1261,7 +1263,7 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(dir, "t5", `PR=$(cd ${wk} && gh pr create --fill)`, dir, root);
 	settlePr(dir, "t5", true, root);
 	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m", "feat/k"], "a move inside an unquoted substitution names the PR's folder");
-	for (const [n, cmd] of [["j", (p: string) => `PR=$($"cd" ${p} && gh pr create --fill)`], ["i", (p: string) => `PR=$(cd $"${p}" && gh pr create --fill)`]] as const) {
+	for (const [n, cmd] of [["j", (p: string) => `PR=$($"cd" ${p} && gh pr create --fill)`], ["i", (p: string) => `PR=$(cd $"${p}" && gh pr create --fill)`], ["p", (p: string) => `PR=$(cd $"-P" ${p} && gh pr create --fill)`]] as const) {
 		const w = join(dir, ".worktrees", n);
 		git("worktree", "add", "-q", "-b", `feat/${n}`, w, "main");
 		commit({ [`src/${n}.ts`]: "export const x = 1;\n" }, w);
