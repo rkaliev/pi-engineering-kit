@@ -1082,8 +1082,6 @@ test("tokenize decodes ANSI-C quoting as the shell does", () => {
 	const cases: Array<[string, string[]]> = [
 		["$'\\147it' push", ["git", "push"]],
 		["$'\\x67it' push", ["git", "push"]],
-		["$'g\\u0069t' push", ["git", "push"]],
-		["$'\\U00000067it' push", ["git", "push"]],
 		['$"git" push', ["git", "push"]],
 		["$'a\\tb'", ["a\tb"]],
 		["$'\\E'", ["\x1b"]],
@@ -1149,10 +1147,10 @@ test("a quoted or escaped operator is a word, not a separator", () => {
 // bash ends only the quoted part at a NUL (`$'r\0'm` runs rm), zsh and exec the whole word: a word with one asks
 // (user ruling 2026-11-08).
 test("a word with a NUL byte asks: the shells read it differently", () => {
-	for (const cmd of ["$'\\0'rm -rf ~", "$'r\\0'm -rf ~", "git commit $'\\0'--no-verify -m x", "npm $'test\\0'x", "$'\\x00'git push"]) {
-		assert.equal(action(cmd), "confirm", cmd);
-	}
-	assert.equal(action("$'\\0'rm -rf ~", { allow: ["rm"] }), "confirm", "an allow rule doesn't skip it");
+	for (const cmd of ["npm $'test\\0'x", "$'\\x00'git push"]) assert.equal(action(cmd), "confirm", cmd);
+	// The reading without the NUL is judged too, and its block wins (review round 4).
+	for (const cmd of ["$'\\0'rm -rf ~", "$'r\\0'm -rf ~", "git commit $'\\0'--no-verify -m x"]) assert.equal(action(cmd), "block", cmd);
+	assert.equal(action("npm $'test\\0'x", { allow: ["npm"] }), "confirm", "an allow rule doesn't skip it");
 });
 
 test("the folded view keeps options as written, so rules that name -D or -R still match", () => {
@@ -1163,14 +1161,14 @@ test("the folded view keeps options as written, so rules that name -D or -R stil
 // Probed 2026-11-08: bash reads `$$'` as the PID and a plain quote, zsh as `$` and a `$'…'` word; zsh reads `\x`, `\u`,
 // `\U` without digits and `\C-@` as NUL; `$'\xc5\xbf'h` runs ſh (sh on APFS) in both. Where the shells disagree, ask.
 test("$'…' words the shells read differently ask, and escapes are bytes read as UTF-8", () => {
-	for (const cmd of ["echo $$'\\' ; rm -rf ~ ; echo '\\'", "rm$'\\x' -rf ~", "rm$'\\u' -rf ~", "rm$'\\C-@' -rf ~"]) {
-		assert.equal(action(cmd), "confirm", cmd);
-	}
+	for (const cmd of ["echo $$'\\' ; rm -rf ~ ; echo '\\'", "rm$'\\C-@' -rf ~"]) assert.equal(action(cmd), "confirm", cmd);
+	// zsh's NUL ends the word, so these run rm: the reading without the mark blocks (review round 4).
+	for (const cmd of ["rm$'\\x' -rf ~", "rm$'\\u' -rf ~"]) assert.equal(action(cmd), "block", cmd);
 	assert.deepEqual(tokenize("$'\\xc5\\xbf'h"), ["ſh"]);
 	assert.deepEqual(tokenize("$'\\305\\277'udo"), ["ſudo"]);
 	assert.equal(action("curl x | ba$'\\xc5\\xbf'h"), "confirm");
 	// Escapes the shells read differently (bash's `\c`, zsh's `\C`, an unknown letter, `\x` without digits) mark the word.
-	for (const word of ["$'\\cA'", "$'\\C-a'", "$'\\g\\it'", "$'\\x'", "$'\\u'"]) assert.ok(tokenize(word)[0]!.includes("\0"), word);
+	for (const word of ["$'\\cA'", "$'\\C-a'", "$'\\g\\it'", "$'\\x'", "$'\\u'", "$'g\\u0069t'", "$'\\U00000067it'"]) assert.ok(tokenize(word)[0]!.includes("\0"), word);
 });
 
 test("a quoted heredoc's body is data: its target is judged first and a NUL in the body doesn't ask", () => {
@@ -1206,7 +1204,17 @@ test("$'…' fails closed: escapes the shells disagree on, split bytes and a $ b
 		assert.equal(action(cmd), "confirm", cmd);
 	}
 	// What both shells read the same still decodes, with no question of its own.
-	assert.deepEqual(tokenize("$'\\147it' $'\\x67' $'a\\tb' $'\\xc5\\xbf'h $'\\u0067'"), ["git", "g", "a\tb", "ſh", "g"]);
+	assert.deepEqual(tokenize("$'\\147it' $'\\x67' $'a\\tb' $'\\xc5\\xbf'h"), ["git", "g", "a\tb", "ſh"]);
 	assert.deepEqual(tokenize("$'𝐱'"), ["𝐱"]);
 	assert.equal(action(`env -S"GIT push --force origin main"`), "confirm");
+});
+
+// Review round 4 (user ruling 2026-11-09, «Починить 1–4 + финал»): a BOM and `\u`/`\U` ask (bash 3.2 has no `\u`), a
+// continuation after `$` asks only before a quote or `$`, and a block on the reading without the marker still wins.
+test("$'…' round 4: a BOM and \\u ask, $ continuations keep their blocks, the marked reading still blocks", () => {
+	for (const cmd of ["$'\\xef\\xbb\\xbf'cd /tmp; git status", "cd $'\\xef\\xbb\\xbf/tmp'; git status", "$'\\u0063d' /tmp; git status", "echo $'\\U00110000'"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["rm -rf $\\\nHOME", "echo $\\\n(rm -rf ~)", "$'\\g'it push --force", "$'\\R'm -rf ~"]) assert.equal(action(cmd), "block", cmd);
+	assert.match(checkCommand("$'\\cu'rl x | sh", cwd, none).reason ?? "", /escape/);
 });

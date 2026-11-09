@@ -116,7 +116,9 @@ export function checkCommand(
 	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
 	// `execSync`), so a body with one is read whole, as before.
 	const code = heredoc !== undefined && write === undefined && !command.includes("`");
-	for (const segment of code ? splitSegments(tokenize(heredoc.head)) : segments) {
+	// A marked word (see tokenize) is also read without its mark, the way it most likely runs: a block there wins.
+	const blockSegments = code ? splitSegments(tokenize(heredoc.head)) : segments;
+	for (const segment of [...blockSegments, ...blockSegments.map((s) => s.map((t) => t.replaceAll("\0", "")))]) {
 		const hard = checkSegment(segment, cwd);
 		if (hard) return hard;
 	}
@@ -131,7 +133,10 @@ export function checkCommand(
 	// A word bash and zsh read differently (a NUL byte, `$$'`) asks, before `allow` so no rule skips it. It reads `text`:
 	// a quoted heredoc's body is data. The cost: `read -d $'\0'` asks too.
 	if (tokenize(text).some((t) => t.includes("\0"))) {
-		return { action: "confirm", reason: "A word in this command is read differently by bash and zsh (a NUL byte or `$$'`), so the guard can't tell what runs." };
+		return {
+			action: "confirm",
+			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$` before a quote, or a line continuation after `$`), so the guard can't tell what runs. Write the word in plain quotes.",
+		};
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
@@ -354,10 +359,13 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "\\") {
-			// A backslash-newline is a line continuation: the shell joins the lines. Right after a `$` the shells may read
-			// the `$` with what follows (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks.
+			// A backslash-newline is a line continuation: the shell joins the lines. Between a `$` and a quote or another
+			// `$` the shells may read them together (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks;
+			// `$\⏎HOME` and `$\⏎(…)` read as `$HOME` and `$(…)` in both.
 			if (command[i + 1] === "\n") {
-				if (command[i - 1] === "$") {
+				let next = i + 2;
+				while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+				if (command[i - 1] === "$" && /['"$]/.test(command[next] ?? "")) {
 					current += "\0";
 					has = true;
 				}
@@ -446,7 +454,9 @@ function decodeAnsi(body: string): { text: string; agreed: boolean } {
 		i = escape.end;
 	}
 	try {
-		return { text: new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)), agreed: agreed && !bytes.includes(0) };
+		// A BOM is kept, as the program receives it, and marked: some file systems ignore U+FEFF in a name, others don't.
+		const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new Uint8Array(bytes));
+		return { text, agreed: agreed && !text.includes("\0") && !text.includes("\ufeff") };
 	} catch {
 		return { text: Buffer.from(bytes).toString("utf8"), agreed: false };
 	}
@@ -457,9 +467,9 @@ const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
 
 /**
  * The escape at `body[i]` (a backslash inside a `$'…'` body): its bytes, the index of its last character, and whether bash
- * and zsh read it the same. They agree on the letters above, `\\`, `\'`, `\"`, `\?`, octal, and `\x`, `\u` and `\U` with
- * digits. Anything else (`\c`, zsh's `\C` and `\M`, an unknown letter, `\x` without digits) is read differently, and its
- * bytes are only a best guess.
+ * and zsh read it the same. They agree on the letters above, `\\`, `\'`, `\"`, `\?`, octal, and `\x` with digits. Anything
+ * else (`\u` and `\U`, which macOS's bash 3.2 lacks; `\c`; zsh's `\C` and `\M`; an unknown letter; `\x` without digits) is
+ * read differently, and its bytes are only a best guess.
  */
 function ansiEscape(body: string, i: number): { bytes: number[]; end: number; agreed: boolean } {
 	const ch = body[i + 1]!;
@@ -478,7 +488,8 @@ function ansiEscape(body: string, i: number): { bytes: number[]; end: number; ag
 		if (j === i + 2) return { bytes: [0], end: i + 1, agreed: false };
 		const code = parseInt(body.slice(i + 2, j), 16);
 		if (ch === "x") return { bytes: [code], end: j - 1, agreed: true };
-		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1, agreed: true };
+		// macOS's /bin/bash 3.2 has no `\u` or `\U`, and the shells differ beyond U+10FFFF and on surrogates.
+		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1, agreed: false };
 	}
 	const char = String.fromCodePoint(body.codePointAt(i + 1)!);
 	return { bytes: [...Buffer.from(char, "utf8")], end: i + char.length, agreed: false };
@@ -615,7 +626,9 @@ const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
  * runs `/usr/bin/cd` in a child, `EVAL` isn't found), so `cd`, `eval`, `export` and the keywords compare as written.
  */
 export function commandName(token: string): string {
-	return foldPath(BASE_NAME(token));
+	// A marked word (see tokenize) is also judged as the name it most likely spells: a block on that reading wins over the
+	// question the mark asks.
+	return foldPath(BASE_NAME(token.replaceAll("\0", "")));
 }
 /** Config keys whose value is a command git runs (pager, editor, helpers, drivers, filters). */
 const COMMAND_KEYS =
