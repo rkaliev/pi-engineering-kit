@@ -101,31 +101,53 @@ export function checkCommand(
 	const target = write !== undefined && !isOutside(write.startsWith("~") ? write : resolve(dir, write), cwd) ? resolve(dir, write) : undefined;
 	const text = target ? heredoc!.head : command;
 	const segments = splitSegments(tokenize(text));
+	// The command as the shell runs it, decoded and folded: every word but an option (`-D` stays `-D`), every word (a
+	// command glued to an option, `-c"…('GIT push')"`), and the raw text. Rules that block or ask read the text and the views;
+	// `allow` and the own-branch push read only the text, so the views can't loosen anything.
+	const viewsOf = (s: string) => {
+		const words = tokenize(s);
+		// The raw text folded too, quotes kept: `env -S"GIT push"` has its word boundary there.
+		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" ")), foldPath(s)];
+	};
+	const views = viewsOf(text);
+	const commandViews = text === command ? views : viewsOf(command);
 
 	// An interpreter heredoc's body is code, not shell: the block rules, which read shell words, read its first line;
 	// every ask below still reads the whole command. A backtick may hold shell (a node template literal run by
 	// `execSync`), so a body with one is read whole, as before.
 	const code = heredoc !== undefined && write === undefined && !command.includes("`");
-	for (const segment of code ? splitSegments(tokenize(heredoc.head)) : segments) {
+	// A marked word (see tokenize) is also read without its mark, the way it most likely runs: a block there wins.
+	const blockSegments = code ? splitSegments(tokenize(heredoc.head)) : segments;
+	for (const segment of [...blockSegments, ...blockSegments.map((s) => s.map((t) => t.replaceAll("\0", "")))]) {
 		const hard = checkSegment(segment, cwd);
 		if (hard) return hard;
 	}
 	for (const source of config.block ?? []) {
-		if (new RegExp(source).test(command)) {
+		const re = new RegExp(source);
+		if (commandViews.some((v) => re.test(v))) {
 			return { action: "block", reason: `Blocked by project guard rule /${source}/ in ${sourceOf(config, source)}.` };
 		}
 	}
 	const written = target ? judgeWrite(target) : ALLOW;
 	if (written.action !== "allow") return written;
+	// A word bash and zsh read differently (a NUL byte, `$$'`) asks, before `allow` so no rule skips it. It reads `text`:
+	// a quoted heredoc's body is data. The cost: `read -d $'\0'` asks too.
+	if (tokenize(text).some((t) => t.includes("\0"))) {
+		return {
+			action: "confirm",
+			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$` before a quote, or a line continuation after `$`), so the guard can't tell what runs. Write the word in plain quotes.",
+		};
+	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;
 
-	const push = checkPushSetup(segments, text) ?? checkPushes(text, segments, cwd, dir, env, config.pushOwners);
+	const push = checkPushSetup(segments, text) ?? checkPushes(text, views, segments, cwd, dir, env, config.pushOwners);
 	if (push) return push;
 	for (const [re, what] of CONFIRM_RULES) {
-		if (re.test(text)) return { action: "confirm", reason: `This command ${what}.` };
+		if (views.some((v) => re.test(v))) return { action: "confirm", reason: `This command ${what}.` };
 	}
 	for (const source of config.confirm ?? []) {
-		if (new RegExp(source).test(command)) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
+		const re = new RegExp(source);
+		if (commandViews.some((v) => re.test(v))) return { action: "confirm", reason: `Matches project confirm rule /${source}/ in ${sourceOf(config, source)}.` };
 	}
 	if (segments.some((segment) => segment.some(isSecretPath))) {
 		return { action: "confirm", reason: "This command touches a secret file; its contents would be sent to the model provider." };
@@ -245,7 +267,7 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 	if ([...tokens, ...words].some((t) => /^--no-veri(?:fy?)?$/.test(t))) {
 		return { action: "block", reason: "Bypassing git hooks (--no-verify) is not allowed. Fix what the hook reports instead." };
 	}
-	const gitAt = words.indexOf("git");
+	const gitAt = words.findIndex((w) => commandName(w) === "git");
 	if (overridesHooksPath(tokens)) {
 		return { action: "block", reason: "Overriding core.hooksPath on the command line skips or replaces the git hooks. Fix what the hook reports instead." };
 	}
@@ -265,7 +287,7 @@ function checkSegment(tokens: string[], cwd: string): GuardDecision | undefined 
 		}
 	}
 
-	const rmAt = words.indexOf("rm");
+	const rmAt = words.findIndex((w) => commandName(w) === "rm");
 	if (rmAt !== -1) {
 		const args = words.slice(rmAt + 1);
 		const recursive = args.some((t) => t === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(t));
@@ -294,18 +316,21 @@ function isOutside(target: string, cwd: string): boolean {
 const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
- * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$'…'`) and backslash escapes, and splits out
- * control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows `cmd`.
+ * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as `"…"`, and `$'…'` with its escapes decoded) and
+ * backslash escapes, and splits out control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows
+ * `cmd`.
  */
 export function tokenize(command: string): string[] {
 	const tokens: string[] = [];
 	let current = "";
-	let quote: "'" | '"' | "$'" | null = null;
+	let quote: "'" | '"' | null = null;
 	let has = false;
 	// The unquoted, unescaped `<` or `>` just before this character, if any: `>&`, `<&` and `>|` continue it.
 	let operator = "";
 	const push = () => {
-		if (has) tokens.push(current);
+		// A word that reads as an operator was quoted or escaped (a bare operator never joins a word): it stays an
+		// argument, written in quotes so no consumer splits on it (`rm -rf ';' ~` deletes ~).
+		if (has) tokens.push(OPERATORS.has(current) ? `'${current}'` : current);
 		current = "";
 		has = false;
 	};
@@ -319,23 +344,31 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (quote) {
-			// In "…" a backslash escapes only " \ $ ` and a newline; in $'…' it escapes anything.
+			// In "…" a backslash escapes only " \ $ ` and a newline.
 			const next = command[i + 1];
 			// A backslash-newline inside "…" is a line continuation: both characters vanish.
-			if (ch === "\\" && next === "\n" && quote === '"') {
+			if (ch === "\\" && next === "\n") {
 				i++;
 				continue;
 			}
-			if (ch === "\\" && next !== undefined && (quote === "$'" || /["\\$`\n]/.test(next))) {
+			if (ch === "\\" && next !== undefined && /["\\$`\n]/.test(next)) {
 				current += next;
 				i++;
-			} else if (ch === (quote === "$'" ? "'" : '"')) quote = null;
+			} else if (ch === '"') quote = null;
 			else current += ch;
 			continue;
 		}
 		if (ch === "\\") {
-			// A backslash-newline is a line continuation: the shell joins the lines.
+			// A backslash-newline is a line continuation: the shell joins the lines. Between a `$` and a quote or another
+			// `$` the shells may read them together (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks;
+			// `$\⏎HOME` and `$\⏎(…)` read as `$HOME` and `$(…)` in both.
 			if (command[i + 1] === "\n") {
+				let next = i + 2;
+				while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+				if (command[i - 1] === "$" && /['"$]/.test(command[next] ?? "")) {
+					current += "\0";
+					has = true;
+				}
 				i++;
 				continue;
 			}
@@ -344,7 +377,24 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "$" && command[i + 1] === "'") {
-			quote = "$'";
+			// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
+			// closes it) and only then decodes it, so no escape reaches past the quote.
+			let end = i + 2;
+			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
+			// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling after
+			// review round 3): a `$` just before this one (`$$'`, `\$$$'`: bash may read the PID and a plain quote, zsh a
+			// `$` and this word), an escape the two decode differently, bytes that aren't UTF-8 on their own (bash and zsh
+			// join them with the next part), or a decoded NUL (bash ends only the quoted part there, zsh the whole word).
+			const { text: decoded, agreed } = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
+			if (command[i - 1] === "$" || !agreed) current += "\0";
+			current += decoded;
+			has = true;
+			i = end;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === '"') {
+			// bash reads `$"…"` as `"…"` (a translation that is usually the same text); zsh as `$` and a quoted word.
+			quote = '"';
 			has = true;
 			i++;
 			continue;
@@ -383,6 +433,68 @@ export function tokenize(command: string): string[] {
 	return tokens;
 }
 
+/**
+ * A `$'…'` word's body with its escapes decoded, and whether bash and zsh agree on all of it. Escapes give bytes (`\xc5\xbf`
+ * is `ſ`), read as UTF-8 as the program receives them; bytes that aren't valid UTF-8 on their own may join the next part.
+ */
+function decodeAnsi(body: string): { text: string; agreed: boolean } {
+	const bytes: number[] = [];
+	let agreed = true;
+	for (let i = 0; i < body.length; i++) {
+		if (body[i] !== "\\" || i + 1 >= body.length) {
+			// By code point, so a character outside the BMP stays whole.
+			const char = String.fromCodePoint(body.codePointAt(i)!);
+			bytes.push(...Buffer.from(char, "utf8"));
+			i += char.length - 1;
+			continue;
+		}
+		const escape = ansiEscape(body, i);
+		bytes.push(...escape.bytes);
+		agreed &&= escape.agreed;
+		i = escape.end;
+	}
+	try {
+		// A BOM is kept, as the program receives it, and marked: some file systems ignore U+FEFF in a name, others don't.
+		const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new Uint8Array(bytes));
+		return { text, agreed: agreed && !text.includes("\0") && !text.includes("\ufeff") };
+	} catch {
+		return { text: Buffer.from(bytes).toString("utf8"), agreed: false };
+	}
+}
+
+const ANSI_SIMPLE: Record<string, number> = { a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b, "\\": 0x5c, "'": 0x27, '"': 0x22, "?": 0x3f };
+const ANSI_HEX: Record<string, number> = { x: 2, u: 4, U: 8 };
+
+/**
+ * The escape at `body[i]` (a backslash inside a `$'…'` body): its bytes, the index of its last character, and whether bash
+ * and zsh read it the same. They agree on the letters above, `\\`, `\'`, `\"`, `\?`, octal, and `\x` with digits. Anything
+ * else (`\u` and `\U`, which macOS's bash 3.2 lacks; `\c`; zsh's `\C` and `\M`; an unknown letter; `\x` without digits) is
+ * read differently, and its bytes are only a best guess.
+ */
+function ansiEscape(body: string, i: number): { bytes: number[]; end: number; agreed: boolean } {
+	const ch = body[i + 1]!;
+	if (Object.hasOwn(ANSI_SIMPLE, ch)) return { bytes: [ANSI_SIMPLE[ch]!], end: i + 1, agreed: true };
+	const run = (digit: RegExp, from: number, max: number) => {
+		let j = from;
+		while (j < from + max && digit.test(body[j] ?? "")) j++;
+		return j;
+	};
+	if (/[0-7]/.test(ch)) {
+		const j = run(/[0-7]/, i + 1, 3);
+		return { bytes: [parseInt(body.slice(i + 1, j), 8) & 0xff], end: j - 1, agreed: true };
+	}
+	if (Object.hasOwn(ANSI_HEX, ch)) {
+		const j = run(/[0-9a-fA-F]/, i + 2, ANSI_HEX[ch]!);
+		if (j === i + 2) return { bytes: [0], end: i + 1, agreed: false };
+		const code = parseInt(body.slice(i + 2, j), 16);
+		if (ch === "x") return { bytes: [code], end: j - 1, agreed: true };
+		// macOS's /bin/bash 3.2 has no `\u` or `\U`, and the shells differ beyond U+10FFFF and on surrogates.
+		return { bytes: code <= 0x10ffff ? [...Buffer.from(String.fromCodePoint(code), "utf8")] : [], end: j - 1, agreed: false };
+	}
+	const char = String.fromCodePoint(body.codePointAt(i + 1)!);
+	return { bytes: [...Buffer.from(char, "utf8")], end: i + char.length, agreed: false };
+}
+
 /** A token without a `NAME=` before a substitution, the `(`, `$(`, backtick or `{` that opens a group before it and the `)`, backtick, `}` or `;` after it. */
 export function unwrapToken(token: string): string {
 	// `NAME=` in front of a substitution (`x=$(git …)`) is an assignment, not part of the command.
@@ -412,8 +524,8 @@ const GIT_ENV_REDIRECTS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG
 /** The kit's branch naming (git-workflow): only such a branch is pushed without a question. */
 const WORK_BRANCH = /^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)\/[a-z0-9][a-z0-9._-]*$/;
 
-/** Anything that mentions `git … push` asks, unless the command is the plain own-branch push (see ownBranchPush). */
-function checkPushes(command: string, segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
+/** Anything that mentions `git … push`, as written or in a decoded, folded view, asks, unless the command is the plain own-branch push (see ownBranchPush). */
+function checkPushes(command: string, views: string[], segments: string[][], project: string, dir: string, env: NodeJS.ProcessEnv, owners?: string[]): GuardDecision | undefined {
 	// A verb split by quotes or escapes (`pu''sh`) no longer matches the text, but its token is `push`.
 	const pushToken = segments.some((tokens) =>
 		// A subcommand that is not a literal word (`$X`, a substitution) could be push.
@@ -425,7 +537,7 @@ function checkPushes(command: string, segments: string[][], project: string, dir
 		const at = words.findIndex(gitLike);
 		return at !== -1 && words.slice(at + 1).some((t) => PUSH_VERBS.has(t));
 	});
-	if (!pushToken && !pushAfterGit && !PUSH_WORDS.test(command)) return undefined;
+	if (!pushToken && !pushAfterGit && !views.some((v) => PUSH_WORDS.test(v))) return undefined;
 	return ownBranchPush(command, dir, env, project, owners) ? undefined : PUSH_CONFIRM;
 }
 
@@ -508,6 +620,16 @@ const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--na
 /** Git's own options that take no value. Any other option before the subcommand is unknown, so it asks. */
 const GIT_FLAG_OPTIONS = new Set(["-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice", "--version", "--help", "-h"]);
 const BASE_NAME = (token: string) => token.slice(token.lastIndexOf("/") + 1);
+/**
+ * The program a command word names, as macOS and Windows find it: its base name folded like a path (`GIT`, `/usr/bin/Git`
+ * and `ſh` run git and sh there). Only for external programs: a builtin or keyword in another case is not one (`CD x`
+ * runs `/usr/bin/cd` in a child, `EVAL` isn't found), so `cd`, `eval`, `export` and the keywords compare as written.
+ */
+export function commandName(token: string): string {
+	// A marked word (see tokenize) is also judged as the name it most likely spells: a block on that reading wins over the
+	// question the mark asks.
+	return foldPath(BASE_NAME(token.replaceAll("\0", "")));
+}
 /** Config keys whose value is a command git runs (pager, editor, helpers, drivers, filters). */
 const COMMAND_KEYS =
 	"core[.](pager|editor|askpass)|sequence[.]editor|diff[.]external|gpg[.]([^.]+[.])?program|filter[.]|pager[.]|diff[.].+[.](command|textconv)|merge[.].+[.]driver|(difftool|mergetool)[.].+[.]cmd|submodule[.].+[.]update|credential[.](.+[.])?helper";
@@ -528,7 +650,7 @@ const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "un
 const OPENS_COMMAND = /^([A-Za-z_][A-Za-z0-9_]*=)?(\$\(|[(`{])/;
 /** `git`, `git-<sub>`, or a path to one that is absolute or starts with `./`; `skills/git-workflow` is not git. */
 function gitLike(token: string): boolean {
-	if (!/^git(-[a-z][a-z-]*)?$/.test(BASE_NAME(token))) return false;
+	if (!/^git(-[a-z][a-z-]*)?$/.test(commandName(token))) return false;
 	return !token.includes("/") || /^(\/|\.\/)/.test(token);
 }
 /** Config keys that move where git pushes, fetches from, or what it executes. */
@@ -556,7 +678,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 	tokens.forEach((t, i) => {
 		const opens = OPENS_COMMAND.test(raw[i]!);
 		if (gitLike(t) && (territory || wrapped || opens)) positions.push(i);
-		const word = BASE_NAME(t);
+		const word = commandName(t);
 		if ((territory || wrapped) && WRAPPERS.has(word) && !(word === "command" && /^-[vV]$/.test(tokens[i + 1] ?? ""))) wrapped = true;
 		else if (!wrapped) territory = t === "" || SHELL_KEYWORDS.has(t) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(raw[i]!) || opens;
 	});
@@ -566,7 +688,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 		const call = parseGit(raw, tokens, at);
 		if (!OPENS_COMMAND.test(raw[at]!)) {
 			if (plain.length > 1) call.issue ??= { action: "confirm", reason: "This runs git indirectly, so the guard can't see the subcommand." };
-			else if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(BASE_NAME(t)))) call.issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
+			else if (tokens.slice(0, at).some((t) => /^(xargs|parallel)$/.test(commandName(t)))) call.issue ??= { action: "confirm", reason: "Git gets its arguments from input, so the guard can't see them." };
 		}
 		return call;
 	});
@@ -575,7 +697,7 @@ function parseGitCalls(raw: string[]): GitCall[] {
 function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 	let issue: GuardDecision | undefined;
 	// A `git-<sub>` binary is `git <sub>`: it takes no global options.
-	const direct = /^git-([a-z][a-z-]*)$/.exec(BASE_NAME(tokens[at]!));
+	const direct = /^git-([a-z][a-z-]*)$/.exec(commandName(tokens[at]!));
 	if (direct) return { at, v: at, sub: direct[1], rest: tokens.slice(at + 1) };
 	let v = at + 1;
 	let bare = true; // only --version/--help/-h so far
@@ -708,15 +830,15 @@ function checkPushSetup(segments: string[][], command: string): GuardDecision | 
 	for (const tokens of segments) {
 		const lower = tokens.map((t) => unwrapToken(t).toLowerCase());
 		for (const [tool, noun] of [["gh", "pr"], ["glab", "mr"]] as const) {
-			const at = lower.findIndex((t) => BASE_NAME(t) === tool);
+			const at = lower.findIndex((t) => commandName(t) === tool);
 			const n = at === -1 ? -1 : lower.indexOf(noun, at + 1);
 			if (n !== -1 && lower.indexOf("merge", n + 1) !== -1) return { action: "confirm", reason: "This command merges a PR/MR." };
 			if (at !== -1 && apiWrite(tokens.map(unwrapToken), at, command)) return { action: "confirm", reason: "This command calls the API with a write method." };
 		}
-		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(BASE_NAME(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
+		const shell = tokens.findIndex((t, i) => /^(ba|z|da|k)?sh$/.test(commandName(t)) && tokens.slice(i + 1).some((a) => /^-[a-z]*c[a-z]*$/.test(a)));
 		const evalAt = tokens.findIndex((t) => t === "eval");
 		const from = shell !== -1 ? shell : evalAt;
-		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(t))) return { action: "confirm", reason: "This command runs git through a shell string." };
+		if (from !== -1 && tokens.slice(from + 1).some((t) => /\bgit\b/.test(foldPath(t)))) return { action: "confirm", reason: "This command runs git through a shell string." };
 		const calls = parseGitCalls(tokens);
 		const envAsk = gitEnvDecision(tokens, calls);
 		if (envAsk) return envAsk;

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "../extensions/lib/approvals.ts";
 import { slowGit } from "./slow-git.ts";
-import { baseBranch, checkWorkDocs, finishedWorkDocs, landing, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
+import { allLandings, baseBranch, checkWorkDocs, finishedWorkDocs, WORK_DOC_DIRS } from "../extensions/lib/workdocs.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -151,7 +151,7 @@ test("finished task files: every box in the Plan section ticked, in the working 
 
 test("push options that take a separate value don't name the remote or a refspec", () => {
 	const push = (command: string) => {
-		const l = landing(command.split(" "));
+		const l = allLandings(command.split(" "))[0];
 		return l?.kind === "push" ? { remote: l.remote, refspecs: l.refspecs } : l;
 	};
 	for (const flag of ["-o", "--push-option", "--repo", "--receive-pack", "--exec"]) {
@@ -318,4 +318,34 @@ test("in a workspace, a repository's own worktree inside its folder is that repo
 test("in a workspace, a quoted argument with .. and glob characters doesn't hide the folder", () => {
 	const { check } = workspace();
 	assert.match(String(check('cd a && gh pr create --title "handle ../ paths [WIP]"')?.reason), /Task files would reach/);
+});
+
+// macOS and Windows run gh, glab and git in any letter case: a landing is the same landing.
+test("landing sees gh, glab and git in any letter case", () => {
+	for (const [upper, lower] of [
+		["GH pr merge 1", "gh pr merge 1"],
+		["GH pr create", "gh pr create"],
+		["GLAB mr merge 1", "glab mr merge 1"],
+		["GIT push origin main", "git push origin main"],
+		["GIT merge x", "git merge x"],
+		["GIT commit -m x", "git commit -m x"],
+	]) {
+		assert.notEqual(allLandings(lower.split(" "))[0], undefined, lower);
+		assert.deepEqual(allLandings(upper.split(" "))[0], allLandings(lower.split(" "))[0], upper);
+	}
+});
+
+test("landing skips an assignment or argument whose base name is git or gh and finds the real call", () => {
+	for (const [before, plain] of [
+		[["HOME=/srv/git", "git", "push", "origin", "main"], ["git", "push", "origin", "main"]],
+		[["GIT_SSH_COMMAND=ssh -i ~/.ssh/git", "git", "push", "origin", "main"], ["git", "push", "origin", "main"]],
+		[["sudo", "-u", "Git", "git", "merge", "x"], ["git", "merge", "x"]],
+		[["flock", "/tmp/gh", "gh", "pr", "merge", "1"], ["gh", "pr", "merge", "1"]],
+	]) {
+		assert.deepEqual(allLandings(before)[0], allLandings(plain)[0], before.join(" "));
+	}
+});
+
+test("allLandings lists every commit, merge, push or PR call in a segment, in order", () => {
+	assert.deepEqual(allLandings(["find", ".", "-exec", "git", "commit", "-qm", "x", "';'", "-exec", "git", "merge", "feat/a", "';'"]).map((l) => l.kind), ["commit", "merge"]);
 });

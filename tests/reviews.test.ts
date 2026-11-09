@@ -1400,3 +1400,44 @@ test("segmentFolders: each segment runs where the moves before it and its git -C
 	const hidden = segmentFolders("echo $(cd b && npm publish)", ws);
 	assert.ok(hidden.length > 0 && hidden.every((s) => s.dir === undefined), "a move in a substitution hides every folder");
 });
+
+// A program runs in any letter case on macOS and Windows; a builtin doesn't (`CD b` runs /usr/bin/cd in a child).
+test("segmentFolders: git and env in any case, builtins as written", () => {
+	const ws = temp("reviews-ws-");
+	for (const r of ["a", "b"]) mkdirSync(join(ws, r));
+	assert.equal(segmentFolders("GIT -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("/usr/bin/GIT -C b status", ws)[0]!.dir, join(ws, "b"));
+	assert.equal(segmentFolders("tools/git -C b status", ws)[0]!.dir, ws, "a relative path to a program named git is not git, as gitLike says");
+	for (const command of ["ENV -C b git push", "npm run x GIT -C b", 'BASH -c "cd b"', "GIT --git-dir=b/.git log"]) {
+		assert.equal(segmentFolders(command, ws)[0]!.dir, undefined, command);
+	}
+	assert.equal(segmentFolders("CD b && git status", ws)[1]!.dir, ws);
+	assert.equal(segmentFolders("cd $'b\\0'x && git status", ws)[1]!.dir, undefined, "a NUL makes the folder unknown");
+	assert.equal(segmentFolders("PUSHD b; git status", ws)[1]!.dir, ws);
+});
+
+// An escaped `;` keeps `find … -exec … \; -exec …` one segment, and bash still runs both calls.
+test("every landing in one segment is judged: a merge after a commit in find -exec", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("find . -maxdepth 0 -exec git commit -qm x \\; -exec git merge feat/a \\;")), "block");
+});
+
+// In PowerShell `\` is a plain character and `;` separates statements, so `cat x \; Set-Content …` writes.
+test("gate files: a segment holding a quoted operator word is never read-only", (t) => {
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	t.after(() => rmSync(project, { recursive: true, force: true }));
+	mkdirSync(join(project, ".claude"));
+	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
+	assert.equal(check("cat x \\; Set-Content .claude/guard.json '{}'"), "confirm");
+	assert.equal(check("cat .claude/guard.json"), "allow");
+});
+
+// A quoted operator word means one segment runs several commands (`find … -exec … \; -exec …`, or PowerShell's `\;`), so
+// nothing in it counts as a safe step before a landing.
+test("a segment holding a quoted operator word is never a safe step before a landing", () => {
+	const { check } = repo();
+	assert.equal(action(check("find . -maxdepth 0 -exec git switch main \\; -exec git merge feat/a \\;")), "block");
+	// On the work branch the merge alone is not a landing on the base; only the switch in the first segment makes it unsafe.
+	assert.equal(action(check("cat x \\; git switch main; git merge feat/a")), "block");
+});

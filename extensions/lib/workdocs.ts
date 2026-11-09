@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { commandName, quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
 import { safeRealpath, segmentFolders } from "./shell.ts";
 
@@ -45,7 +45,7 @@ export function checkWorkDocs(
 	dirs = WORK_DOC_DIRS,
 	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
 ): GuardDecision | undefined {
-	if (!workspace) return judge(splitSegments(tokenize(command)).map(landing).filter((l): l is Landing => l !== undefined), projectDir, dirs);
+	if (!workspace) return judge(splitSegments(tokenize(command)).flatMap(allLandings), projectDir, dirs);
 	const folders = workspace.repos.map((name) => join(projectDir, name));
 	// `"workDocs": []` everywhere turns the rule off, even where a landing can't be placed.
 	const watched = folders.some((repo) => workspace.dirsFor(repo).length > 0);
@@ -58,38 +58,38 @@ export function checkWorkDocs(
 	// A heredoc body is text only when the command as a whole just writes it to a file; any other heredoc may run it.
 	const write = quotedHeredoc(command);
 	for (const { raw, dir } of segmentFolders(write?.target !== undefined ? write.head : command, workspace.cwd, workspace.powershell)) {
-		const l = landing(raw.map((t) => t.replace(/^\(+|\)+$/g, "")));
-		if (!l) continue;
-		// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
-		if (l.kind === "commit" && dir === undefined) {
-			if (!watched) continue;
-			const until = Date.now() + UNPLACED_BUDGET_MS;
-			for (const repo of folders) {
-				const own = workspace.dirsFor(repo);
-				if (own.length === 0) continue;
-				if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
-				const found = judgeCommit(repo, own, until);
-				if (found === "late") return cantTell;
-				if (found) return found;
+		for (const l of allLandings(raw.map((t) => t.replace(/^\(+|\)+$/g, "")))) {
+			// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
+			if (l.kind === "commit" && dir === undefined) {
+				if (!watched) continue;
+				const until = Date.now() + UNPLACED_BUDGET_MS;
+				for (const repo of folders) {
+					const own = workspace.dirsFor(repo);
+					if (own.length === 0) continue;
+					if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
+					const found = judgeCommit(repo, own, until);
+					if (found === "late") return cantTell;
+					if (found) return found;
+				}
+				continue;
 			}
-			continue;
+			// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
+			// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
+			const repo = dir === undefined ? undefined : repoOf(projectDir, workspace.repos, dir);
+			const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
+			// A checkout in a repository's folder is that repository when it shares its git common dir (its own worktree,
+			// judged in the worktree) and another one otherwise (a clone, another repository's worktree).
+			const top = dir === undefined || repo === undefined ? undefined : git(dir, ["rev-parse", "--show-toplevel"]);
+			const nested = top !== undefined && commonOf(top) !== commonOf(repo!);
+			const checkout = dir === undefined ? undefined : repo === undefined ? dir : (top ?? repo);
+			const unplaced = checkout === undefined || selector || nested || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
+			if (unplaced) {
+				if (!watched) continue;
+				return cantTell;
+			}
+			const found = judge([l], checkout!, workspace.dirsFor(repo ?? checkout!));
+			if (found) return found;
 		}
-		// A folder outside the workspace repositories is judged as it is; one that isn't git lands nothing, unless a PR
-		// names its repository another way (`-R`, `GH_REPO`, a URL) or starts there.
-		const repo = dir === undefined ? undefined : repoOf(projectDir, workspace.repos, dir);
-		const selector = l.kind === "pr" && (l.repo === true || ghRepo || /^https?:\/\//.test(l.target ?? ""));
-		// A checkout in a repository's folder is that repository when it shares its git common dir (its own worktree,
-		// judged in the worktree) and another one otherwise (a clone, another repository's worktree).
-		const top = dir === undefined || repo === undefined ? undefined : git(dir, ["rev-parse", "--show-toplevel"]);
-		const nested = top !== undefined && commonOf(top) !== commonOf(repo!);
-		const checkout = dir === undefined ? undefined : repo === undefined ? dir : (top ?? repo);
-		const unplaced = checkout === undefined || selector || nested || (l.kind === "pr" && git(checkout, ["rev-parse", "--git-dir"]) === undefined);
-		if (unplaced) {
-			if (!watched) continue;
-			return cantTell;
-		}
-		const found = judge([l], checkout!, workspace.dirsFor(repo ?? checkout!));
-		if (found) return found;
 	}
 	return undefined;
 }
@@ -197,27 +197,40 @@ export function currentBranch(projectDir: string, timeout?: number): string | un
 	return git(projectDir, ["branch", "--show-current"], timeout) || undefined;
 }
 
-export function landing(raw: string[]): Landing | undefined {
+/**
+ * Every commit, merge, push or PR call in one segment, in the order they appear: `find … -exec git commit … \; -exec git
+ * merge …` runs both. gh, glab and git run in any letter case on macOS and Windows, and every word that names one is a
+ * candidate, so an argument or assignment with such a base name (`HOME=/srv/git git push`) hides nothing.
+ */
+export function allLandings(raw: string[]): Landing[] {
 	// A group or substitution around the command does not hide it.
 	const tokens = raw.map(unwrapToken).filter(Boolean);
-	const words = tokens.filter((t) => !t.includes("=") || t.startsWith("-"));
-	for (const tool of ["gh", "glab"]) {
-		const at = words.indexOf(tool);
-		if (at === -1) continue;
-		const args = tokens.slice(tokens.indexOf(tool) + 1);
-		const [noun, verb, first] = words.slice(at + 1).filter((t) => !t.startsWith("-"));
-		if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) continue;
-		const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
-		if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
-		const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
-		const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));
-		if (head === -1) return { kind: "pr", merge: false, repo };
-		const flag = args[head]!;
-		return { kind: "pr", merge: false, target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1], repo };
-	}
-	if (!words.includes("git")) return undefined;
-	// Raw tokens after git: `-c key=value` keeps its value, so options and their values pair up.
-	const rest = tokens.slice(tokens.indexOf("git") + 1);
+	const isWord = (t: string) => !t.includes("=") || t.startsWith("-");
+	const found: Landing[] = [];
+	tokens.forEach((t, at) => {
+		if (!isWord(t)) return;
+		const name = commandName(t);
+		const l = name === "gh" || name === "glab" ? prLanding(name, tokens.slice(at + 1), isWord) : name === "git" ? gitLanding(tokens.slice(at + 1)) : undefined;
+		if (l) found.push(l);
+	});
+	return found;
+}
+
+/** `gh pr create|merge` or `glab mr create|merge` from the tokens after the tool. */
+function prLanding(tool: "gh" | "glab", args: string[], isWord: (t: string) => boolean): Landing | undefined {
+	const [noun, verb, first] = args.filter((t) => isWord(t) && !t.startsWith("-"));
+	if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) return undefined;
+	const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
+	if (verb === "merge") return { kind: "pr", merge: true, target: first, repo };
+	const flags = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
+	const head = args.findIndex((t) => flags.includes(t) || flags.some((f) => f.startsWith("--") && t.startsWith(`${f}=`)));
+	if (head === -1) return { kind: "pr", merge: false, repo };
+	const flag = args[head]!;
+	return { kind: "pr", merge: false, target: flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[head + 1], repo };
+}
+
+/** A git commit, merge or push from the raw tokens after git: `-c key=value` keeps its value, so options and their values pair up. */
+function gitLanding(rest: string[]): Landing | undefined {
 	// The subcommand is the first word after git's own options (`-C <dir>` and `-c <key=value>` take a value).
 	let verb = 0;
 	let dir: string | undefined;

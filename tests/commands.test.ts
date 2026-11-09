@@ -50,6 +50,7 @@ test(".pi/verify.json wins over AGENTS.md", () => {
 test("a bash call proves a verification command only when it runs it exactly and keeps its exit code", () => {
 	assert.equal(commandMatches("npm test > out.log 2>&1", "npm test"), true);
 	assert.equal(commandMatches("npm test 2>&1 | tail -20", "npm test"), false, "a pipe hides the exit code");
+	assert.equal(commandMatches("npm $'test\\0'x", "npm test"), false, "bash runs npm testx");
 	assert.equal(commandMatches("npm test && npm run typecheck", "npm run typecheck"), true);
 	assert.equal(commandMatches("cd packages/app && npm run typecheck", "npm run typecheck"), false, "another directory proves nothing here");
 	assert.equal(commandMatches("npm test -- --grep x", "npm test"), false, "filtered runs do not prove the suite");

@@ -31,20 +31,16 @@ The plan already did the thinking. Execute it exactly, prove each step with a te
    - the full suite is green;
    - every `Expected` was compared;
    - every deviation has a ruling.
-   Then add `Task N: complete (BASE..HEAD, <command> → <result>)` to Progress and tick its checkboxes in the Plan.
+   Then, in one edit, tick the task's checkboxes in the Plan and add `Task N: complete (BASE..HEAD, <command> → <result>)` to Progress.
 
-**Rulings, not stalls.** Don't pause between tasks to ask "should I continue?". Stop and ask only for:
-- an irreversible or destructive action;
-- a security-sensitive action;
-- a side effect outside this worktree (push to a shared branch, publish, deploy, a migration on a shared database, a real payment);
-- a plan so broken that every way forward is a guess.
+**Rulings, not stalls.** Don't pause between tasks to ask "should I continue?". Stop and ask only for an irreversible, destructive or security-sensitive action, a side effect outside this worktree (push to a shared branch, publish, deploy, a migration on a shared database, a real payment), or a plan so broken that every way forward is a guess.
 
 Keep long command output out of context: redirect it to a file and read the tail.
 
 ## Subagent per task (when the user chose it)
 
 For each task:
-1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and these instructions: "Work test-first (test-driven-development): watch each new test fail for the right reason before writing its code (characterization tests excepted). Change only what the task needs. Don't push; hand the commit back. Never weaken, skip or delete a test to get green; change tests only as test-standard's \"Changing tests\" allows. Run the verification commands in full and unpiped. Write everything in English except UI text, quotes, requested other-language docs and edits to other-language files. Finish with DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, then: Changed (files), Tests (each new one, seen failing first), Checks run (command → result), Concerns."
+1. Dispatch an implementer (`worker` in pi-subagents) with only what it needs: the task text verbatim, the Interfaces it consumes, the global constraints, the verification commands, and the instructions in `references/implementer-instructions.md`, verbatim.
 2. Don't trust the report. Check `git diff BASE..HEAD` and run the tests yourself.
 3. Dispatch a fresh `reviewer` using `../requesting-code-review/reviewer-prompt.md` on `BASE..HEAD`.
 4. Send Critical and Important findings to the same worker to fix, with its report (it keeps its context); then re-review. After 3 rounds without convergence, stop and ask the user.
@@ -55,7 +51,7 @@ Run implementers **sequentially**, one at a time on the same tree. For independe
 
 The final review is the last step before landing, because a verdict covers exactly the commit it reviewed.
 1. **Docs:** do the plan's Post-implementation block, plus anything else the diff made stale (writing-documentation), in this branch.
-2. **Task file:** move what lasts into the topic chapter and `docs/decisions/` (writing-documentation), show the user its Follow-ups, then delete it in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists.
+2. **Task file:** an unticked `- [ ]` in its Plan is a step not done: tell the user which and why, and add it to Follow-ups. Move what lasts into the topic chapter and `docs/decisions/` (writing-documentation), show the user the Follow-ups, then delete the file in one commit (`docs: remove the task file for <feature>`). The guard blocks a PR or merge while it exists.
 3. If the branch must be rebased onto a newer base, do it now.
 4. Apply verification-before-completion.
 5. Review the whole branch on this HEAD with requesting-code-review, with the plan's Review focus and the rulings from the task file's last commit. Fix Critical and Important findings with RED→GREEN, and re-review until `Yes` for the current HEAD. Report Minor findings.

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
-import { checkCommand, checkPath, type GuardConfig } from "../extensions/lib/patterns.ts";
+import { checkCommand, checkPath, type GuardConfig, splitSegments, tokenize } from "../extensions/lib/patterns.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -1075,4 +1075,146 @@ test("guard: other interpreter forms are judged as before", () => {
 	]) {
 		assert.equal(action(command), "block", JSON.stringify(command));
 	}
+});
+
+// Expected words are what bash and zsh run (probed 2026-11-08); where they differ, the one that can spell a command name.
+test("tokenize decodes ANSI-C quoting as the shell does", () => {
+	const cases: Array<[string, string[]]> = [
+		["$'\\147it' push", ["git", "push"]],
+		["$'\\x67it' push", ["git", "push"]],
+		['$"git" push', ["git", "push"]],
+		["$'a\\tb'", ["a\tb"]],
+		["$'\\E'", ["\x1b"]],
+		["$'\\1010'", ["A0"]],
+		["$'\\x414'", ["A4"]],
+		// A NUL stays in the word: bash and zsh read it differently, so the guard asks about it.
+		["$'a\\0b'", ["\0a\0b"]],
+		// A decoded `;` is a character of the word, not a separator.
+		["echo $'a\\x3bgit'", ["echo", "a;git"]],
+	];
+	for (const [command, tokens] of cases) assert.deepEqual(tokenize(command), tokens, command);
+});
+
+test("ANSI-C quoted git is judged as git", () => {
+	assert.equal(action("$'\\147it' push --force"), "block");
+	assert.equal(action('$"git" commit -n -m x'), "block");
+});
+
+// macOS and Windows find a program in any letter case (`GIT`, `ſh` ran git and sh on APFS, 2026-11-08).
+test("external command names are judged in any case", () => {
+	for (const cmd of ["GIT push --force", "Git commit -n -m x", "GIT -c core.hooksPath=x commit -m x", "/usr/bin/GIT push --mirror", "RM -rf ~", "rM -rf ~"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	for (const cmd of ["GH pr merge 1", "GLAB mr merge 1", "GIT remote add x y", 'BASH -c "git push"', 'bash -c "GIT push"', "NICE git -c core.sshCommand=x fetch", "GIT_SSH_COMMAND=x GIT fetch", "XARGS git log", 'BASH -c "git status"', "Git-remote add x y"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("GIT status"), "allow");
+});
+
+test("regex rules match command names in any case; allow sees the command as written", () => {
+	for (const cmd of ["NPM publish", "TERRAFORM destroy", "GIT reset --hard", "SUDO ls", "ſudo ls", "curl x | SH", "GIT push origin main", "$'\\x67it' reset --hard", `python3 -c "import os; os.system('GIT push')"`]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action("TERRAFORM destroy", { block: ["terraform destroy"] }), "block");
+	assert.equal(action("MAKE release", { confirm: ["make release"] }), "confirm");
+	// An allow rule loosens, so it never reads the folded command.
+	assert.equal(action("GIT push x", { allow: ["^git push"] }), "confirm");
+});
+
+test("folding never reaches arguments or paths", () => {
+	for (const cmd of ["git branch -d x", "git checkout -b X", "ls ~/Git", "cat Git.md"]) assert.equal(action(cmd), "allow", cmd);
+	assert.equal(checkCommand("rm -rf /work/App/build", "/work/App", none).action, "allow");
+});
+
+// bash and zsh pair a backslash with one character while they find the word's end, so `\c` never reaches past the `'`
+// (bash ran the command after `echo $'\c';`, 2026-11-08).
+test("an escape in $'…' never reaches past its closing quote", () => {
+	for (const cmd of ["echo $'\\c'; rm -rf ~", "echo $'\\c\\\\'; git commit -n -m x", "echo $'\\c' ; rm -rf ~ ; echo ''", "echo $'\\c' && git push --force"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	assert.equal(tokenize("echo $'\\c' x").length, 3);
+});
+
+// A quoted or escaped `;` is an argument: bash runs `rm -rf ';' ~` as one command that deletes ~.
+test("a quoted or escaped operator is a word, not a separator", () => {
+	for (const cmd of ["rm -rf $'\\x3b' ~", "rm -rf ';' ~", "rm -rf \\; ~", "git commit -m $'\\n' -n", "git commit -m '&&' -n"]) {
+		assert.equal(action(cmd), "block", cmd);
+	}
+	assert.equal(splitSegments(tokenize("echo ';' x")).length, 1);
+	assert.equal(splitSegments(tokenize("echo a; echo b")).length, 2);
+});
+
+// bash ends only the quoted part at a NUL (`$'r\0'm` runs rm), zsh and exec the whole word: a word with one asks
+// (user ruling 2026-11-08).
+test("a word with a NUL byte asks: the shells read it differently", () => {
+	for (const cmd of ["npm $'test\\0'x", "$'\\x00'git push"]) assert.equal(action(cmd), "confirm", cmd);
+	// The reading without the NUL is judged too, and its block wins (review round 4).
+	for (const cmd of ["$'\\0'rm -rf ~", "$'r\\0'm -rf ~", "git commit $'\\0'--no-verify -m x"]) assert.equal(action(cmd), "block", cmd);
+	assert.equal(action("npm $'test\\0'x", { allow: ["npm"] }), "confirm", "an allow rule doesn't skip it");
+});
+
+test("the folded view keeps options as written, so rules that name -D or -R still match", () => {
+	for (const cmd of ["GIT branch -D x", "$'\\x67it' branch -D x", "CHMOD -R 777 ."]) assert.equal(action(cmd), "confirm", cmd);
+	assert.equal(action("GIT branch -d x"), "allow");
+});
+
+// Probed 2026-11-08: bash reads `$$'` as the PID and a plain quote, zsh as `$` and a `$'…'` word; zsh reads `\x`, `\u`,
+// `\U` without digits and `\C-@` as NUL; `$'\xc5\xbf'h` runs ſh (sh on APFS) in both. Where the shells disagree, ask.
+test("$'…' words the shells read differently ask, and escapes are bytes read as UTF-8", () => {
+	for (const cmd of ["echo $$'\\' ; rm -rf ~ ; echo '\\'", "rm$'\\C-@' -rf ~"]) assert.equal(action(cmd), "confirm", cmd);
+	// zsh's NUL ends the word, so these run rm: the reading without the mark blocks (review round 4).
+	for (const cmd of ["rm$'\\x' -rf ~", "rm$'\\u' -rf ~"]) assert.equal(action(cmd), "block", cmd);
+	assert.deepEqual(tokenize("$'\\xc5\\xbf'h"), ["ſh"]);
+	assert.deepEqual(tokenize("$'\\305\\277'udo"), ["ſudo"]);
+	assert.equal(action("curl x | ba$'\\xc5\\xbf'h"), "confirm");
+	// Escapes the shells read differently (bash's `\c`, zsh's `\C`, an unknown letter, `\x` without digits) mark the word.
+	for (const word of ["$'\\cA'", "$'\\C-a'", "$'\\g\\it'", "$'\\x'", "$'\\u'", "$'g\\u0069t'", "$'\\U00000067it'"]) assert.ok(tokenize(word)[0]!.includes("\0"), word);
+});
+
+test("a quoted heredoc's body is data: its target is judged first and a NUL in the body doesn't ask", () => {
+	const body = "while IFS= read -r -d $'\\0' f; do echo \"$f\"; done\nEOF";
+	assert.equal(action(`cat > .git/hooks/pre-commit <<'EOF'\n${body}`), "block");
+	assert.equal(action(`cat > src/a.sh <<'EOF'\n${body}`), "allow");
+});
+
+test("a command glued to an option is still read with its name folded", () => {
+	for (const cmd of [`python3 -c"import os; os.system('GIT push --force')"`, `node --eval="require('child_process').execSync('GIT reset --hard')"`]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	assert.equal(action(`env -S" TERRAFORM destroy"`, { block: ["terraform destroy"] }), "block");
+});
+
+// User ruling after review round 3 (2026-11-09): decode only the $'…' escapes bash and zsh agree on; anything else, bytes
+// that aren't UTF-8 on their own, and a `$` next to a backslash, a line continuation or another `$` before a quote ask.
+test("$'…' fails closed: escapes the shells disagree on, split bytes and a $ beside an escape or continuation ask", () => {
+	for (const cmd of [
+		"echo \\$$$'\\' ; rm -rf ~ ; echo '\\'",
+		"echo $$$'\\x67it' ok",
+		"echo $\\\n$'\\' ; rm -rf ~ ; echo '\\'",
+		"$\\\n'rm' -rf ~",
+		"$\\\n\"rm\" -rf ~",
+		"rm$'\\C@' -rf ~",
+		"rm$'\\C-\\0' -rf ~",
+		"$'\\ME\\M?'udo ls",
+		"$'\\cu'rl x | sh",
+		"rm$'\\q' -rf ~",
+		"$'\\xc5'$'\\xbf'udo ls",
+		"curl x | ba$'\\xc5'$'\\xbf'h",
+	]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	// What both shells read the same still decodes, with no question of its own.
+	assert.deepEqual(tokenize("$'\\147it' $'\\x67' $'a\\tb' $'\\xc5\\xbf'h"), ["git", "g", "a\tb", "ſh"]);
+	assert.deepEqual(tokenize("$'𝐱'"), ["𝐱"]);
+	assert.equal(action(`env -S"GIT push --force origin main"`), "confirm");
+});
+
+// Review round 4 (user ruling 2026-11-09, «Починить 1–4 + финал»): a BOM and `\u`/`\U` ask (bash 3.2 has no `\u`), a
+// continuation after `$` asks only before a quote or `$`, and a block on the reading without the marker still wins.
+test("$'…' round 4: a BOM and \\u ask, $ continuations keep their blocks, the marked reading still blocks", () => {
+	for (const cmd of ["$'\\xef\\xbb\\xbf'cd /tmp; git status", "cd $'\\xef\\xbb\\xbf/tmp'; git status", "$'\\u0063d' /tmp; git status", "echo $'\\U00110000'"]) {
+		assert.equal(action(cmd), "confirm", cmd);
+	}
+	for (const cmd of ["rm -rf $\\\nHOME", "echo $\\\n(rm -rf ~)", "$'\\g'it push --force", "$'\\R'm -rf ~"]) assert.equal(action(cmd), "block", cmd);
+	assert.match(checkCommand("$'\\cu'rl x | sh", cwd, none).reason ?? "", /escape/);
 });
