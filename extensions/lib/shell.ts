@@ -147,16 +147,24 @@ export const MOVES = new Set(["cd", "pushd", "popd", "chdir"]);
 
 /** Whether a command the guard can't follow (see plainShell) names a move anywhere, as in `echo $( cd x )`. */
 function hiddenMove(command: string): boolean {
-	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(t.replace(/\)+$/, "").split(/\$\(|`|\(/).pop()!));
+	return !plainShell(command) && tokenize(command).some((t) => MOVES.has(bare(t).replace(/\)+$/, "").split(/\$\(|`|\(/).pop()!));
 }
 /** Prefixes whose own options come before the command: `command -p cd`, `time -p cd`. */
 const OPTION_PREFIXES = new Set(["command", "time", "exec"]);
 /** Words that may stand before a command in the same segment. */
 const PREFIXES = new Set(["{", "}", "!", "then", "do", "else", "elif", "if", "while", "until", "time", "builtin", "command", "exec"]);
 
+/**
+ * A word without the mark tokenize puts on a reading the shells may disagree on (`$"builtin"` is `builtin` in bash).
+ * Names, options and refs are compared this way; the mark itself still asks in the guard.
+ */
+export function bare(word: string): string {
+	return word.replaceAll("\0", "");
+}
+
 /** Where a segment's command word is: after reserved words, `builtin`-style prefixes and assignments; -1 for none. */
 function commandIndex(words: string[]): number {
-	return words.findIndex((w, i) => !PREFIXES.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(w.startsWith("-") && OPTION_PREFIXES.has(words[i - 1] ?? "")));
+	return words.findIndex((w, i) => !PREFIXES.has(bare(w)) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(bare(w)) && !(bare(w).startsWith("-") && OPTION_PREFIXES.has(bare(words[i - 1] ?? ""))));
 }
 
 /** A move the guard follows exactly. */
@@ -173,7 +181,7 @@ export function parseMove(words: string[]): Move | "other" | undefined {
 	// A word marked as read differently by the shells (see tokenize) that is a move without its mark may or may not move.
 	if (words[at]!.includes("\0") && MOVES.has(words[at]!.replaceAll("\0", ""))) return "other";
 	if (!MOVES.has(words[at]!)) return undefined;
-	if (at > 0 || words[at] === "chdir") return "other";
+	if (at > 0 || bare(words[at]!) === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;
 	let physical = false;
@@ -531,13 +539,14 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 		const literal = words.map((w) => !open.includes(w));
 		if (hidesFolder(words, literal)) dir = undefined;
 		const head = words[commandIndex(words)];
-		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(w)) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(head))) exported = true;
+		if (words.some((w) => /^GIT_(DIR|WORK_TREE)=/.test(bare(w))) && (head === undefined || ["export", "declare", "typeset", "readonly"].includes(bare(head)))) exported = true;
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
 		const at = commandIndex(words);
 		// git as a bare word or a path from the root or `./` (as gitLike reads it): `tools/git` may be anything.
 		const git = at !== -1 && commandName(words[at]!) === "git" && (!words[at]!.includes("/") || /^(\/|\.\/)/.test(words[at]!));
-		for (let i = at + 1; dir !== undefined && git && i < words.length && words[i]!.startsWith("-"); i += words[i] === "-C" || words[i] === "-c" ? 2 : 1) {
-			if (words[i] === "-C") dir = follow(dir, words[i + 1]);
+		// Options compare without the mark; a marked folder value stays as written, so follow() refuses it.
+		for (let i = at + 1; dir !== undefined && git && i < words.length && bare(words[i]!).startsWith("-"); i += bare(words[i]!) === "-C" || bare(words[i]!) === "-c" ? 2 : 1) {
+			if (bare(words[i]!) === "-C") dir = follow(dir, words[i + 1]);
 		}
 		return { raw, dir, move: shell.move(raw, alone, before) !== undefined };
 	});
@@ -547,7 +556,8 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
  * Words that run the segment, or a git call in it, somewhere the folder doesn't show. Programs (git, env, a shell) count
  * in any letter case, as macOS and Windows find them; `eval` is a builtin and only counts as written.
  */
-function hidesFolder(words: string[], literal: boolean[] = []): boolean {
+function hidesFolder(marked: string[], literal: boolean[] = []): boolean {
+	const words = marked.map(bare);
 	const at = commandIndex(words);
 	const git = (w: string) => commandName(w) === "git";
 	return words.some((w, i) => {

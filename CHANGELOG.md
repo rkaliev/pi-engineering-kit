@@ -2,10 +2,10 @@
 
 ## 0.38.1
 
-- **Words split as the shells split them.** The tokenizer split words on any whitespace, so `cd` + U+00A0 + `/tmp; git merge …` made the review gate judge the merge in `/tmp`, while bash and zsh run nothing there. Only spaces and tabs end a word; U+00A0, U+FEFF, `\r`, `\v` and `\f` stay inside it.
+- **Words split as the shells split them.** The tokenizer split words on any whitespace, so `cd` + U+00A0 + `/tmp; git merge …` made the review gate judge the merge in `/tmp`, while bash and zsh run nothing there. Only spaces and tabs end a word; U+00A0, U+FEFF, `\r`, `\v` and `\f` stay inside it. Because PowerShell, and bash with `igncr`, split on those characters and end a line at `\r`, the blocks, questions and gates also judge that reading and keep the stricter decision (`rm -r` + U+00A0 + `~` stays blocked).
 - **`$\⏎'…'` is a `$'…'` word, and `$"…"` asks.** Both shells read a `$'…'` word across line continuations, so `$\⏎'rm' -rf ~` is blocked rather than asked about. `$"…"` is `"…"` in bash and `$…` in zsh, so it asks like other forms the shells read differently. The shell helpers find the same word boundaries.
-- **A marked `cd` leaves the folder unknown.** `$'cd' x; git push` no longer leaves the review gate judging the session's checkout.
-- **A marked word's likely reading reaches every block.** Your `block` and `confirm` patterns, the git subcommand of a landing (`git $'\m'erge`) and the quoted-operator check (`$'\;'`) read it too. `allow` and the own-branch push still read only the command as written.
+- **A marked `cd` leaves the folder unknown.** `$"cd" x; git push` (or `$'\u0063d'`) no longer leaves the review gate judging the session's checkout.
+- **A marked word's likely reading reaches the blocks and the gates.** Your `block` and `confirm` patterns, the git subcommand of a landing (`git $'\m'erge`) and the quoted-operator check (`$'\;'`) read it too. `allow` and the own-branch push still read only the command as written.
 - **The question names its causes,** and tests now pin the 0.38.0 mark-stripping and BOM handling.
 
 ## 0.38.0

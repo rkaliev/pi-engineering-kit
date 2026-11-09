@@ -1258,3 +1258,9 @@ test("blocks also read words split on every blank, as PowerShell does", () => {
 	}
 	assert.deepEqual(tokenize("cd /tmp"), ["cd /tmp"], "the bash reading is unchanged");
 });
+
+// A quoted heredoc that writes a project file has its body judged only by your rules: the unmarked reading is what asks.
+test("a project confirm rule reads a marked word without its mark inside a heredoc body", () => {
+	assert.equal(action("cat > a.sh <<'EOF'\nterr$'\\x'aform destroy\nEOF", { confirm: ["terraform"] }), "confirm");
+	assert.equal(action("rm -rf $\\\n{HOME}"), "block", "`$\\⏎{HOME}` is `${HOME}` in both shells");
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
@@ -1457,7 +1457,7 @@ test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
 	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
 });
 
-// A marked word that is a move without its mark (`$'cd'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
+// A marked word that is a move without its mark (`$'\u0063d'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
 // not move the shell: the folder is unknown.
 test("a marked cd leaves the folder unknown", () => {
 	const ws = temp("reviews-ws-");
@@ -1465,12 +1465,11 @@ test("a marked cd leaves the folder unknown", () => {
 	for (const command of ["$'\\u0063d' b; git status", "c$'\\d' b; git status", '$"cd" b; git status']) {
 		assert.equal(segmentFolders(command, ws)[1]!.dir, undefined, command);
 	}
-	const { dir, git, check } = repo();
+	const { git, check } = repo();
 	const main = join(temp("reviews-wt-"), "main");
 	git("worktree", "add", "-q", main, "main");
 	assert.equal(check("git push"), undefined, "a plain push of the work branch is not a landing");
 	assert.equal(action(check(`$'\\u0063d' ${main}; git push`)), "block");
-	assert.ok(existsSync(dir));
 });
 
 test("the review gate reads a marked subcommand and a marked operator word without the mark", () => {
@@ -1500,4 +1499,22 @@ test("the review gate also reads words split on every blank", () => {
 	const { git, check } = repo();
 	git("switch", "-q", "main");
 	assert.equal(action(check("git merge feat/a")), "block");
+});
+
+// A marked word (`$"…"` is `"…"` in bash) is compared without its mark wherever a gate or the folder tracking reads a
+// name, an option or a ref (user ruling after 0.38.1 review round 1: «Гейты читают без пометки»).
+test("gates and folder tracking read marked words without the mark", () => {
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	const last = (command: string) => segmentFolders(command, ws).at(-1)!.dir;
+	for (const command of ['$"builtin" cd b; git status', 'case x in x) $"cd" b;; esac; git status', 'f() { $"cd" b; }; f; git status']) {
+		assert.equal(last(command), undefined, command);
+	}
+	assert.equal(segmentFolders('$"eval" "cd b"; git status', ws)[0]!.dir, undefined, "eval hides its own segment's folder");
+	assert.equal(segmentFolders('git $"-C" b status', ws)[0]!.dir, join(ws, "b"));
+	const { git, check } = repo();
+	assert.equal(action(check('git push origin HEAD:$"main"')), "block");
+	assert.equal(action(check('gh pr $"merge" 1')), "confirm");
+	git("switch", "-q", "main");
+	assert.equal(action(check('git merge $"feat/a"')), "block");
 });

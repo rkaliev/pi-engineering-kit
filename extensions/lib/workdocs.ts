@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { commandName, quotedHeredoc, splitSegments, stricterOf, tokenize, unwrapToken, wideBlankReading, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
-import { safeRealpath, segmentFolders } from "./shell.ts";
+import { bare, safeRealpath, segmentFolders } from "./shell.ts";
 
 /** Where the kit keeps task files. */
 export const WORK_DOC_DIRS = ["docs/tasks"];
@@ -228,8 +228,9 @@ export function allLandings(raw: string[]): Landing[] {
 	return found;
 }
 
-/** `gh pr create|merge` or `glab mr create|merge` from the tokens after the tool. */
-function prLanding(tool: "gh" | "glab", args: string[], isWord: (t: string) => boolean): Landing | undefined {
+/** `gh pr create|merge` or `glab mr create|merge` from the tokens after the tool, compared without the mark (see bare). */
+function prLanding(tool: "gh" | "glab", marked: string[], isWord: (t: string) => boolean): Landing | undefined {
+	const args = marked.map(bare);
 	const [noun, verb, first] = args.filter((t) => isWord(t) && !t.startsWith("-"));
 	if ((noun !== "pr" && noun !== "mr") || (verb !== "create" && verb !== "merge")) return undefined;
 	const repo = args.some((t) => t === "-R" || /^-R./.test(t) || t === "--repo" || t.startsWith("--repo="));
@@ -242,17 +243,18 @@ function prLanding(tool: "gh" | "glab", args: string[], isWord: (t: string) => b
 }
 
 /** A git commit, merge or push from the raw tokens after git: `-c key=value` keeps its value, so options and their values pair up. */
-function gitLanding(rest: string[]): Landing | undefined {
+function gitLanding(marked: string[]): Landing | undefined {
+	// Options, the subcommand and refs compare without the mark (see bare); a marked `-C` value stays as written.
+	const rest = marked.map(bare);
 	// The subcommand is the first word after git's own options (`-C <dir>` and `-c <key=value>` take a value).
 	let verb = 0;
 	let dir: string | undefined;
 	while (verb < rest.length && rest[verb]!.startsWith("-")) {
-		if (rest[verb] === "-C") dir = rest[verb + 1];
+		if (rest[verb] === "-C") dir = marked[verb + 1];
 		verb += rest[verb] === "-C" || rest[verb] === "-c" ? 2 : 1;
 	}
 	const args = rest.slice(verb + 1);
-	// A marked subcommand (see tokenize) is judged as it most likely runs.
-	const subcommand = (rest[verb] ?? "").replaceAll("\0", "");
+	const subcommand = rest[verb] ?? "";
 	switch (subcommand) {
 		case "commit":
 			return { kind: "commit", dir };

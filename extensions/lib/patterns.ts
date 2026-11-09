@@ -355,7 +355,7 @@ function isOutside(target: string, cwd: string): boolean {
 const OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /**
- * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as `"…"`, and `$'…'` with its escapes decoded) and
+ * Minimal shell tokenizer: honours quotes (`'…'`, `"…"`, `$"…"` as a marked `"…"`, and `$'…'` with its escapes decoded) and
  * backslash escapes, and splits out control operators. An escaped quote opens nothing, so `echo \' ; cmd` still shows
  * `cmd`.
  */
