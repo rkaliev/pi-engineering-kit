@@ -1,6 +1,6 @@
 # The guard asks about every reading of an implementer's push and trusts only read-only steps before a landing
 
-Status: design approved (2026-11-09)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 4b725766e7e73ca32f3c64285f855fbc88a5ab20, pi 9f9f02b834d62895aa247566f5d27bca928d1abb
 Links: workspace docs/review-rounds/0.38.1/round4-findings.md (Follow-ups 0.38.2 and the pre-existing list)
@@ -129,75 +129,87 @@ None. It ships as eng-kit and pi 0.38.2 through the usual PRs; CI tags the relea
 **Files:** Modify `lib/hooks.ts` · Test `tests/hooks.test.ts`
 **Interfaces:** Consumes `otherReadings(command: string): string[]`, `ownBranchPush(...)` from `lib/patterns.ts`
 
-- [ ] In test `guard: the implementer's own-branch push asks; the main agent's passes`, for each implementer agent add `pre("g\rit push", agent) === "ask"` and `pre("git\r push", agent) === "ask"`; add a reason check that `git pu\rsh` from `eng-kit:implementer` matches `/implementer doesn't push; the coordinator does after review/`; and `pre("git push --force\r", "eng-kit:implementer")` stays `"deny"` (a block is never softened)
-- [ ] Run `node --test tests/hooks.test.ts` → expect FAIL: `g\rit push` gives `undefined`, expected `"ask"`
-- [ ] In `lib/hooks.ts`, the implementer check becomes: `decision.action !== "block" && IMPLEMENTER.test(...) && [command, ...otherReadings(command)].some((r) => ownBranchPush(r, cwd, process.env, env.projectDir))`; import `otherReadings`
-- [ ] Run `node --test tests/hooks.test.ts` → PASS; mutation-check: drop `...otherReadings(command)` → the new rows fail; restore
-- [ ] Commit `fix(guard): the implementer's push asks in every reading`
+- [x] In test `guard: the implementer's own-branch push asks; the main agent's passes`, for each implementer agent add `pre("g\rit push", agent) === "ask"` and `pre("git\r push", agent) === "ask"`; add a reason check that `git pu\rsh` from `eng-kit:implementer` matches `/implementer doesn't push; the coordinator does after review/`; and `pre("git push --force\r", "eng-kit:implementer")` stays `"deny"` (a block is never softened)
+- [x] Run `node --test tests/hooks.test.ts` → expect FAIL: `g\rit push` gives `undefined`, expected `"ask"`
+- [x] In `lib/hooks.ts`, the implementer check becomes: `decision.action !== "block" && IMPLEMENTER.test(...) && [command, ...otherReadings(command)].some((r) => ownBranchPush(r, cwd, process.env, env.projectDir))`; import `otherReadings`
+- [x] Run `node --test tests/hooks.test.ts` → PASS; mutation-check: drop `...otherReadings(command)` → the new rows fail; restore
+- [x] Commit `fix(guard): the implementer's push asks in every reading`
 
 ### Task 2: `otherReadings` without a no-op dedupe (both editions)
 
 **Files:** Modify `lib/patterns.ts` (eng-kit), `extensions/lib/patterns.ts` (pi)
 
-- [ ] Replace the body with `[...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])]`; the doc comment adds that each reading always differs from the command and from the other (the PowerShell one has no `\r`, the igncr one keeps every other blank)
-- [ ] Run `node --test tests/guard.test.ts tests/reviews.test.ts` in both repos → PASS (no behavior change)
-- [ ] Commit `refactor(guard): otherReadings returns its readings without a dedupe that never fires`
+- [x] Replace the body with `[...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])]`; the doc comment adds that each reading always differs from the command and from the other (the PowerShell one has no `\r`, the igncr one keeps every other blank)
+- [x] Run `node --test tests/guard.test.ts tests/reviews.test.ts` in both repos → PASS (no behavior change)
+- [x] Commit `refactor(guard): otherReadings returns its readings without a dedupe that never fires`
 
 ### Task 3: tests for the `touched` union in `scopedConfig` (both editions)
 
 **Files:** Test `tests/scope.test.ts`
 
-- [ ] Give the test helper `workspace(configs, repos = ["a", "b"])` a repository list. New test `scopedConfig: every reading adds the rules of the repositories it touches`: with `workspace({ web: { block: ["make release"] } }, ["api", "web"])`, `command("cd api && c\rd ../we\rb && make release")` → `"block"`; with `workspace({ a: { block: ["make release"] } })`, `command("cd b && c\rd $X && make release")` → `"block"`
-- [ ] Run `node --test tests/scope.test.ts` → expect PASS (the code exists); mutation-check: in `scopedConfig` use `placed[0]!.touched` instead of the union → both rows FAIL with `"allow"`; restore
-- [ ] Copy the test file change to pi; run there → PASS
-- [ ] Commit `test(scope): pin that every reading adds its repositories' rules`
+- [x] Give the test helper `workspace(configs, repos = ["a", "b"])` a repository list. New test `scopedConfig: every reading adds the rules of the repositories it touches`: with `workspace({ web: { block: ["make release"] } }, ["api", "web"])`, `command("cd api && c\rd ../we\rb && make release")` → `"block"`; with `workspace({ a: { block: ["make release"] } })`, `command("cd b && c\rd $X && make release")` → `"block"`
+- [x] Run `node --test tests/scope.test.ts` → expect PASS (the code exists); mutation-check: in `scopedConfig` use `placed[0]!.touched` instead of the union → both rows FAIL with `"allow"`; restore
+- [x] Copy the test file change to pi; run there → PASS
+- [x] Commit `test(scope): pin that every reading adds its repositories' rules`
 
 ### Task 4: `isSafe` allows only read-only git forms (both editions)
 
 **Files:** Modify `lib/reviews.ts` · Test `tests/reviews.test.ts`
 **Interfaces:** Produces `safeGit(tokens: string[]): boolean` (module-private), called from `isSafe` for `tokens[0] === "git"`
 
-- [ ] New test `the review gate trusts only listing forms of git branch and remote, and only -C, --no-pager and -P, before a landing`, with `repo()`, `review(report(head, "Yes", base))`:
+- [x] New test `the review gate trusts only listing forms of git branch and remote, and only -C, --no-pager and -P, before a landing`, with `repo()`, `review(report(head, "Yes", base))`:
   - safe, `check("<step> && gh pr create --fill")` → `undefined`: `git branch`, `git branch --show-current`, `git branch -av`, `git branch --list 'feat/*'`, `git branch --contains=HEAD`, `git branch --contains HEAD feat/a`, `git remote -v`, `git remote get-url origin`, `git --no-pager log -1`, `git -C . status`;
   - not safe, `action(check(...))` → `"block"` and reason matches `/runs a step before it lands/`: `git branch --forc main feat/a`, `git branch -d x`, `git branch --delete x`, `git branch --move x y`, `git branch -u origin/main`, `git branch --set-upstream-to=origin/main`, `git branch feat/x main`, `git branch -dv x`, `git branch --sort -x`, `git remote set-url origin /tmp/x`, `git remote add x /tmp/x`, `git -c core.fsmonitor=x status`, `git --config-env=core.pager=X log`, `git --git-dir=x status`, `git --work-tree=x status`, `git --exec-path=x status`, `git -C`
-- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL: `git branch --forc main feat/a` gives `undefined`, expected `"block"`
-- [ ] Implement `safeGit` in `lib/reviews.ts`, reading every token through `bare()`:
+- [x] Run `node --test tests/reviews.test.ts` → expect FAIL: `git branch --forc main feat/a` gives `undefined`, expected `"block"`
+- [x] Implement `safeGit` in `lib/reviews.ts`, reading every token through `bare()`:
   - global options: `-C` skips its value (none → false), `--no-pager` and `-P` are skipped, any other word starting with `-` → false;
   - `branch`: options in `BRANCH_LIST_OPTIONS = {-a, --all, -r, --remotes, -l, --list, -v, -vv, --verbose, --show-current, --color, --no-color, --column, --no-column, -i, --ignore-case}`, a short cluster matching `/^-[arlvi]+$/`, or `/^--(format|sort|contains|no-contains|merged|no-merged|points-at)=/`; `--contains`, `--no-contains`, `--merged`, `--no-merged`, `--points-at`, `-l`, `--list` are list mode; a positional word without list mode → false;
   - `remote`: nothing after it, or the next word is `-v`, `--verbose`, `get-url` or `show`;
   - `fetch` keeps its `:` rule; any other subcommand → `SAFE_GIT.has(sub)`, with `branch` and `remote` handled above.
-- [ ] Run `node --test tests/reviews.test.ts` → PASS, including the existing `git branch -f`, `git branch $"-f"` and `git status && git fetch origin` rows
-- [ ] Copy `lib/reviews.ts` → pi `extensions/lib/reviews.ts` (confirm `diff` is empty) and the test change; run pi `npm test` → PASS
-- [ ] Commit `fix(gates): only listing forms of git branch and remote, and plain git options, are safe before a landing`
+- [x] Run `node --test tests/reviews.test.ts` → PASS, including the existing `git branch -f`, `git branch $"-f"` and `git status && git fetch origin` rows
+- [x] Copy `lib/reviews.ts` → pi `extensions/lib/reviews.ts` (confirm `diff` is empty) and the test change; run pi `npm test` → PASS
+- [x] Commit `fix(gates): only listing forms of git branch and remote, and plain git options, are safe before a landing`
 
 ### Task 5: one work-docs budget across readings (both editions)
 
 **Files:** Modify `lib/workdocs.ts` · Test `tests/workdocs.test.ts`
 
-- [ ] New test `in a workspace, an unplaced commit spends one budget across the readings and asks git once per repository`: `slowGit(realpathSync(join(root, "a")), "diff", 2)`; `check("cd $D && git commit -m x\r")` → `undefined` (nothing staged); elapsed < 3500 ms; `readFileSync(slow.log)` has exactly one line containing `diff --cached`
-- [ ] Run `node --test tests/workdocs.test.ts` → expect FAIL: elapsed ≈ 6000 ms (or two `diff --cached` calls)
-- [ ] In `checkWorkDocs`, create `const budget = { until: Date.now() + UNPLACED_BUDGET_MS, seen: new Map<string, GuardDecision | "late" | undefined>() }` and pass it to `workDocsGate(text, projectDir, dirs, workspace, budget)`; the unplaced-commit loop uses `budget.until` and reads `budget.seen.get(repo)` before calling `judgeCommit`, storing every result, `"late"` included
-- [ ] Run `node --test tests/workdocs.test.ts` → PASS, including `an unplaced commit is judged within a deadline`
-- [ ] Copy `lib/workdocs.ts` → pi `extensions/lib/workdocs.ts` (empty `diff`) and the test change; run pi `npm test` → PASS
-- [ ] Commit `fix(workdocs): an unplaced commit spends one budget across the readings`
+- [x] New test `in a workspace, an unplaced commit spends one budget across the readings and asks git once per repository`: `slowGit(realpathSync(join(root, "a")), "diff", 2)`; `check("cd $D && git commit -m x\r")` → `undefined` (nothing staged); elapsed < 3500 ms; `readFileSync(slow.log)` has exactly one line containing `diff --cached`
+- [x] Run `node --test tests/workdocs.test.ts` → expect FAIL: elapsed ≈ 6000 ms (or two `diff --cached` calls)
+- [x] In `checkWorkDocs`, create `const budget = { until: Date.now() + UNPLACED_BUDGET_MS, seen: new Map<string, GuardDecision | "late" | undefined>() }` and pass it to `workDocsGate(text, projectDir, dirs, workspace, budget)`; the unplaced-commit loop uses `budget.until` and reads `budget.seen.get(repo)` before calling `judgeCommit`, storing every result, `"late"` included
+- [x] Run `node --test tests/workdocs.test.ts` → PASS, including `an unplaced commit is judged within a deadline`
+- [x] Copy `lib/workdocs.ts` → pi `extensions/lib/workdocs.ts` (empty `diff`) and the test change; run pi `npm test` → PASS
+- [x] Commit `fix(workdocs): an unplaced commit spends one budget across the readings`
 
 ### Task 6: missing test rows from round 4 (both editions)
 
 **Files:** Test `tests/reviews.test.ts`
 
-- [ ] In the reviewer test, add `check("git diff a..b --output=x")` → `"block"`. In the PR record test's marked-move loop, add `["p", (p) => \`PR=$(cd $"-P" ${p} && gh pr create --fill)\`]`
-- [ ] Run `node --test tests/reviews.test.ts` → PASS; mutation-check each: drop the blank refusal in `checkReviewerCommand` → the U+00A0 row fails; read `t` instead of `bare(w)` for the option skip in `namedFolders` → the `-P` row fails; restore both
-- [ ] Copy to pi; run → PASS
-- [ ] Commit `test(gates): pin the reviewer's blank refusal and a marked -P in namedFolders`
+- [x] In the reviewer test, add `check("git diff a..b --output=x")` → `"block"`. In the PR record test's marked-move loop, add `["p", (p) => \`PR=$(cd $"-P" ${p} && gh pr create --fill)\`]`
+- [x] Run `node --test tests/reviews.test.ts` → PASS; mutation-check each: drop the blank refusal in `checkReviewerCommand` → the U+00A0 row fails; read `t` instead of `bare(w)` for the option skip in `namedFolders` → the `-P` row fails; restore both
+- [x] Copy to pi; run → PASS
+- [x] Commit `test(gates): pin the reviewer's blank refusal and a marked -P in namedFolders`
 
 ### Task 7: docs and version 0.38.2 (both editions)
 
 **Files:** the Post-implementation list
 
-- [ ] Update the docs and versions named in Post-implementation; write FRAMEWORK-SOURCES §11.51
-- [ ] Run the kit verify script (eng-kit) and `npm test` (pi) → PASS, including `release.test.ts`; `diff` of the shared lib files between editions is empty
-- [ ] Commit `docs: 0.38.2` in each repo; then delete this task file in its own commit `chore(tasks): remove the 0.38.2 task file`
+- [x] Update the docs and versions named in Post-implementation; write FRAMEWORK-SOURCES §11.51
+- [x] Run the kit verify script (eng-kit) and `npm test` (pi) → PASS, including `release.test.ts`; `diff` of the shared lib files between editions is empty
+- [x] Commit `docs: 0.38.2` in each repo; then delete this task file in its own commit `chore(tasks): remove the 0.38.2 task file`
 
 ## Progress
 
-None yet
+Plan approved 2026-11-09, inline. Baseline: kit verify script from the workspace root → all checks passed (typecheck + test, both editions). Drift: none (Base = the plan commit's parent in both repos).
+Task 1: complete (b6fc056..b11348d, `node --test tests/hooks.test.ts` RED `g\rit push` → undefined, then GREEN; mutations "drop otherReadings" and "=== allow" each fail a row; eng-kit `npm test` → 766 pass, 0 fail)
+Task 2: complete (eng-kit b11348d..a34d3aa, pi 2fc12e2..96217fa; refactor, guard/reviews/scope/workdocs tests → 262 and 261 pass, 0 fail)
+Task 3: complete (eng-kit a34d3aa..652f850, pi 96217fa..b372519; pins existing code, passes first by design; mutation `placed[0]!.touched` → row 1 `allow`, row 2 `allow` (checked by a script); scope tests 33 pass both)
+Task 4: complete (eng-kit 652f850..653b6fe, pi b372519..c20c247; RED `git branch --forc main feat/a` → allow; mutations global options / remote / positional each fail a row; reviews 113 pass both)
+Ruling: Task 4 — `--contains` and the other list-mode options are listing options without `=` too — the plan's allowlist missed them, so `git branch --contains HEAD feat/a` (a criterion-5 safe form) failed — cost if wrong: none, they only list.
+Task 5: complete (eng-kit 653b6fe..b5c5403, pi c20c247..6dd381e; RED 6139 ms, GREEN 2401 ms; mutation "no cache" → false "can't tell"; workdocs 30 pass both)
+Ruling: Task 5 — the shared deadline has no test of its own (a reading whose landings differ from the first's is hard to build); the cache test covers the combination — cost if wrong: a CRLF command with differing unplaced commits could exceed 3 s.
+Ruling: Task 5 — a cached repository skips the deadline check: its answer is known, so no git call waits.
+Task 6: complete (eng-kit b5c5403..c468cca, pi 6dd381e..c136d7b; rows pin existing code; mutations: dropping the blank refusal turns only `git diff a..b<U+00A0>--output=x` and the `\r` row to allow (checked by a script); `!w.startsWith` fails the `cd $"-P"` row; reviews 113 pass both)
+Ruling: a python heredoc that names `gh pr create` is a landing to the task-file guard (correct: an interpreter may run it) — edit scripts go to the scratchpad as files.
+Task 7: complete (docs, CHANGELOG, version 0.38.2, FRAMEWORK-SOURCES §11.51; kit verify script from the workspace root → all checks passed; shared lib files identical across editions)
+Ruling: Task 7 — the CHANGELOG says unsafe steps "are treated like any other unsafe step", since pi asks where eng-kit denies.
