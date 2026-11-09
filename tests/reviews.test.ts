@@ -1495,3 +1495,9 @@ test("the review gate judges marked git words and BOM-led words as the shells ru
 	mkdirSync(join(ws, "b"));
 	assert.equal(segmentFolders("$'\\g'it -C b status", ws)[0]!.dir, join(ws, "b"));
 });
+
+test("the review gate also reads words split on every blank", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("git merge feat/a")), "block");
+});

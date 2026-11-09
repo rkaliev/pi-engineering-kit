@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { commandName, quotedHeredoc, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
+import { commandName, quotedHeredoc, splitSegments, stricterOf, tokenize, unwrapToken, wideBlankReading, type GuardDecision } from "./patterns.ts";
 import { repoOf } from "./repos.ts";
 import { safeRealpath, segmentFolders } from "./shell.ts";
 
@@ -43,6 +43,18 @@ export function checkWorkDocs(
 	command: string,
 	projectDir: string,
 	dirs = WORK_DOC_DIRS,
+	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
+): GuardDecision | undefined {
+	// Also as PowerShell splits words (wideBlankReading); the stricter decision wins.
+	const decision = workDocsGate(command, projectDir, dirs, workspace);
+	const wide = wideBlankReading(command);
+	return wide === undefined ? decision : stricterOf(decision, workDocsGate(wide, projectDir, dirs, workspace));
+}
+
+function workDocsGate(
+	command: string,
+	projectDir: string,
+	dirs: string[],
 	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
 ): GuardDecision | undefined {
 	if (!workspace) return judge(splitSegments(tokenize(command)).flatMap(allLandings), projectDir, dirs);

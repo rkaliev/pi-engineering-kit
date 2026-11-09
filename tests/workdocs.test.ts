@@ -353,3 +353,10 @@ test("allLandings lists every commit, merge, push or PR call in a segment, in or
 test("allLandings reads a marked git subcommand without its mark", () => {
 	assert.equal(allLandings(["git", "\0merge", "feat/a"])[0]?.kind, "merge");
 });
+
+test("the task-file gate also reads words split on every blank", () => {
+	const { dir, git, commit } = repo();
+	git("switch", "-qc", "feat/w");
+	commit({ [TASK]: "# A\n" });
+	assert.equal(checkWorkDocs("gh pr create", dir)?.action, "block");
+});

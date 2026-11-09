@@ -1249,3 +1249,12 @@ test("the mark's question names its causes", () => {
 	assert.match(reason("$'\\cu'rl x"), /escape/);
 	assert.doesNotMatch(reason('$"cd" x'), /`\$` before a quote/);
 });
+
+// PowerShell, and bash with `igncr`, split words on Unicode blanks and end a line at `\r`; blocks also read that split
+// (user ruling after 0.38.1 review round 1: «Блоки читают оба деления»), the stricter decision wins.
+test("blocks also read words split on every blank, as PowerShell does", () => {
+	for (const cmd of ["rm -r ~", "rm -rf ..\r", "git commit -m x --no-verify\r", "git push --force"]) {
+		assert.equal(action(cmd), "block", JSON.stringify(cmd));
+	}
+	assert.deepEqual(tokenize("cd /tmp"), ["cd /tmp"], "the bash reading is unchanged");
+});

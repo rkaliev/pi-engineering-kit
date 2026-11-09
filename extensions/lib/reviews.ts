@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { commandName, foldPath, splitSegments, stricterOf, tokenize, wideBlankReading, type GuardDecision } from "./patterns.ts";
 import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
@@ -484,6 +484,13 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
+	// Also as PowerShell splits words (wideBlankReading); the stricter decision wins.
+	const decision = reviewGate(command, cwd, projectDir, options, root);
+	const wide = wideBlankReading(command);
+	return wide === undefined ? decision : stricterOf(decision, reviewGate(wide, cwd, projectDir, options, root));
+}
+
+function reviewGate(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
 	const visible = checkSegments(command, cwd, projectDir, options, root);
 	if (hiddenLanding(command)) {
 		// A question must still say why a landing the guard can see isn't covered.
@@ -687,6 +694,13 @@ function inTemp(path: string): boolean {
  * `git init`) is a gate file too.
  */
 export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false, stateDir?: string): GuardDecision | undefined {
+	// Also as PowerShell splits words (wideBlankReading); the stricter decision wins.
+	const decision = gateFiles(command, cwd, projectDir, guardConfig, children, stateDir);
+	const wide = wideBlankReading(command);
+	return wide === undefined ? decision : stricterOf(decision, gateFiles(wide, cwd, projectDir, guardConfig, children, stateDir));
+}
+
+function gateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children: boolean, stateDir?: string): GuardDecision | undefined {
 	const redirects = writes(command);
 	const config = resolve(projectDir, guardConfig).replaceAll("\\", "/");
 	const records = [join(tmpdir(), "eng-kit", "reviews"), safeRealpath(tmpdir()) + "/eng-kit/reviews"].map((p) => p.replaceAll("\\", "/"));

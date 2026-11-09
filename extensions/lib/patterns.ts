@@ -83,8 +83,25 @@ export function isSecretPath(path: string): boolean {
 }
 
 /**
+ * The command as PowerShell, and bash with `igncr`, split it: every blank bash and zsh keep inside a word (U+00A0, `\v`,
+ * `\f`, the Unicode spaces) read as a space and `\r` as a line end. Undefined when the command has none. The guard and
+ * the gates judge this reading too and keep the stricter decision (user ruling after 0.38.1 review round 1).
+ */
+export function wideBlankReading(command: string): string | undefined {
+	if (!/[^\S \t\n]/u.test(command)) return undefined;
+	return command.replace(/\r/g, "\n").replace(/[^\S \t\n]/gu, " ");
+}
+
+/** The stricter of two decisions; undefined counts as allow. */
+export function stricterOf<D extends GuardDecision | undefined>(a: D, b: D): D {
+	const rank = (d: GuardDecision | undefined) => (d === undefined ? 0 : { allow: 0, confirm: 1, block: 2 }[d.action]);
+	return rank(b) > rank(a) ? b : a;
+}
+
+/**
  * Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. `judgeWrite`
- * judges a heredoc's write target (in a workspace, from the repository it lands in).
+ * judges a heredoc's write target (in a workspace, from the repository it lands in). The command is also judged as
+ * PowerShell splits it (wideBlankReading), and the stricter decision wins.
  */
 export function checkCommand(
 	command: string,
@@ -93,6 +110,19 @@ export function checkCommand(
 	dir: string = cwd,
 	env: NodeJS.ProcessEnv = process.env,
 	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
+): GuardDecision {
+	const decision = judgeCommand(command, cwd, config, dir, env, judgeWrite);
+	const wide = wideBlankReading(command);
+	return wide === undefined ? decision : stricterOf(decision, judgeCommand(wide, cwd, config, dir, env, judgeWrite));
+}
+
+function judgeCommand(
+	command: string,
+	cwd: string,
+	config: GuardConfig,
+	dir: string,
+	env: NodeJS.ProcessEnv,
+	judgeWrite: (target: string) => GuardDecision,
 ): GuardDecision {
 	// A command that only writes a project file through a quoted heredoc runs nothing from its body: judge its first
 	// line, and its target as a Write would be. A target outside the project (a shell rc file) leaves it judged whole.
