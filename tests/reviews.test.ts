@@ -1518,3 +1518,28 @@ test("gates and folder tracking read marked words without the mark", () => {
 	git("switch", "-q", "main");
 	assert.equal(action(check('git merge $"feat/a"')), "block");
 });
+
+test("review round 2: the PR record, gate files and folder tracking read every reading and every marked word", () => {
+	// The gate files under the other split, and with marked paths and folders.
+	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	mkdirSync(join(project, ".claude"));
+	const gate = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
+	const records = join(tmpdir(), "eng-kit", "reviews");
+	assert.equal(gate(`cp x ${records}/a.json`), "block", "PowerShell reads two words");
+	assert.equal(gate(`cp f.json $"${records}/x.json"`), "block", "a marked path");
+	assert.equal(gate(`cd $"${records}" && cp f.json x.json`), "block", "a marked cd operand");
+	rmSync(project, { recursive: true, force: true });
+	// A marked export, a marked git path.
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders('$"export" GIT_DIR=x; git status', ws)[1]!.dir, undefined);
+	assert.equal(segmentFolders('export $"GIT_DIR"=x; git status', ws)[1]!.dir, undefined);
+	assert.equal(segmentFolders('$"/usr/bin/git" -C b status', ws)[0]!.dir, join(ws, "b"));
+	// The PR record under PowerShell's split.
+	const { dir, root, commit, head, base, check, review } = repo();
+	review(report(head, "Yes", base));
+	notePr(dir, "t1", "gh pr create --fill", dir, root);
+	settlePr(dir, "t1", true, root);
+	commit({ "src/a.ts": "export const a = 3;\n" });
+	assert.match(String(check("git push")?.reason), /no reviewer verdict recorded/);
+});

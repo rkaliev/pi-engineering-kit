@@ -1262,5 +1262,11 @@ test("blocks also read words split on every blank, as PowerShell does", () => {
 // A quoted heredoc that writes a project file has its body judged only by your rules: the unmarked reading is what asks.
 test("a project confirm rule reads a marked word without its mark inside a heredoc body", () => {
 	assert.equal(action("cat > a.sh <<'EOF'\nterr$'\\x'aform destroy\nEOF", { confirm: ["terraform"] }), "confirm");
+});
+
+// Review round 2 of 0.38.1: PowerShell also splits on U+0085; bash with `igncr` drops `\r` (user ruling «Третье
+// прочтение без `\r`»): blocks read both, and the stricter decision wins.
+test("blocks read U+0085 as a blank and a command with its carriage returns dropped", () => {
+	for (const cmd of ["rm -r\u0085~", "rm -rf\r ~", "rm -r\rf ../x"]) assert.equal(action(cmd), "block", JSON.stringify(cmd));
 	assert.equal(action("rm -rf $\\\n{HOME}"), "block", "`$\\⏎{HOME}` is `${HOME}` in both shells");
 });

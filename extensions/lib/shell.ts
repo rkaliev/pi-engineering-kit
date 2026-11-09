@@ -81,12 +81,14 @@ export function reachable(command: string, cwd: string): { dirs: string[]; unkno
 		const plain = move !== "other" && alone && simple && !redirected && !(move.physical && move.arg?.split("/").includes(".."));
 		if (!plain) unknown = true;
 		// A move the guard doesn't follow still adds its literal words: more candidates only block more.
-		const args = move === "other" ? words.filter((w) => !MOVES.has(w)) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
+		const args = move === "other" ? words.filter((w) => !MOVES.has(bare(w))) : move.arg === undefined ? (move.cmd === "cd" ? ["~"] : []) : [move.arg];
 		for (const arg of args) {
 			// Before any move in this command, the previous folder is one an earlier command left in OLDPWD.
 			if ((arg === "-" || /^~-(?=\/|$)/.test(arg)) && !moved) unknown = true;
 			if (arg === "-" || arg === "") continue;
-			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true);
+			// A marked folder (`$"…"`) leaves the set unknown, and its likely reading is added: more folders only block more.
+			if (arg.includes("\0")) unknown = true;
+			const path = expandDir(arg.replace(/^~[+-](?=\/|$)/, "."), true) ?? (arg.includes("\0") ? expandDir(bare(arg).replace(/^~[+-](?=\/|$)/, "."), true) : undefined);
 			if (path === undefined) {
 				unknown = true;
 				continue;
@@ -181,7 +183,7 @@ export function parseMove(words: string[]): Move | "other" | undefined {
 	// A word marked as read differently by the shells (see tokenize) that is a move without its mark may or may not move.
 	if (words[at]!.includes("\0") && MOVES.has(words[at]!.replaceAll("\0", ""))) return "other";
 	if (!MOVES.has(words[at]!)) return undefined;
-	if (at > 0 || bare(words[at]!) === "chdir") return "other";
+	if (at > 0 || words[at] === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;
 	let physical = false;
@@ -543,7 +545,7 @@ export function segmentFolders(command: string, cwd: string, powershell = false)
 		// git's own options come before its subcommand; `-C` (relative to the one before) and `-c` take a value.
 		const at = commandIndex(words);
 		// git as a bare word or a path from the root or `./` (as gitLike reads it): `tools/git` may be anything.
-		const git = at !== -1 && commandName(words[at]!) === "git" && (!words[at]!.includes("/") || /^(\/|\.\/)/.test(words[at]!));
+		const git = at !== -1 && commandName(words[at]!) === "git" && (!bare(words[at]!).includes("/") || /^(\/|\.\/)/.test(bare(words[at]!)));
 		// Options compare without the mark; a marked folder value stays as written, so follow() refuses it.
 		for (let i = at + 1; dir !== undefined && git && i < words.length && bare(words[i]!).startsWith("-"); i += bare(words[i]!) === "-C" || bare(words[i]!) === "-c" ? 2 : 1) {
 			if (bare(words[i]!) === "-C") dir = follow(dir, words[i + 1]);

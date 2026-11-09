@@ -13,8 +13,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, splitSegments, stricterOf, tokenize, wideBlankReading, type GuardDecision } from "./patterns.ts";
-import { blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
+import { commandName, foldPath, otherReadings, splitSegments, stricterOf, tokenize, type GuardDecision } from "./patterns.ts";
+import { bare, blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
 
@@ -289,6 +289,17 @@ export function readReviews(projectDir: string, root?: string): ReviewRound[] {
  * PR, so it is a landing too.
  */
 export function notePr(projectDir: string, callId: string, command: string, cwd: string, root?: string): void {
+	// Every reading a shell may run (otherReadings): a PR any of them opens is noted.
+	const notes = [command, ...otherReadings(command)].map((text) => prNotes(text, cwd));
+	const unique = [...new Map(notes.flatMap((n) => n.branches).filter((b) => b.branch !== undefined).map((b) => [`${b.dir}\0${b.branch}`, b])).values()];
+	if (unique.length === 0) return;
+	const pending = readJson(projectDir, PENDING_FILE, root);
+	pending[callId] = { prs: unique, at: Date.now(), last: notes.every((n) => n.last) };
+	writeJson(projectDir, PENDING_FILE, pending, root);
+}
+
+/** The PR branches one reading of a command opens, and whether the PR step is its last. */
+function prNotes(command: string, cwd: string): { branches: Array<{ branch: string | undefined; dir: string }>; last: boolean } {
 	const branches: Array<{ branch: string | undefined; dir: string }> = [];
 	// Not the last step: a later step may fail after the PR exists, so a failed call still registers it.
 	let last = true;
@@ -322,11 +333,7 @@ export function notePr(projectDir: string, callId: string, command: string, cwd:
 			if (index !== segments.length - 1) last = false;
 		}
 	});
-	const unique = [...new Map(branches.filter((b) => b.branch !== undefined).map((b) => [`${b.dir}\0${b.branch}`, b])).values()];
-	if (unique.length === 0) return;
-	const pending = readJson(projectDir, PENDING_FILE, root);
-	pending[callId] = { prs: unique, at: Date.now(), last };
-	writeJson(projectDir, PENDING_FILE, pending, root);
+	return { branches, last };
 }
 
 /** After the call: register its noted PR branches if it succeeded (or failed after the PR step), forget them if not. */
@@ -484,10 +491,10 @@ export function readReports(projectDir: string, sha: string, root?: string): Arr
  * Anything the guard can't follow (a variable, a nested subshell, another repository) fails closed.
  */
 export function checkReview(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
-	// Also as PowerShell splits words (wideBlankReading); the stricter decision wins.
-	const decision = reviewGate(command, cwd, projectDir, options, root);
-	const wide = wideBlankReading(command);
-	return wide === undefined ? decision : stricterOf(decision, reviewGate(wide, cwd, projectDir, options, root));
+	// Also as other shells read it (otherReadings); the stricter decision wins.
+	let decision = reviewGate(command, cwd, projectDir, options, root);
+	for (const other of otherReadings(command)) decision = stricterOf(decision, reviewGate(other, cwd, projectDir, options, root));
+	return decision;
 }
 
 function reviewGate(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
@@ -606,7 +613,7 @@ function hiddenLanding(command: string): boolean {
 function namedFolders(command: string, cwd: string): string[] {
 	const tokens = tokenize(command);
 	return tokens.flatMap((t, i) => {
-		if (!MOVES.has(t.split(/\$\(|`|\(/).pop()!)) return [];
+		if (!MOVES.has(bare(t).split(/\$\(|`|\(/).pop()!)) return [];
 		const arg = tokens.slice(i + 1).find((w) => !w.startsWith("-"))?.replace(/[)`]+$/, "");
 		const dir = arg === undefined ? undefined : follow(cwd, arg);
 		return dir === undefined ? [] : [dir];
@@ -694,10 +701,10 @@ function inTemp(path: string): boolean {
  * `git init`) is a gate file too.
  */
 export function checkGateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children = false, stateDir?: string): GuardDecision | undefined {
-	// Also as PowerShell splits words (wideBlankReading); the stricter decision wins.
-	const decision = gateFiles(command, cwd, projectDir, guardConfig, children, stateDir);
-	const wide = wideBlankReading(command);
-	return wide === undefined ? decision : stricterOf(decision, gateFiles(wide, cwd, projectDir, guardConfig, children, stateDir));
+	// Also as other shells read it (otherReadings); the stricter decision wins.
+	let decision = gateFiles(command, cwd, projectDir, guardConfig, children, stateDir);
+	for (const other of otherReadings(command)) decision = stricterOf(decision, gateFiles(other, cwd, projectDir, guardConfig, children, stateDir));
+	return decision;
 }
 
 function gateFiles(command: string, cwd: string, projectDir: string, guardConfig: string, children: boolean, stateDir?: string): GuardDecision | undefined {
@@ -729,7 +736,8 @@ function gateFiles(command: string, cwd: string, projectDir: string, guardConfig
 		// A path may follow `=` (`of=…`, `--output=…`), or be a word of a substitution kept whole by its quotes.
 		const inner = (t: string) => (/\$\(|`/.test(t) ? tokenize(t.replace(/^.*?(\$\(|`)/, "").replace(/[)`]+$/, "")) : []);
 		// zsh's `>!` loses only its `>` to the tokens.
-		const candidates = tokens.flatMap((t) => [t, t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
+		// A marked word (`$"…"`) also counts without its mark: more candidates only block more.
+		const candidates = tokens.flatMap((t) => [t, bare(t), t.slice(t.indexOf("=") + 1), t.replace(/^!/, ""), ...inner(t)]);
 		const paths = dirs.flatMap((dir) => candidates.map((t) => resolve(dir, t.replace(/^~(?=\/)/, homedir())).replaceAll("\\", "/")));
 		// Each word where it really leads: `~`, `$HOME`, `$TMPDIR` or `$CLAUDE_PLUGIN_DATA` expanded, symlinks resolved.
 		const real = dirs.flatMap((dir) => [...new Set(candidates)].map((t) => canonical(resolve(dir, expandHome(t))).replaceAll("\\", "/")));

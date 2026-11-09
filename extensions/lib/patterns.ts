@@ -83,13 +83,22 @@ export function isSecretPath(path: string): boolean {
 }
 
 /**
- * The command as PowerShell, and bash with `igncr`, split it: every blank bash and zsh keep inside a word (U+00A0, `\v`,
- * `\f`, the Unicode spaces) read as a space and `\r` as a line end. Undefined when the command has none. The guard and
- * the gates judge this reading too and keep the stricter decision (user ruling after 0.38.1 review round 1).
+ * The command as PowerShell splits it: every blank bash and zsh keep inside a word (U+00A0, U+0085, `\v`, `\f`, the
+ * Unicode spaces) read as a space and `\r` as a line end. Undefined when the command has none.
  */
 export function wideBlankReading(command: string): string | undefined {
-	if (!/[^\S \t\n]/u.test(command)) return undefined;
-	return command.replace(/\r/g, "\n").replace(/[^\S \t\n]/gu, " ");
+	if (!/[^\S \t\n]|\u0085/u.test(command)) return undefined;
+	return command.replace(/\r/g, "\n").replace(/[^\S \t\n]|\u0085/gu, " ");
+}
+
+/**
+ * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), and with every `\r` dropped,
+ * as bash with `igncr` (Cygwin, MSYS) does. The guard and the gates judge each and keep the stricter decision (user
+ * rulings after 0.38.1 review rounds 1 and 2).
+ */
+export function otherReadings(command: string): string[] {
+	const wide = wideBlankReading(command);
+	return [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
 }
 
 /** The stricter of two decisions; undefined counts as allow. */
@@ -101,7 +110,7 @@ export function stricterOf<D extends GuardDecision | undefined>(a: D, b: D): D {
 /**
  * Decide what to do with a shell command. `cwd` is the project root; `dir` is where the command runs. `judgeWrite`
  * judges a heredoc's write target (in a workspace, from the repository it lands in). The command is also judged as
- * PowerShell splits it (wideBlankReading), and the stricter decision wins.
+ * other shells read it (otherReadings), and the stricter decision wins.
  */
 export function checkCommand(
 	command: string,
@@ -111,9 +120,9 @@ export function checkCommand(
 	env: NodeJS.ProcessEnv = process.env,
 	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
 ): GuardDecision {
-	const decision = judgeCommand(command, cwd, config, dir, env, judgeWrite);
-	const wide = wideBlankReading(command);
-	return wide === undefined ? decision : stricterOf(decision, judgeCommand(wide, cwd, config, dir, env, judgeWrite));
+	let decision = judgeCommand(command, cwd, config, dir, env, judgeWrite);
+	for (const other of otherReadings(command)) decision = stricterOf(decision, judgeCommand(other, cwd, config, dir, env, judgeWrite));
+	return decision;
 }
 
 function judgeCommand(
