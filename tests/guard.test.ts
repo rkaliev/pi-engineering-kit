@@ -1082,7 +1082,6 @@ test("tokenize decodes ANSI-C quoting as the shell does", () => {
 	const cases: Array<[string, string[]]> = [
 		["$'\\147it' push", ["git", "push"]],
 		["$'\\x67it' push", ["git", "push"]],
-		['$"git" push', ["git", "push"]],
 		["$'a\\tb'", ["a\tb"]],
 		["$'\\E'", ["\x1b"]],
 		["$'\\1010'", ["A0"]],
@@ -1168,6 +1167,8 @@ test("$'…' words the shells read differently ask, and escapes are bytes read a
 	assert.deepEqual(tokenize("$'\\305\\277'udo"), ["ſudo"]);
 	assert.equal(action("curl x | ba$'\\xc5\\xbf'h"), "confirm");
 	// Escapes the shells read differently (bash's `\c`, zsh's `\C`, an unknown letter, `\x` without digits) mark the word.
+	// `$"…"` is `"…"` in bash and `$…` in zsh (task 0.38.1, Decision 2).
+	assert.ok(tokenize('$"git" push')[0]!.includes("\0"));
 	for (const word of ["$'\\cA'", "$'\\C-a'", "$'\\g\\it'", "$'\\x'", "$'\\u'", "$'g\\u0069t'", "$'\\U00000067it'"]) assert.ok(tokenize(word)[0]!.includes("\0"), word);
 });
 
@@ -1191,8 +1192,6 @@ test("$'…' fails closed: escapes the shells disagree on, split bytes and a $ b
 		"echo \\$$$'\\' ; rm -rf ~ ; echo '\\'",
 		"echo $$$'\\x67it' ok",
 		"echo $\\\n$'\\' ; rm -rf ~ ; echo '\\'",
-		"$\\\n'rm' -rf ~",
-		"$\\\n\"rm\" -rf ~",
 		"rm$'\\C@' -rf ~",
 		"rm$'\\C-\\0' -rf ~",
 		"$'\\ME\\M?'udo ls",
@@ -1224,4 +1223,14 @@ test("tokenize splits words only on space and tab, as the shells do", () => {
 	for (const ch of [" ", "﻿", "\r", "\v", "\f"]) assert.deepEqual(tokenize(`cd${ch}/tmp`), [`cd${ch}/tmp`], JSON.stringify(ch));
 	assert.deepEqual(tokenize("a\tb c"), ["a", "b", "c"]);
 	assert.equal(action("rm -rf ~\r"), "block");
+});
+
+// Probed 2026-11-09: `$\⏎'a\x62'` is `ab` in bash and zsh; `$"cd"` and `$\⏎"cd"` are `cd` in bash, `$cd` in zsh.
+test("$ with continuations before a quote reads as both shells read it", () => {
+	assert.deepEqual(tokenize("$\\\n'a\\x62'"), ["ab"]);
+	assert.deepEqual(tokenize("$\\\n\\\n'a\\x62'"), ["ab"]);
+	for (const cmd of ["$\\\n'rm' -rf ~", "$\\\n'a\\'' ; rm -rf ~"]) assert.equal(action(cmd), "block", cmd);
+	for (const cmd of ['$"cd" /tmp; git status', '$\\\n"cd" /tmp; git status']) assert.equal(action(cmd), "confirm", cmd);
+	assert.equal(action("echo $\\\nHOME"), "allow");
+	assert.deepEqual(tokenize("echo $\\\n"), ["echo", "$"]);
 });

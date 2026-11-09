@@ -20,6 +20,13 @@ export function writes(command: string): boolean {
 	);
 }
 
+/** Where the `'` of a `$'…'` word opened by the `$` at `command[i]` is, past any line continuations (as tokenize reads it); -1 for none. */
+function ansiQuoteAt(command: string, i: number): number {
+	let at = i + 1;
+	while (command[at] === "\\" && command[at + 1] === "\n") at += 2;
+	return command[at] === "'" ? at : -1;
+}
+
 /** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
 export function blankQuoted(command: string): string {
 	let out = "";
@@ -40,10 +47,11 @@ export function blankQuoted(command: string): string {
 		if (ch === "\\" && i + 1 < command.length) {
 			out += command.slice(i, i + 2);
 			i++;
-		} else if (ch === "$" && command[i + 1] === "'") {
+		} else if (ch === "$" && ansiQuoteAt(command, i) !== -1) {
+			const at = ansiQuoteAt(command, i);
 			quote = "$'";
-			out += "$'";
-			i++;
+			out += command.slice(i, at + 1);
+			i = at;
 		} else {
 			if (ch === "'" || ch === '"') quote = ch;
 			out += ch;
@@ -247,10 +255,11 @@ export function stripRedirects(command: string): string {
 			i += 2;
 			continue;
 		}
-		if (ch === "$" && command[i + 1] === "'") {
+		if (ch === "$" && ansiQuoteAt(command, i) !== -1) {
+			const at = ansiQuoteAt(command, i);
 			quote = "$'";
-			out += "$'";
-			i += 2;
+			out += command.slice(i, at + 1);
+			i = at + 1;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {

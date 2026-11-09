@@ -359,16 +359,8 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (ch === "\\") {
-			// A backslash-newline is a line continuation: the shell joins the lines. Between a `$` and a quote or another
-			// `$` the shells may read them together (`$\⏎'…'` opens a `$'…'` word in bash and zsh), so the word asks;
-			// `$\⏎HOME` and `$\⏎(…)` read as `$HOME` and `$(…)` in both.
+			// A backslash-newline is a line continuation: the shell joins the lines.
 			if (command[i + 1] === "\n") {
-				let next = i + 2;
-				while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
-				if (command[i - 1] === "$" && /['"$]/.test(command[next] ?? "")) {
-					current += "\0";
-					has = true;
-				}
 				i++;
 				continue;
 			}
@@ -376,27 +368,41 @@ export function tokenize(command: string): string[] {
 			has = true;
 			continue;
 		}
-		if (ch === "$" && command[i + 1] === "'") {
-			// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
-			// closes it) and only then decodes it, so no escape reaches past the quote.
-			let end = i + 2;
-			while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
-			// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling after
-			// review round 3): a `$` just before this one (`$$'`, `\$$$'`: bash may read the PID and a plain quote, zsh a
-			// `$` and this word), an escape the two decode differently, bytes that aren't UTF-8 on their own (bash and zsh
-			// join them with the next part), or a decoded NUL (bash ends only the quoted part there, zsh the whole word).
-			const { text: decoded, agreed } = decodeAnsi(command.slice(i + 2, Math.min(end, command.length)));
-			if (command[i - 1] === "$" || !agreed) current += "\0";
-			current += decoded;
+		if (ch === "$") {
+			// What follows the `$`, past any line continuations: both shells read `$\⏎'…'` as a `$'…'` word and `$\⏎HOME`
+			// as `$HOME` (probed 2026-11-09).
+			let quoteAt = i + 1;
+			while (command[quoteAt] === "\\" && command[quoteAt + 1] === "\n") quoteAt += 2;
+			if (command[quoteAt] === "'") {
+				// The shell finds the word's end first (a backslash pairs with the next character, the first unpaired `'`
+				// closes it) and only then decodes it, so no escape reaches past the quote.
+				let end = quoteAt + 1;
+				while (end < command.length && command[end] !== "'") end += command[end] === "\\" ? 2 : 1;
+				// A NUL in the word marks a reading the shells may disagree on, and the guard asks about it (user ruling
+				// after review round 3): a `$` just before this one, also across continuations (`$$'`, `\$$$'`, `$\⏎$'`:
+				// bash may read the PID and a plain quote, zsh a `$` and this word), an escape the two decode differently,
+				// bytes that aren't UTF-8 on their own (bash and zsh join them with the next part), or a decoded NUL (bash
+				// ends only the quoted part there, zsh the whole word).
+				let before = i - 1;
+				while (command[before] === "\n" && command[before - 1] === "\\") before -= 2;
+				const { text: decoded, agreed } = decodeAnsi(command.slice(quoteAt + 1, Math.min(end, command.length)));
+				if (command[before] === "$" || !agreed) current += "\0";
+				current += decoded;
+				has = true;
+				i = end;
+				continue;
+			}
+			if (command[quoteAt] === '"') {
+				// bash reads `$"…"` as `"…"` (a translation, usually the same text), zsh as `$` and a quoted word: it asks.
+				current += "\0";
+				quote = '"';
+				has = true;
+				i = quoteAt;
+				continue;
+			}
+			current += "$";
 			has = true;
-			i = end;
-			continue;
-		}
-		if (ch === "$" && command[i + 1] === '"') {
-			// bash reads `$"…"` as `"…"` (a translation that is usually the same text); zsh as `$` and a quoted word.
-			quote = '"';
-			has = true;
-			i++;
+			i = quoteAt - 1;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {

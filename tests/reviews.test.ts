@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
+import { blankQuoted, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -1449,4 +1449,10 @@ test("a word joined by Unicode whitespace is not a move", () => {
 	const ws = temp("reviews-ws-");
 	mkdirSync(join(ws, "b"));
 	assert.equal(segmentFolders("cd b; git status", ws)[1]!.dir, ws);
+});
+
+// In `$\⏎'a\' b' c` the shells read one $'…' word up to the last quote; a plain quote would end at `\'`.
+test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
+	assert.ok(blankQuoted("$\\\n'a\\' b' c").endsWith("' c"));
+	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
 });

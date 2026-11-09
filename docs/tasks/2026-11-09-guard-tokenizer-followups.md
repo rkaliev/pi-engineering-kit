@@ -150,25 +150,25 @@ None. Released as 0.38.1 in both editions by CI on merge.
 **Files:** Modify `tokenize` (patterns.ts, both); `blankQuoted` and `stripRedirects` in `lib/shell.ts` (copied to pi) · Test `tests/guard.test.ts`, `tests/reviews.test.ts`
 **Interfaces:** Produces the `\0` mark on `$"…"` words, which Task 3 and Task 4 consume.
 
-- [ ] Write failing test `$ with continuations before a quote reads as both shells read it`:
+- [x] Write failing test `$ with continuations before a quote reads as both shells read it`:
   - `tokenize("$\\\n'a\\x62'")` → `["ab"]`, and the same with two continuations;
   - block: `$\\\n'rm' -rf ~` and `$\\\n'a\\'' ; rm -rf ~`;
   - confirm: `$"cd" /tmp; git status` and `$\\\n"cd" /tmp; git status`;
   - allow: `echo $\\\nHOME`;
   - `echo $\\\n` at the end gives `["echo", "$"]`.
-- [ ] Write failing test `shell helpers find the $\⏎'…' boundary as tokenize does`:
+- [x] Write failing test `shell helpers find the $\⏎'…' boundary as tokenize does`:
   - `blankQuoted("$\\\n'a b' c")` keeps `c` and blanks `a b`;
   - `stripRedirects("$\\\n'x > y' z")` keeps the quoted `>` as text;
   - `segmentFolders("$\"cd\" b; git status", ws)[1].dir` → `undefined`.
-- [ ] Run → expect FAIL: `["$\u0000'a\\x62'…"]`-style tokens vs `["ab"]`.
-- [ ] Implement in `tokenize`, at an unquoted `$`: skip `\⏎` pairs to the next character `c`.
+- [x] Run → expect FAIL: `["$\u0000'a\\x62'…"]`-style tokens vs `["ab"]`.
+- [x] Implement in `tokenize`, at an unquoted `$`: skip `\⏎` pairs to the next character `c`.
   - `c === "'"`: open `$'…'` at that quote. The `$$` mark keeps its rule, and a continuation between two `$` keeps its mark.
   - `c === '"'`: add `\0`, then read a double-quoted word.
   - otherwise: a literal `$`, with the continuations dropped.
   - Remove the old "mark a continuation after `$` before a quote" branch; this replaces it.
-- [ ] Implement the same `$`-skip-continuations-then-`'` opener in `blankQuoted` and `stripRedirects`.
-- [ ] Run in both editions → PASS; `cmp` the two `shell.ts` → same; full suites → pass.
-- [ ] Commit `fix(guard): $\⏎'…' reads as $'…', $"…" asks, shell helpers agree`.
+- [x] Implement the same `$`-skip-continuations-then-`'` opener in `blankQuoted` and `stripRedirects`.
+- [x] Run in both editions → PASS; `cmp` the two `shell.ts` → same; full suites → pass.
+- [x] Commit `fix(guard): $\⏎'…' reads as $'…', $"…" asks, shell helpers agree`.
 
 ### Task 3: a marked move leaves the folder unknown
 
@@ -239,3 +239,5 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 - Baseline (eng-kit debe9d1, pi 47573f1): kit 0.38.0 verify from the workspace root → typecheck and tests pass in both editions. No drift since Base.
 - Task 1: complete (eng-kit debe9d1..HEAD, pi 47573f1..HEAD). Both tests failed first: `["cd","/tmp"]` vs one word, and the review gate allowed the U+00A0 `cd`. The fix is one line in `tokenize`; kit verify → all 4 pass.
+- Ruling (Task 2): the `segmentFolders('$"cd" b …')` row moved to Task 3. The marked `$"cd"` stops being a move, but leaving the folder unknown is Task 3's `parseMove` change. Cost if wrong: none, Task 3 asserts it. Old rows changed with Decision 2: `$"git"` is now marked, and the round-3 rows `$\⏎'rm'` and `$\⏎"rm"` (confirm) were replaced by Task 2's block rows.
+- Task 2: complete (eng-kit 73e21bc..HEAD, pi 9d3dafd..HEAD). Tests failed first: `["$\u0000a\\x62"]` vs `["ab"]`, and the `blankQuoted` boundary. `tokenize` handles a `$` in one branch that looks past continuations; `ansiQuoteAt` is shared by `blankQuoted` and `stripRedirects`. `shell.ts` is identical in both editions. Kit verify → all 4 pass.
