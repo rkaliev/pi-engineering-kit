@@ -169,7 +169,10 @@ type Move = { cmd: "cd" | "pushd" | "popd"; arg?: string; physical: boolean };
  */
 export function parseMove(words: string[]): Move | "other" | undefined {
 	const at = commandIndex(words);
-	if (at === -1 || !MOVES.has(words[at]!)) return undefined;
+	if (at === -1) return undefined;
+	// A word marked as read differently by the shells (see tokenize) that is a move without its mark may or may not move.
+	if (words[at]!.includes("\0") && MOVES.has(words[at]!.replaceAll("\0", ""))) return "other";
+	if (!MOVES.has(words[at]!)) return undefined;
 	if (at > 0 || words[at] === "chdir") return "other";
 	const cmd = words[0] as Move["cmd"];
 	let i = 1;

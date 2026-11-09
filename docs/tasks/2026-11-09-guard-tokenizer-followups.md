@@ -175,14 +175,14 @@ None. Released as 0.38.1 in both editions by CI on merge.
 **Files:** Modify `parseMove` in `lib/shell.ts` (copied to pi) · Test `tests/reviews.test.ts`
 **Interfaces:** Consumes the `\0` mark (Task 2 and 0.38.0).
 
-- [ ] Write failing test `a marked cd leaves the folder unknown`:
+- [x] Write failing test `a marked cd leaves the folder unknown`:
   - `segmentFolders("$'\\u0063d' b; git status", ws)[1].dir` → `undefined`;
   - the same for `$'\\xef\\xbb\\xbf'cd b` and `c$'\\d' b`;
   - in `repo()` on `feat/a`, with a worktree of main as `<main>`: `check("$'cd' <main>; git push")` → block. The test makes the worktree with `git worktree add`.
-- [ ] Run → expect FAIL: `ws` vs `undefined`.
-- [ ] Implement in `parseMove`: when `words[at]` contains `\0` and `MOVES.has(words[at].replaceAll("\0", ""))`, return `"other"`.
-- [ ] Run in both editions → PASS; `cmp` `shell.ts` → same; full suites → pass.
-- [ ] Commit `fix(gates): a marked move leaves the folder unknown`.
+- [x] Run → expect FAIL: `ws` vs `undefined`.
+- [x] Implement in `parseMove`: when `words[at]` contains `\0` and `MOVES.has(words[at].replaceAll("\0", ""))`, return `"other"`.
+- [x] Run in both editions → PASS; `cmp` `shell.ts` → same; full suites → pass.
+- [x] Commit `fix(gates): a marked move leaves the folder unknown`.
 
 ### Task 4: the likely reading reaches project rules, the git subcommand and quoted operators
 
@@ -241,3 +241,5 @@ None. Released as 0.38.1 in both editions by CI on merge.
 - Task 1: complete (eng-kit debe9d1..HEAD, pi 47573f1..HEAD). Both tests failed first: `["cd","/tmp"]` vs one word, and the review gate allowed the U+00A0 `cd`. The fix is one line in `tokenize`; kit verify → all 4 pass.
 - Ruling (Task 2): the `segmentFolders('$"cd" b …')` row moved to Task 3. The marked `$"cd"` stops being a move, but leaving the folder unknown is Task 3's `parseMove` change. Cost if wrong: none, Task 3 asserts it. Old rows changed with Decision 2: `$"git"` is now marked, and the round-3 rows `$\⏎'rm'` and `$\⏎"rm"` (confirm) were replaced by Task 2's block rows.
 - Task 2: complete (eng-kit 73e21bc..HEAD, pi 9d3dafd..HEAD). Tests failed first: `["$\u0000a\\x62"]` vs `["ab"]`, and the `blankQuoted` boundary. `tokenize` handles a `$` in one branch that looks past continuations; `ansiQuoteAt` is shared by `blankQuoted` and `stripRedirects`. `shell.ts` is identical in both editions. Kit verify → all 4 pass.
+- Ruling (Task 3): I dropped the planned row `$'\xef\xbb\xbf'cd b` → unknown. A builtin is found by its exact name, so a BOM-prefixed `cd` never moves in any shell or file system, and the session folder is the right answer. The guard still asks about the mark. Cost if wrong: none, Task 6 pins the gate side.
+- Task 3: complete (eng-kit a106267..HEAD, pi 78be8a3..HEAD). `a marked cd leaves the folder unknown` failed first: ws vs undefined. It covers `$'\u0063d'`, `c$'\d'` and `$"cd"`, plus a review-gate push after `$'\u0063d' <main worktree>;`, which now blocks. In `parseMove`, a marked move gives "other". `shell.ts` is identical in both editions. Kit verify → all 4 pass.

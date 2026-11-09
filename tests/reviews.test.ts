@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
@@ -1455,4 +1455,20 @@ test("a word joined by Unicode whitespace is not a move", () => {
 test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
 	assert.ok(blankQuoted("$\\\n'a\\' b' c").endsWith("' c"));
 	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
+});
+
+// A marked word that is a move without its mark (`$'cd'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
+// not move the shell: the folder is unknown.
+test("a marked cd leaves the folder unknown", () => {
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	for (const command of ["$'\\u0063d' b; git status", "c$'\\d' b; git status", '$"cd" b; git status']) {
+		assert.equal(segmentFolders(command, ws)[1]!.dir, undefined, command);
+	}
+	const { dir, git, check } = repo();
+	const main = join(temp("reviews-wt-"), "main");
+	git("worktree", "add", "-q", main, "main");
+	assert.equal(check("git push"), undefined, "a plain push of the work branch is not a landing");
+	assert.equal(action(check(`$'\\u0063d' ${main}; git push`)), "block");
+	assert.ok(existsSync(dir));
 });
