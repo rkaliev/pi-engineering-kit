@@ -2,7 +2,7 @@
 
 Status: design approved (2026-11-09)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
-Base: eng-kit 277ff1fbaeef146e63eb132f18d4ce19b45f6463, pi 0c8e480565915a4c33df9f38847d5bc2cd9ff1e7
+Base: eng-kit 4b725766e7e73ca32f3c64285f855fbc88a5ab20, pi 9f9f02b834d62895aa247566f5d27bca928d1abb
 Links: workspace docs/review-rounds/0.38.1/round4-findings.md (Follow-ups 0.38.2 and the pre-existing list)
 
 <!-- One file per piece of work, standing in for a tracker issue: the sections before Plan are its description. Each section answers one question and never repeats another. Keep every heading; write "None" instead of deleting a section. -->
@@ -104,7 +104,99 @@ None. It ships as eng-kit and pi 0.38.2 through the usual PRs; CI tags the relea
 
 ## Plan
 
-None yet
+> Execute with the executing-plans skill. Only this section uses `- [ ]` checkboxes.
+
+**Goal:** close the 0.38.1 round-4 follow-ups and make `isSafe` an allowlist, in both editions, as 0.38.2.
+**Architecture:** shared guard files (`patterns.ts` shared parts, `reviews.ts`, `workdocs.ts`, `scope.ts`) change in eng-kit `lib/` first, then are copied byte-identical to pi `extensions/lib/`. The implementer check exists only in eng-kit `lib/hooks.ts`. Tests change in both editions' `tests/` in the same way.
+**Stack / constraints:** Node ≥ 22.18, `.ts` run directly, `node:test`, no new dependencies. English in code, tests and docs; the workspace FRAMEWORK-SOURCES section is Russian. Commits use the repo-local identity, no Claude or Co-Authored-By lines; write messages with backslashes via `git commit -F`.
+**Verification:** the kit verify script, run bare from the workspace root (`cd` in its own call first); single files with `node --test tests/<file>.test.ts` inside a repo. pi: `npm test` in `src/`.
+
+### Review focus
+1. A reading that is a push while the decision is already a confirm from another rule: the implementer's reason must not hide a stricter block (criterion 1; a `--force` with `\r` stays block).
+2. `git branch` clusters and value options: `-av` safe, `-dv` not; `--contains=x` safe, `--contains x feat/b` safe (list mode), `--sort -x` not (Task 4).
+3. A cached `"late"` in the work-docs gate returns "can't tell" for later readings, never `undefined` (Task 5).
+4. The global-option walk with `-C` and no value, or `-C` as the last word (Task 4).
+
+### Post-implementation
+- `CHANGELOG.md` (both): a 0.38.2 entry; in the 0.38.1 entry, `git branch $"-f"` moves a ref (it neither writes a file nor runs a program).
+- `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` (eng-kit), and pi's matching chapter: in the review-gate paragraph, the safe steps before a landing are `git branch` and `git remote` in their listing forms and git with only `-C`, `--no-pager` and `-P` as global options. In eng-kit §7 (line ~185), the implementer's push asks in every reading.
+- Version 0.38.2 in every file that carries 0.38.1 outside CHANGELOG, `lib/` and `tests/` (eng-kit: `package.json`, `package-lock.json`, `.claude-plugin/plugin.json`; pi: `package.json`, `package-lock.json`, `README.md`, `docs/GETTING-STARTED(.ru).md`, `templates/settings.json`); `tests/release.test.ts` checks them.
+- Workspace `docs/FRAMEWORK-SOURCES.ru.md` §11.51: what 0.38.2 changed and why (Russian, for the user).
+- Delete this task file in the last commit of each repo.
+
+### Task 1: implementer push reads every reading (eng-kit only)
+
+**Files:** Modify `lib/hooks.ts` · Test `tests/hooks.test.ts`
+**Interfaces:** Consumes `otherReadings(command: string): string[]`, `ownBranchPush(...)` from `lib/patterns.ts`
+
+- [ ] In test `guard: the implementer's own-branch push asks; the main agent's passes`, for each implementer agent add `pre("g\rit push", agent) === "ask"` and `pre("git\r push", agent) === "ask"`; add a reason check that `git pu\rsh` from `eng-kit:implementer` matches `/implementer doesn't push; the coordinator does after review/`; and `pre("git push --force\r", "eng-kit:implementer")` stays `"deny"` (a block is never softened)
+- [ ] Run `node --test tests/hooks.test.ts` → expect FAIL: `g\rit push` gives `undefined`, expected `"ask"`
+- [ ] In `lib/hooks.ts`, the implementer check becomes: `decision.action !== "block" && IMPLEMENTER.test(...) && [command, ...otherReadings(command)].some((r) => ownBranchPush(r, cwd, process.env, env.projectDir))`; import `otherReadings`
+- [ ] Run `node --test tests/hooks.test.ts` → PASS; mutation-check: drop `...otherReadings(command)` → the new rows fail; restore
+- [ ] Commit `fix(guard): the implementer's push asks in every reading`
+
+### Task 2: `otherReadings` without a no-op dedupe (both editions)
+
+**Files:** Modify `lib/patterns.ts` (eng-kit), `extensions/lib/patterns.ts` (pi)
+
+- [ ] Replace the body with `[...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])]`; the doc comment adds that each reading always differs from the command and from the other (the PowerShell one has no `\r`, the igncr one keeps every other blank)
+- [ ] Run `node --test tests/guard.test.ts tests/reviews.test.ts` in both repos → PASS (no behavior change)
+- [ ] Commit `refactor(guard): otherReadings returns its readings without a dedupe that never fires`
+
+### Task 3: tests for the `touched` union in `scopedConfig` (both editions)
+
+**Files:** Test `tests/scope.test.ts`
+
+- [ ] Give the test helper `workspace(configs, repos = ["a", "b"])` a repository list. New test `scopedConfig: every reading adds the rules of the repositories it touches`: with `workspace({ web: { block: ["make release"] } }, ["api", "web"])`, `command("cd api && c\rd ../we\rb && make release")` → `"block"`; with `workspace({ a: { block: ["make release"] } })`, `command("cd b && c\rd $X && make release")` → `"block"`
+- [ ] Run `node --test tests/scope.test.ts` → expect PASS (the code exists); mutation-check: in `scopedConfig` use `placed[0]!.touched` instead of the union → both rows FAIL with `"allow"`; restore
+- [ ] Copy the test file change to pi; run there → PASS
+- [ ] Commit `test(scope): pin that every reading adds its repositories' rules`
+
+### Task 4: `isSafe` allows only read-only git forms (both editions)
+
+**Files:** Modify `lib/reviews.ts` · Test `tests/reviews.test.ts`
+**Interfaces:** Produces `safeGit(tokens: string[]): boolean` (module-private), called from `isSafe` for `tokens[0] === "git"`
+
+- [ ] New test `the review gate trusts only listing forms of git branch and remote, and only -C, --no-pager and -P, before a landing`, with `repo()`, `review(report(head, "Yes", base))`:
+  - safe, `check("<step> && gh pr create --fill")` → `undefined`: `git branch`, `git branch --show-current`, `git branch -av`, `git branch --list 'feat/*'`, `git branch --contains=HEAD`, `git branch --contains HEAD feat/a`, `git remote -v`, `git remote get-url origin`, `git --no-pager log -1`, `git -C . status`;
+  - not safe, `action(check(...))` → `"block"` and reason matches `/runs a step before it lands/`: `git branch --forc main feat/a`, `git branch -d x`, `git branch --delete x`, `git branch --move x y`, `git branch -u origin/main`, `git branch --set-upstream-to=origin/main`, `git branch feat/x main`, `git branch -dv x`, `git branch --sort -x`, `git remote set-url origin /tmp/x`, `git remote add x /tmp/x`, `git -c core.fsmonitor=x status`, `git --config-env=core.pager=X log`, `git --git-dir=x status`, `git --work-tree=x status`, `git --exec-path=x status`, `git -C`
+- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL: `git branch --forc main feat/a` gives `undefined`, expected `"block"`
+- [ ] Implement `safeGit` in `lib/reviews.ts`, reading every token through `bare()`:
+  - global options: `-C` skips its value (none → false), `--no-pager` and `-P` are skipped, any other word starting with `-` → false;
+  - `branch`: options in `BRANCH_LIST_OPTIONS = {-a, --all, -r, --remotes, -l, --list, -v, -vv, --verbose, --show-current, --color, --no-color, --column, --no-column, -i, --ignore-case}`, a short cluster matching `/^-[arlvi]+$/`, or `/^--(format|sort|contains|no-contains|merged|no-merged|points-at)=/`; `--contains`, `--no-contains`, `--merged`, `--no-merged`, `--points-at`, `-l`, `--list` are list mode; a positional word without list mode → false;
+  - `remote`: nothing after it, or the next word is `-v`, `--verbose`, `get-url` or `show`;
+  - `fetch` keeps its `:` rule; any other subcommand → `SAFE_GIT.has(sub)`, with `branch` and `remote` handled above.
+- [ ] Run `node --test tests/reviews.test.ts` → PASS, including the existing `git branch -f`, `git branch $"-f"` and `git status && git fetch origin` rows
+- [ ] Copy `lib/reviews.ts` → pi `extensions/lib/reviews.ts` (confirm `diff` is empty) and the test change; run pi `npm test` → PASS
+- [ ] Commit `fix(gates): only listing forms of git branch and remote, and plain git options, are safe before a landing`
+
+### Task 5: one work-docs budget across readings (both editions)
+
+**Files:** Modify `lib/workdocs.ts` · Test `tests/workdocs.test.ts`
+
+- [ ] New test `in a workspace, an unplaced commit spends one budget across the readings and asks git once per repository`: `slowGit(realpathSync(join(root, "a")), "diff", 2)`; `check("cd $D && git commit -m x\r")` → `undefined` (nothing staged); elapsed < 3500 ms; `readFileSync(slow.log)` has exactly one line containing `diff --cached`
+- [ ] Run `node --test tests/workdocs.test.ts` → expect FAIL: elapsed ≈ 6000 ms (or two `diff --cached` calls)
+- [ ] In `checkWorkDocs`, create `const budget = { until: Date.now() + UNPLACED_BUDGET_MS, seen: new Map<string, GuardDecision | "late" | undefined>() }` and pass it to `workDocsGate(text, projectDir, dirs, workspace, budget)`; the unplaced-commit loop uses `budget.until` and reads `budget.seen.get(repo)` before calling `judgeCommit`, storing every result, `"late"` included
+- [ ] Run `node --test tests/workdocs.test.ts` → PASS, including `an unplaced commit is judged within a deadline`
+- [ ] Copy `lib/workdocs.ts` → pi `extensions/lib/workdocs.ts` (empty `diff`) and the test change; run pi `npm test` → PASS
+- [ ] Commit `fix(workdocs): an unplaced commit spends one budget across the readings`
+
+### Task 6: missing test rows from round 4 (both editions)
+
+**Files:** Test `tests/reviews.test.ts`
+
+- [ ] In the reviewer test, add `check("git diff a..b --output=x")` → `"block"`. In the PR record test's marked-move loop, add `["p", (p) => \`PR=$(cd $"-P" ${p} && gh pr create --fill)\`]`
+- [ ] Run `node --test tests/reviews.test.ts` → PASS; mutation-check each: drop the blank refusal in `checkReviewerCommand` → the U+00A0 row fails; read `t` instead of `bare(w)` for the option skip in `namedFolders` → the `-P` row fails; restore both
+- [ ] Copy to pi; run → PASS
+- [ ] Commit `test(gates): pin the reviewer's blank refusal and a marked -P in namedFolders`
+
+### Task 7: docs and version 0.38.2 (both editions)
+
+**Files:** the Post-implementation list
+
+- [ ] Update the docs and versions named in Post-implementation; write FRAMEWORK-SOURCES §11.51
+- [ ] Run the kit verify script (eng-kit) and `npm test` (pi) → PASS, including `release.test.ts`; `diff` of the shared lib files between editions is empty
+- [ ] Commit `docs: 0.38.2` in each repo; then delete this task file in its own commit `chore(tasks): remove the 0.38.2 task file`
 
 ## Progress
 
