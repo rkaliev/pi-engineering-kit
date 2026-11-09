@@ -94,12 +94,12 @@ export function wideBlankReading(command: string): string | undefined {
 /**
  * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), and with every `\r` dropped,
  * as bash with `igncr` (Cygwin, MSYS) does. The guard and the gates judge each and keep the stricter decision (user
- * rulings after 0.38.1 review rounds 1 and 2).
+ * rulings after 0.38.1 review rounds 1 and 2). Each differs from the command and from the other: the PowerShell reading
+ * replaces at least one blank and keeps no `\r`, and the igncr reading drops a `\r` and keeps every other blank.
  */
 export function otherReadings(command: string): string[] {
 	const wide = wideBlankReading(command);
-	const readings = [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
-	return [...new Set(readings)].filter((r) => r !== command);
+	return [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
 }
 
 /** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
