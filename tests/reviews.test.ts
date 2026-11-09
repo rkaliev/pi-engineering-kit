@@ -1441,3 +1441,12 @@ test("a segment holding a quoted operator word is never a safe step before a lan
 	// On the work branch the merge alone is not a landing on the base; only the switch in the first segment makes it unsafe.
 	assert.equal(action(check("cat x \\; git switch main; git merge feat/a")), "block");
 });
+
+test("a word joined by Unicode whitespace is not a move", () => {
+	const { git, check } = repo();
+	git("switch", "-q", "main");
+	assert.equal(action(check("cd /tmp; git merge feat/a")), "block");
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders("cd b; git status", ws)[1]!.dir, ws);
+});

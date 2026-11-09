@@ -1,6 +1,6 @@
 # Guard reads words as the shells split and quote them, and asks where they disagree
 
-Status: plan approved (2026-11-09)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 4ff782d2b63ba0469db83ab4d09e0b30c1f8944d, pi 047dab04393e6d397a0ee7cb6bdea7cc1d292317
 Links: FRAMEWORK-SOURCES §11.49 ("Задача 0.38.1"); workspace docs/review-rounds/0.38.0/round5-findings.md (W1–W4 and the out-of-scope list)
@@ -135,15 +135,15 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 **Files:** Modify `tokenize` in `lib/patterns.ts` / `extensions/lib/patterns.ts` · Test `tests/guard.test.ts`, `tests/reviews.test.ts` (both editions)
 
-- [ ] Write failing test `tokenize splits words only on space and tab, as the shells do`:
+- [x] Write failing test `tokenize splits words only on space and tab, as the shells do`:
   - `tokenize("cd /tmp")` → `["cd /tmp"]`; the same for U+FEFF, `\r`, `\v` and `\f` inside a word;
   - `tokenize("a\tb c")` → `["a", "b", "c"]`;
   - `action("rm -rf ~\r")` → `block`.
-- [ ] Write failing review-gate test `a word joined by Unicode whitespace is not a move` (on main, in `repo()`): `check("cd /tmp; git merge feat/a")` → block. Add `segmentFolders("cd b; git status", ws)[1].dir === ws`.
-- [ ] Run both test files in src_claude → expect FAIL on `["cd", "/tmp"]` vs `["cd /tmp"]`.
-- [ ] Implement: the whitespace test at the word break becomes `ch === " " || ch === "\t"`.
-- [ ] Run the tests in both editions → PASS. Run the full suites → pass.
-- [ ] Commit `fix(guard): words split on space and tab only, as the shells split them`.
+- [x] Write failing review-gate test `a word joined by Unicode whitespace is not a move` (on main, in `repo()`): `check("cd /tmp; git merge feat/a")` → block. Add `segmentFolders("cd b; git status", ws)[1].dir === ws`.
+- [x] Run both test files in src_claude → expect FAIL on `["cd", "/tmp"]` vs `["cd /tmp"]`.
+- [x] Implement: the whitespace test at the word break becomes `ch === " " || ch === "\t"`.
+- [x] Run the tests in both editions → PASS. Run the full suites → pass.
+- [x] Commit `fix(guard): words split on space and tab only, as the shells split them`.
 
 ### Task 2: `$` before a continuation and a quote; `$"…"` marked; shell helpers agree
 
@@ -237,4 +237,5 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 ## Progress
 
-None yet
+- Baseline (eng-kit debe9d1, pi 47573f1): kit 0.38.0 verify from the workspace root → typecheck and tests pass in both editions. No drift since Base.
+- Task 1: complete (eng-kit debe9d1..HEAD, pi 47573f1..HEAD). Both tests failed first: `["cd","/tmp"]` vs one word, and the review gate allowed the U+00A0 `cd`. The fix is one line in `tokenize`; kit verify → all 4 pass.

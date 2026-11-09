@@ -421,7 +421,8 @@ export function tokenize(command: string): string[] {
 			tokens.push(ch);
 			continue;
 		}
-		if (/\s/.test(ch) || ch === "<" || ch === ">") {
+		// Only blanks end a word, as in bash and zsh: U+00A0, U+FEFF, `\r`, `\v` and `\f` stay inside it.
+		if (ch === " " || ch === "\t" || ch === "<" || ch === ">") {
 			push();
 			if (ch === "<" || ch === ">") operator = ch;
 			continue;

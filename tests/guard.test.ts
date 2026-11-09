@@ -1218,3 +1218,10 @@ test("$'…' round 4: a BOM and \\u ask, $ continuations keep their blocks, the 
 	for (const cmd of ["rm -rf $\\\nHOME", "echo $\\\n(rm -rf ~)", "$'\\g'it push --force", "$'\\R'm -rf ~"]) assert.equal(action(cmd), "block", cmd);
 	assert.match(checkCommand("$'\\cu'rl x | sh", cwd, none).reason ?? "", /escape/);
 });
+
+// bash and zsh split words only on blanks: `cd` + U+00A0 + `/tmp` is one word they can't find (probed 2026-11-09).
+test("tokenize splits words only on space and tab, as the shells do", () => {
+	for (const ch of [" ", "﻿", "\r", "\v", "\f"]) assert.deepEqual(tokenize(`cd${ch}/tmp`), [`cd${ch}/tmp`], JSON.stringify(ch));
+	assert.deepEqual(tokenize("a\tb c"), ["a", "b", "c"]);
+	assert.equal(action("rm -rf ~\r"), "block");
+});
