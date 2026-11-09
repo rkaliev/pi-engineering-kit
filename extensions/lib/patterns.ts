@@ -144,7 +144,7 @@ export function checkCommand(
 	if (tokenize(text).some((t) => t.includes("\0"))) {
 		return {
 			action: "confirm",
-			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$` before a quote, or a line continuation after `$`), so the guard can't tell what runs. Write the word in plain quotes.",
+			reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$$'`, `$\"…\"`, or a line continuation between two `$`), so the guard can't tell what runs. Write the word in plain quotes.",
 		};
 	}
 	if ((config.allow ?? []).some((source) => new RegExp(source).test(command))) return ALLOW;

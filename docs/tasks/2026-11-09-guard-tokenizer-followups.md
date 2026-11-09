@@ -208,10 +208,10 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 **Files:** Modify the reason string in `checkCommand` (both) · Test `tests/guard.test.ts`
 
-- [ ] Write failing test `the mark's reason names the cause`. The reasons for `$"cd" x` and `$'\\cu'rl x` match `/\$"…"/` and `/escape/`. The reason does not say "`$` before a quote".
-- [ ] Run → expect FAIL on `/\$"…"/`.
-- [ ] Implement the reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$$'`, `$"…"`, or a line continuation between `$` and another `$`), so the guard can't tell what runs. Write the word in plain quotes."
-- [ ] Run in both → PASS. Commit `fix(guard): the mark's question names its causes`.
+- [x] Write failing test `the mark's reason names the cause`. The reasons for `$"cd" x` and `$'\\cu'rl x` match `/\$"…"/` and `/escape/`. The reason does not say "`$` before a quote".
+- [x] Run → expect FAIL on `/\$"…"/`.
+- [x] Implement the reason: "A word in this command may be read differently by bash and zsh (an escape in $'…' they decode differently, bytes that aren't UTF-8 on their own, a NUL byte or BOM, `$$'`, `$"…"`, or a line continuation between `$` and another `$`), so the guard can't tell what runs. Write the word in plain quotes."
+- [x] Run in both → PASS. Commit `fix(guard): the mark's question names its causes`.
 
 ### Task 6: tests for the 0.38.0 changes that had none
 
@@ -245,3 +245,4 @@ None. Released as 0.38.1 in both editions by CI on merge.
 - Task 3: complete (eng-kit a106267..HEAD, pi 78be8a3..HEAD). `a marked cd leaves the folder unknown` failed first: ws vs undefined. It covers `$'\u0063d'`, `c$'\d'` and `$"cd"`, plus a review-gate push after `$'\u0063d' <main worktree>;`, which now blocks. In `parseMove`, a marked move gives "other". `shell.ts` is identical in both editions. Kit verify → all 4 pass.
 - Ruling (Task 4): I dropped the planned `{ confirm: ["terraform"] }` row. Every marked word asks anyway, so that row can't fail. The block row and the allow-doesn't-read-it row cover the change.
 - Task 4: complete (eng-kit 5362e4a..HEAD, pi 7bde986..HEAD). Tests failed first: a project block gave confirm vs block; on main, `git $'\\m'erge` gave allow vs block; `allLandings` with `\0merge` gave undefined; the `$'\\;'` find row gave allow. Mutants of the stripped views, the `gitLanding` subcommand and `several` each fail. Shared files are identical in both editions. Kit verify → all 4 pass.
+- Task 5: complete (eng-kit 2a2a8cb..HEAD, pi 381322f..HEAD). The test `the mark's question names its causes` failed first on /\$"…"/. Only the reason string changed. The guard tests pass in both editions; the full suite runs with Task 6.

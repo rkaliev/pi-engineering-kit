@@ -1242,3 +1242,10 @@ test("project rules also read a marked word without its mark", () => {
 	// An allow rule loosens, so it never reads the unmarked words: the mark still asks.
 	assert.equal(action("terr$'\\x'aform destroy", { allow: ["^terraform"] }), "confirm");
 });
+
+test("the mark's question names its causes", () => {
+	const reason = (command: string) => checkCommand(command, cwd, none).reason ?? "";
+	assert.match(reason('$"cd" x'), /\$"…"/);
+	assert.match(reason("$'\\cu'rl x"), /escape/);
+	assert.doesNotMatch(reason('$"cd" x'), /`\$` before a quote/);
+});
