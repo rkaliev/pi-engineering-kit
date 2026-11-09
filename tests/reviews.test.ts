@@ -1472,3 +1472,10 @@ test("a marked cd leaves the folder unknown", () => {
 	assert.equal(action(check(`$'\\u0063d' ${main}; git push`)), "block");
 	assert.ok(existsSync(dir));
 });
+
+test("the review gate reads a marked subcommand and a marked operator word without the mark", () => {
+	const { git, check } = repo();
+	assert.equal(action(check("find . -maxdepth 0 -exec git switch main $'\\;' -exec git merge feat/a $'\\;'")), "block");
+	git("switch", "-q", "main");
+	assert.equal(action(check("git $'\\m'erge feat/a")), "block");
+});

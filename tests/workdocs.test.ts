@@ -349,3 +349,7 @@ test("landing skips an assignment or argument whose base name is git or gh and f
 test("allLandings lists every commit, merge, push or PR call in a segment, in order", () => {
 	assert.deepEqual(allLandings(["find", ".", "-exec", "git", "commit", "-qm", "x", "';'", "-exec", "git", "merge", "feat/a", "';'"]).map((l) => l.kind), ["commit", "merge"]);
 });
+
+test("allLandings reads a marked git subcommand without its mark", () => {
+	assert.equal(allLandings(["git", "\0merge", "feat/a"])[0]?.kind, "merge");
+});

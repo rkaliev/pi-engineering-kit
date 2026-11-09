@@ -1234,3 +1234,11 @@ test("$ with continuations before a quote reads as both shells read it", () => {
 	assert.equal(action("echo $\\\nHOME"), "allow");
 	assert.deepEqual(tokenize("echo $\\\n"), ["echo", "$"]);
 });
+
+// A marked word's likely reading without its mark (`terr$'\x'aform` → terraform) also meets the project's block rules,
+// and a block there wins over the question the mark asks.
+test("project rules also read a marked word without its mark", () => {
+	assert.equal(action("terr$'\\x'aform destroy", { block: ["terraform destroy"] }), "block");
+	// An allow rule loosens, so it never reads the unmarked words: the mark still asks.
+	assert.equal(action("terr$'\\x'aform destroy", { allow: ["^terraform"] }), "confirm");
+});

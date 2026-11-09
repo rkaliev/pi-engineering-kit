@@ -107,7 +107,16 @@ export function checkCommand(
 	const viewsOf = (s: string) => {
 		const words = tokenize(s);
 		// The raw text folded too, quotes kept: `env -S"GIT push"` has its word boundary there.
-		return [s, words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "), foldPath(words.join(" ")), foldPath(s)];
+		// A marked word (see tokenize) is also read without its mark, its likely reading: more matches, never fewer.
+		const bare = words.map((t) => t.replaceAll("\0", ""));
+		return [
+			s,
+			words.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "),
+			foldPath(words.join(" ")),
+			foldPath(s),
+			bare.map((t) => (t.startsWith("-") ? t : foldPath(t))).join(" "),
+			foldPath(bare.join(" ")),
+		];
 	};
 	const views = viewsOf(text);
 	const commandViews = text === command ? views : viewsOf(command);

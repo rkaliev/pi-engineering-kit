@@ -188,7 +188,7 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 **Files:** Modify `checkCommand` (`viewsOf`) in patterns.ts (both), `gitLanding` in `lib/workdocs.ts`, and `several` in `lib/reviews.ts` (copied to pi) · Test `guard.test.ts`, `reviews.test.ts`, `workdocs.test.ts`
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - `project rules also read a marked word without its mark`:
     - `terr$'\\x'aform destroy` with `{ block: ["terraform destroy"] }` → block;
     - with `{ confirm: ["terraform"] }` → confirm;
@@ -196,13 +196,13 @@ None. Released as 0.38.1 in both editions by CI on merge.
   - `allLandings(["git", "\0merge", "feat/a"])[0].kind` → `"merge"`.
   - On main: `check("git $'\\m'erge feat/a")` → block.
   - On `feat/a`: `check("find . -maxdepth 0 -exec git switch main $'\\;' -exec git merge feat/a $'\\;'")` → block.
-- [ ] Run → expect FAIL: `confirm` vs `block` on the project rule.
-- [ ] Implement:
+- [x] Run → expect FAIL: `confirm` vs `block` on the project rule.
+- [x] Implement:
   - `viewsOf` also returns the three folded views of the command with `\0` removed. `allow` still reads only `command`.
   - `gitLanding` compares `rest[verb].replaceAll("\0", "")`.
   - `several` is `tokens.some((t) => OPERATOR_WORD.test(t) || OPERATORS.has(t.replaceAll("\0", "")))`, with a local `OPERATORS` set equal to the tokenizer's.
-- [ ] Run in both editions → PASS; `cmp` `workdocs.ts` and `reviews.ts` → same; full suites → pass.
-- [ ] Commit `fix(guard): a marked word's likely reading reaches project rules and the gates`.
+- [x] Run in both editions → PASS; `cmp` `workdocs.ts` and `reviews.ts` → same; full suites → pass.
+- [x] Commit `fix(guard): a marked word's likely reading reaches project rules and the gates`.
 
 ### Task 5: the reason names the causes
 
@@ -243,3 +243,5 @@ None. Released as 0.38.1 in both editions by CI on merge.
 - Task 2: complete (eng-kit 73e21bc..HEAD, pi 9d3dafd..HEAD). Tests failed first: `["$\u0000a\\x62"]` vs `["ab"]`, and the `blankQuoted` boundary. `tokenize` handles a `$` in one branch that looks past continuations; `ansiQuoteAt` is shared by `blankQuoted` and `stripRedirects`. `shell.ts` is identical in both editions. Kit verify → all 4 pass.
 - Ruling (Task 3): I dropped the planned row `$'\xef\xbb\xbf'cd b` → unknown. A builtin is found by its exact name, so a BOM-prefixed `cd` never moves in any shell or file system, and the session folder is the right answer. The guard still asks about the mark. Cost if wrong: none, Task 6 pins the gate side.
 - Task 3: complete (eng-kit a106267..HEAD, pi 78be8a3..HEAD). `a marked cd leaves the folder unknown` failed first: ws vs undefined. It covers `$'\u0063d'`, `c$'\d'` and `$"cd"`, plus a review-gate push after `$'\u0063d' <main worktree>;`, which now blocks. In `parseMove`, a marked move gives "other". `shell.ts` is identical in both editions. Kit verify → all 4 pass.
+- Ruling (Task 4): I dropped the planned `{ confirm: ["terraform"] }` row. Every marked word asks anyway, so that row can't fail. The block row and the allow-doesn't-read-it row cover the change.
+- Task 4: complete (eng-kit 5362e4a..HEAD, pi 7bde986..HEAD). Tests failed first: a project block gave confirm vs block; on main, `git $'\\m'erge` gave allow vs block; `allLandings` with `\0merge` gave undefined; the `$'\\;'` find row gave allow. Mutants of the stripped views, the `gitLanding` subcommand and `several` each fail. Shared files are identical in both editions. Kit verify → all 4 pass.

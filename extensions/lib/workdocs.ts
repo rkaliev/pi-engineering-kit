@@ -239,7 +239,8 @@ function gitLanding(rest: string[]): Landing | undefined {
 		verb += rest[verb] === "-C" || rest[verb] === "-c" ? 2 : 1;
 	}
 	const args = rest.slice(verb + 1);
-	const subcommand = rest[verb] ?? "";
+	// A marked subcommand (see tokenize) is judged as it most likely runs.
+	const subcommand = (rest[verb] ?? "").replaceAll("\0", "");
 	switch (subcommand) {
 		case "commit":
 			return { kind: "commit", dir };

@@ -495,6 +495,8 @@ export function checkReview(command: string, cwd: string, projectDir: string, op
 
 /** An operator the tokenizer re-quoted because it was quoted or escaped (`';'`): an argument to bash, a separator elsewhere. */
 const OPERATOR_WORD = /^'(&&|\|\||;|\||&|\n)'$/;
+/** The operators a marked word (`$'\;'` is `\0;`) may read as without its mark. */
+const BARE_OPERATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
 
 /** The review gate over the landings the command's segments show. */
 function checkSegments(command: string, cwd: string, projectDir: string, options: ReviewGateOptions, root?: string): GuardDecision | undefined {
@@ -509,7 +511,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		const found = allLandings(tokens);
 		// A quoted operator word means the segment runs several commands (`find … -exec … \; -exec …`, PowerShell's `\;`):
 		// none of it is a safe step, and a landing in it may follow a switch or a commit.
-		const several = tokens.some((t) => OPERATOR_WORD.test(t));
+		const several = tokens.some((t) => OPERATOR_WORD.test(t) || BARE_OPERATORS.has(t.replaceAll("\0", "")));
 		if (found.every((l) => l.kind === "commit")) {
 			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) || several) unsafeBefore = true;
 			continue;
