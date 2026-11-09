@@ -217,13 +217,13 @@ None. Released as 0.38.1 in both editions by CI on merge.
 
 **Files:** Test `tests/guard.test.ts`, `tests/reviews.test.ts` (both)
 
-- [ ] Write tests (they pin code already on main). On main:
+- [x] Write tests (they pin code already on main). On main:
   - `check("$'\\g'it merge feat/a")` → block;
   - `check("$'\\xef\\xbb\\xbf'cd " + tmp + "; git merge feat/a")` → block.
   - Also `segmentFolders("$'\\g'it -C b status", ws)[0].dir` → `join(ws, "b")`.
   - (`echo $\⏎HOME` → allow is covered in Task 2.)
-- [ ] Mutation-check each row: remove `replaceAll("\0", "")` from `commandName` → the first and third rows fail. Set `ignoreBOM: false` → the second fails. Record each in Progress.
-- [ ] Commit `test(guard): pin the 0.38.0 mark-stripping and BOM handling`.
+- [x] Mutation-check each row: remove `replaceAll("\0", "")` from `commandName` → the first and third rows fail. Set `ignoreBOM: false` → the second fails. Record each in Progress.
+- [x] Commit `test(guard): pin the 0.38.0 mark-stripping and BOM handling`.
 
 ### Task 7: docs, version, live check
 
@@ -246,3 +246,8 @@ None. Released as 0.38.1 in both editions by CI on merge.
 - Ruling (Task 4): I dropped the planned `{ confirm: ["terraform"] }` row. Every marked word asks anyway, so that row can't fail. The block row and the allow-doesn't-read-it row cover the change.
 - Task 4: complete (eng-kit 5362e4a..HEAD, pi 7bde986..HEAD). Tests failed first: a project block gave confirm vs block; on main, `git $'\\m'erge` gave allow vs block; `allLandings` with `\0merge` gave undefined; the `$'\\;'` find row gave allow. Mutants of the stripped views, the `gitLanding` subcommand and `several` each fail. Shared files are identical in both editions. Kit verify → all 4 pass.
 - Task 5: complete (eng-kit 2a2a8cb..HEAD, pi 381322f..HEAD). The test `the mark's question names its causes` failed first on /\$"…"/. Only the reason string changed. The guard tests pass in both editions; the full suite runs with Task 6.
+- Task 6: complete (eng-kit 528bf1a..HEAD, pi 8c60309..HEAD). The pins pass by design, because the code is already on main. They were mutation-checked:
+  - dropping `replaceAll("\0", "")` from `commandName` makes the gate row fail (allow vs block);
+  - `ignoreBOM: false` makes the BOM row fail (allow vs block). That row uses a sibling repo on `feat/x`, so a followed `cd` lands off the base.
+  - The `segmentFolders` `$'\\g'it -C b` row is also part of this test.
+  Kit verify → all 4 pass.

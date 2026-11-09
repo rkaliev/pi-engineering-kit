@@ -1479,3 +1479,19 @@ test("the review gate reads a marked subcommand and a marked operator word witho
 	git("switch", "-q", "main");
 	assert.equal(action(check("git $'\\m'erge feat/a")), "block");
 });
+
+// Pins for 0.38.0 code that had no test failing without it (round-5 W2): the mark-stripping in commandName, and the
+// BOM kept and marked by the decoder.
+test("the review gate judges marked git words and BOM-led words as the shells run them", () => {
+	const { git, check } = repo();
+	// A checkout on a work branch: a merge judged there would not land on a base.
+	const other = temp("reviews-other-");
+	spawnSync("git", ["init", "-q", "-b", "feat/x", other]);
+	spawnSync("git", ["-C", other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"]);
+	git("switch", "-q", "main");
+	assert.equal(action(check("$'\\g'it merge feat/a")), "block");
+	assert.equal(action(check(`$'\\xef\\xbb\\xbf'cd ${other}; git merge feat/a`)), "block");
+	const ws = temp("reviews-ws-");
+	mkdirSync(join(ws, "b"));
+	assert.equal(segmentFolders("$'\\g'it -C b status", ws)[0]!.dir, join(ws, "b"));
+});
