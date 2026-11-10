@@ -2,7 +2,7 @@
 
 ## 0.38.2
 
-- **Only read-only steps may come before a landing.** `git branch` and `git remote` count as safe only in their listing forms, and git only with `-C`, `--no-pager` or `-P` before the subcommand. `git branch --forc` (a prefix git expands), `-d`, `--move`, `-u`, `git branch <name> <start>`, `git remote set-url`, `git -c core.fsmonitor=…` and `--git-dir=` before `gh pr create` or a push are treated like any other unsafe step.
+- **Stricter safe steps before a landing.** `git branch` and `git remote` count as safe only in their listing forms, and git only with `-C`, `--no-pager` or `-P` before the subcommand. `git branch --forc` (a prefix git expands), `-d`, `--move`, `-u`, `git branch <name> <start>`, `git remote set-url` (also after `-v`), `git -c core.fsmonitor=…`, `--git-dir=`, and any git step with a marked word or a word the shell may expand (`{…}`, `$_`, a glob even in quotes) before `gh pr create` or a push are treated like any other unsafe step. The options of the other read-only git subcommands are not checked yet.
 - **The task-file guard stays within one time budget.** A commit it can't place is judged once per repository for all readings of the command, so a command with `\r` no longer spends up to three budgets against the hook's timeout.
 
 ## 0.38.1

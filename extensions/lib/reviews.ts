@@ -792,19 +792,23 @@ function childConfig(projectDir: string, path: string, guardConfig: string): boo
 	return slash > 0 && !rel.startsWith("../") && foldPath(rel.slice(slash + 1)) === guardConfig;
 }
 
+/** A mark (`\0`, a word bash and zsh may read differently) or a character the shell may expand into other words:
+ * a variable or substitution, braces, a glob (quoted too: the tokenizer drops the quotes), and PowerShell's `,` and `@`. */
+const SHELL_EXPANDS = /[\0$`(){}*?[\],@]/;
 /** `git branch` options that only list branches; git also accepts unambiguous prefixes (`--forc`), which are refused. */
 const BRANCH_LIST_OPTIONS = new Set(["-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose", "--show-current", "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case"]);
 /** `git branch` options that take a commit or pattern: with one of them, the other words are its operands, not a new branch. */
 const BRANCH_LIST_MODE = new Set(["-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"]);
 
 /**
- * A git call that neither commits, moves a ref, nor changes where a push goes or which program git runs. An allowlist:
- * only `-C <dir>`, `--no-pager` and `-P` before the subcommand (`-c`, `--config-env`, `--git-dir`… may run a program or
- * read another repository), `git branch` and `git remote` only in their listing forms, `fetch` without a refspec that
- * writes a local ref, and the other SAFE_GIT subcommands. A marked word is read without its mark.
+ * A git call whose global options and `branch`/`remote` forms neither move a ref nor change where a push goes. An
+ * allowlist: only `-C <dir>`, `--no-pager` and `-P` before the subcommand (`-c`, `--config-env`, `--git-dir`… may run
+ * a program or read another repository), `git branch` and `git remote` only in their listing forms, `fetch` without a
+ * refspec that writes a local ref, and the other SAFE_GIT subcommands, whose options are not checked. A marked word or
+ * one the shell may expand is never safe: the guard can't tell which arguments git gets.
  */
-function safeGit(tokens: string[]): boolean {
-	const words = tokens.map(bare);
+function safeGit(words: string[]): boolean {
+	if (words.some((t) => SHELL_EXPANDS.test(t))) return false;
 	let i = 1;
 	for (; i < words.length && words[i]!.startsWith("-"); i++) {
 		if (words[i] === "-C") {
@@ -814,7 +818,11 @@ function safeGit(tokens: string[]): boolean {
 	const sub = words[i] ?? "";
 	const rest = words.slice(i + 1);
 	if (sub === "fetch") return !rest.some((t) => t.includes(":"));
-	if (sub === "remote") return rest.length === 0 || ["-v", "--verbose", "get-url", "show"].includes(rest[0]!);
+	if (sub === "remote") {
+		// git takes `-v` between `remote` and any subcommand (`git remote -v set-url …`).
+		const verb = rest.find((t) => t !== "-v" && t !== "--verbose");
+		return verb === undefined || verb === "get-url" || verb === "show";
+	}
 	if (sub === "branch") {
 		const options = rest.filter((t) => t.startsWith("-"));
 		const listing = (t: string) => BRANCH_LIST_OPTIONS.has(t) || BRANCH_LIST_MODE.has(t) || /^-[arlvi]+$/.test(t) || /^--(format|sort|contains|no-contains|merged|no-merged|points-at)=/.test(t);

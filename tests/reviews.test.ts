@@ -1570,7 +1570,7 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 	const { head, check, review, base } = repo();
 	review(report(head, "Yes", base));
 	const safe = [
-		"git branch", "git branch --show-current", "git branch -av", "git branch --list 'feat/*'", "git branch --contains=HEAD", "git branch --contains HEAD feat/a",
+		"git branch", "git branch --show-current", "git branch -av", "git branch --list feat/a", "git branch --contains=HEAD", "git branch --contains HEAD feat/a",
 		"git remote -v", "git remote get-url origin", "git --no-pager log -1", "git -C . status",
 	];
 	for (const step of safe) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
@@ -1580,6 +1580,12 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 		"git branch --set-upstream-to=origin/main", "git branch feat/x main", "git branch -dv x", "git branch --sort -x",
 		"git remote set-url origin /tmp/x", "git remote add x /tmp/x",
 		"git -c core.fsmonitor=x status", "git --config-env=core.pager=X log", "git --git-dir=x status", "git --work-tree=x status", "git --exec-path=x status", "git -C",
+		// Review round 1 of 0.38.2: git takes `-v` before a remote subcommand.
+		"git remote -v set-url origin /tmp/x", "git remote --verbose add x /tmp/x", "git remote -v update",
+		// A marked word reads one way to the guard and another to the shell: bash ends `$'…'` at a decoded NUL.
+		"git $\"branch\" --$'\\x00format='force --$'\\x00merged='quiet main feat/a", 'git $"status"', 'git $"-C" . status', "git branch --list $'\\x00'--no-list $'\\x00'-f feat/a HEAD",
+		// A word the shell expands may hand git other options (user ruling «Отказывать всегда»: a quoted glob too).
+		"git branch --list {--no-list,-f,feat/a,HEAD}", "git branch --format=$_", "git branch --list 'feat/*'", "git log `echo -1`", "git status @x,y",
 	];
 	for (const step of unsafe) {
 		const found = check(`${step} && gh pr create --fill`);

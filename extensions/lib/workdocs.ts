@@ -45,8 +45,8 @@ export function checkWorkDocs(
 	dirs = WORK_DOC_DIRS,
 	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
 ): GuardDecision | undefined {
-	// Also as other shells read it (otherReadings); the stricter decision wins. The readings share one budget for
-	// commits the guard can't place, and each repository's staged task files are read once.
+	// Also as other shells read it (otherReadings); the stricter decision wins. For commits the guard can't place, the
+	// readings share one budget and judgeCommit runs at most once per repository.
 	const budget: UnplacedBudget = { until: Date.now() + UNPLACED_BUDGET_MS, seen: new Map() };
 	return judgeReadings(command, (text) => workDocsGate(text, projectDir, dirs, workspace, budget));
 }
