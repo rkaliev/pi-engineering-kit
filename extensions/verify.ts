@@ -6,7 +6,8 @@
  * - Files edited since the last fully green run make the workspace "unverified": by `edit`/`write`, or by
  *   a shell call, found from a git working-tree fingerprint taken before and after it (lib/worktree.ts).
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence and its whole
- *   report (at most once per user message, so it can never loop); with no commands at all the user gets
+ *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
+ *   already followed up get one notice to the user instead); with no commands at all the user gets
  *   one notice per session instead. The same follow-up carries the approval
  *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
  *   files must be deleted).
@@ -61,6 +62,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let editCount = 0;
 	let judged = -1;
 	let noted = -1;
+	/** The verify gate's follow-up went out at the last agent_end: the next agent_end ends its turn. */
+	let answering = false;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -166,6 +169,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		notified = false;
 		editCount = 0;
 		judged = noted = -1;
+		answering = false;
 		skippedNoted = undefined;
 		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
@@ -179,6 +183,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("input", async (event) => {
 		if (event.source !== "extension") {
+			answering = false;
 			remindedThisPrompt = false;
 			approvalRemindedThisPrompt = false;
 			workDocsRemindedThisPrompt = false;
@@ -229,9 +234,11 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		// A follow-up goes out once per set of edits: edits an earlier agent_end judged (the agent ran no check, or
 		// reported a failing one) are told to the user once instead of following up every later prompt (Claude Code
 		// transcripts 2026-10..11: 40% of firings repeated the previous one's file list). The agent_end after the verify
-		// gate's own follow-up judges the edits made while answering it.
-		if (unverified && remindedThisPrompt) judged = editCount;
-		else if (unverified && judged === editCount) {
+		// gate's own follow-up judges the edits made while answering it. Without a UI no one sees a notice, so edits keep
+		// getting the follow-up once per user message, as before.
+		const followed = parts.length;
+		if (unverified && answering) judged = editCount;
+		else if (unverified && ctx.hasUI && judged === editCount) {
 			const { commands, error } = resolveVerifyCommands(ctx.cwd);
 			if (commands.length > 0 && !error && noted !== editCount) {
 				noted = editCount;
@@ -241,7 +248,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 				notified = true;
 				if (ctx.hasUI) ctx.ui.notify(error ? `Verify gate: edits weren't checked because the verification commands can't be read: ${error}` : 'Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
 			}
-		} else if (unverified) {
+		} else if (unverified && !remindedThisPrompt) {
 			judged = editCount;
 			const { commands, error } = resolveVerifyCommands(ctx.cwd);
 			if (error) {
@@ -262,6 +269,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 				if (ctx.hasUI) ctx.ui.notify('Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
 			}
 		}
+		answering = parts.length > followed;
 		const want = { approved: !approvalRemindedThisPrompt, finished: !workDocsRemindedThisPrompt };
 		// A repository's own folders only from the config the session started with (lib/scope.ts).
 		const dirs = workDocDirs(ctx) ?? WORK_DOC_DIRS;

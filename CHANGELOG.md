@@ -2,7 +2,7 @@
 
 ## 0.38.3
 
-- **The verify gate follows up once per set of edits.** Edits an earlier `agent_end` had already followed up or let finish (no check was run, or a failing one was reported) got a follow-up after every later message with the same file list. Now they get one notice to you per set of edits; a new edit gets a follow-up as before.
+- **The verify gate follows up once per set of edits.** Edits an earlier `agent_end` had already followed up or let finish (no check was run, or a failing one was reported) got a follow-up after every later message with the same file list. Now, with a UI, they get one notice to you per set of edits; a new edit gets a follow-up as before, and without a UI the follow-up stays once per message.
 
 ## 0.38.2
 

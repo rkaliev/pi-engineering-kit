@@ -639,6 +639,41 @@ test("verify sends a follow-up once per set of edits; later prompts without edit
 	assert.equal(sent.length, 2, "the agent_end that followed up judged the edits");
 });
 
+test("verify: only the turn the verify follow-up started judges its answer's edits", async () => {
+	// Review of pi 0.38.3: a later run in the same user message (another gate's follow-up, an extension's message) kept
+	// remindedThisPrompt set, so its edits were judged without ever getting a verify follow-up.
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "the follow-up's turn ends");
+	await emit("input", { text: "/onboard", source: "extension" }, c);
+	await emit("tool_result", { toolName: "write", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "still one verify follow-up per user message");
+	await emit("input", { text: "next", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "the extension run's edits were never followed up: they are now");
+});
+
+test("verify: without a UI the follow-up still comes once per user message", async () => {
+	// A notice reaches no one there, so the 0.38.2 behavior stays.
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	await emit("input", { text: "next", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2);
+});
+
 test("verify ignores edits outside the project and doc edits by default", async () => {
 	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
 	const { pi, emit, sent } = fakePi();
@@ -847,6 +882,10 @@ test("verify: a broken .pi/verify.json still gets a follow-up naming the error",
 	assert.equal(sent.length, 1);
 	assert.match(sent[0]!.message.content, /verify\.json/);
 	assert.match(sent[0]!.message.content, /JSON|parse|Unexpected|Expected/i);
+	await emit("input", { text: "next", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "judged edits get no second follow-up");
+	assert.equal(c.notes.filter((n) => /can't be read/.test(n)).length, 1, "the user is told the commands can't be read");
 });
 
 test("verify: without a UI, changes between tool calls aren't this process's", async () => {
