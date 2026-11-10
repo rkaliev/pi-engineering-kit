@@ -57,6 +57,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
 	let notified = false;
+	/** Counted edits so far; `judged` is the count an agent_end last judged, `noted` the one the user was told about. */
+	let editCount = 0;
+	let judged = -1;
+	let noted = -1;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -73,6 +77,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	const markEdited = (paths: string[], ctx: ExtensionContext) => {
 		unverified = verifyState.unverified = true;
+		editCount++;
 		greenSinceEdit = new Set();
 		edited = [...edited.filter((e) => !paths.includes(e)), ...paths].slice(-MAX_LISTED);
 		setStatus(ctx);
@@ -159,6 +164,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		workDocsRemindedThisPrompt = false;
 		edited = [];
 		notified = false;
+		editCount = 0;
+		judged = noted = -1;
 		skippedNoted = undefined;
 		pending = new Map();
 		// The baseline the verify gate compares shell commands against.
@@ -219,7 +226,23 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const parts: string[] = [];
 		// A change no command reported (the user's editor, a background process) is found here.
 		track(ctx);
-		if (unverified && !remindedThisPrompt) {
+		// A follow-up goes out once per set of edits: edits an earlier agent_end judged (the agent ran no check, or
+		// reported a failing one) are told to the user once instead of following up every later prompt (Claude Code
+		// transcripts 2026-10..11: 40% of firings repeated the previous one's file list). The agent_end after the verify
+		// gate's own follow-up judges the edits made while answering it.
+		if (unverified && remindedThisPrompt) judged = editCount;
+		else if (unverified && judged === editCount) {
+			const { commands, error } = resolveVerifyCommands(ctx.cwd);
+			if (commands.length > 0 && !error && noted !== editCount) {
+				noted = editCount;
+				const files = edited.length > 0 ? `: ${edited.join(", ")}` : "";
+				if (ctx.hasUI) ctx.ui.notify(`Verify gate: earlier edits are still unverified${files}. Ask for the checks to be run when you want them verified.`, "warning");
+			} else if ((commands.length === 0 || error) && !notified) {
+				notified = true;
+				if (ctx.hasUI) ctx.ui.notify(error ? `Verify gate: edits weren't checked because the verification commands can't be read: ${error}` : 'Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
+			}
+		} else if (unverified) {
+			judged = editCount;
 			const { commands, error } = resolveVerifyCommands(ctx.cwd);
 			if (error) {
 				remindedThisPrompt = true;

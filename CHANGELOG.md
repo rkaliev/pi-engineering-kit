@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.38.3
+
+- **The verify gate follows up once per set of edits.** Edits an earlier `agent_end` had already followed up or let finish (no check was run, or a failing one was reported) got a follow-up after every later message with the same file list. Now they get one notice to you per set of edits; a new edit gets a follow-up as before.
+
 ## 0.38.2
 
 - **Stricter safe steps before a landing.** `git branch` and `git remote` count as safe only in their listing forms, and git only with `-C`, `--no-pager` or `-P` before the subcommand. `git branch --forc` (a prefix git expands), `-d`, `--move`, `-u`, `git branch <name> <start>`, `git remote set-url` (also after `-v`), `git -c core.fsmonitor=…`, `--git-dir=` and any git step with a marked word or a word the shell may expand (`{…}`, `$_`, `<(…)`, PowerShell's `(…)`, a glob character, quoted or not) before `gh pr create` or a push are treated like any other unsafe step. Not checked yet: the options of the other read-only git subcommands (`fetch --upload-pack`, `log --output`, `--ext-diff`), a command substitution in a non-git safe step's arguments, and `git remote show`, which contacts the remote.

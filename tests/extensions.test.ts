@@ -595,6 +595,8 @@ test("verify reminds once after unverified edits and clears after a green run", 
 	assert.equal(sent.length, 1, "at most one reminder per user prompt");
 
 	await emit("input", { text: "go on", source: "interactive" }, c);
+	// An edit in this prompt: only edits no earlier agent_end judged get a follow-up.
+	await emit("tool_result", { toolName: "edit", input: { path: "a.ts" }, isError: false }, c);
 	await emit("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: false }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 2, "one of two checks is not proof");
@@ -604,6 +606,37 @@ test("verify reminds once after unverified edits and clears after a green run", 
 	assert.equal(result.details.ok, true);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 2, "green run clears the gate");
+});
+
+test("verify sends a follow-up once per set of edits; later prompts without edits only tell the user once", async () => {
+	// Claude Code transcripts (2026-10..11): 40% of verify-gate firings repeated the previous one's file list.
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "the edits get one follow-up");
+	// The agent answers the follow-up, edits again, and stops: the answer's edits are judged too.
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+
+	await emit("input", { text: "a question", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1, "a prompt without edits gets no follow-up");
+	assert.equal(c.notes.filter((n) => /earlier edits are still unverified.*src\/a\.ts/.test(n)).length, 1, "the user is told");
+	await emit("input", { text: "another", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(c.notes.filter((n) => /earlier edits are still unverified/.test(n)).length, 1, "once per set of edits");
+
+	await emit("input", { text: "fix it", source: "interactive" }, c);
+	await emit("tool_result", { toolName: "write", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "a new edit gets a follow-up again");
+	await emit("input", { text: "thanks", source: "interactive" }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "the agent_end that followed up judged the edits");
 });
 
 test("verify ignores edits outside the project and doc edits by default", async () => {
