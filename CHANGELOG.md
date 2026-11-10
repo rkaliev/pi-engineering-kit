@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.38.4
+
+- **No change in what the guard decides.** The comment scan is split from `blankQuoted` into its own function. The docs state the comment scan's PowerShell limit and the review gate's heredoc gaps. Tests pin a quoted or escaped `)` before a landing with its reason and several apostrophe comments in a row, and the review-gate tests remove every temp folder they make.
+
 ## 0.38.3
 
 - **The verify gate follows up once per set of edits.** Edits an earlier `agent_end` had already followed up or let finish (no check was run, or a failing one was reported) got a follow-up after every later message with the same file list. Now, with a UI, they get one notice to you per set of edits; a new edit gets a follow-up as before, and without a UI the follow-up stays once per message.
