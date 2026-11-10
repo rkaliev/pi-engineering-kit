@@ -2,7 +2,7 @@
 
 Status: design approved (2026-11-10)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
-Base: a943db2
+Base: 0489822
 Links: workspace docs/review-rounds/0.38.2/round4-findings.md and round5-findings.md (follow-ups); the Claude Code edition (eng-kit) does the same task on its own branch
 
 <details><summary>Original request</summary>
@@ -71,7 +71,66 @@ None.
 
 ## Plan
 
-None yet
+> Execute with the executing-plans skill. Only this section uses `- [ ]` checkboxes.
+
+**Goal:** the comment scanner gets one-purpose functions, docs state the scanner's and the review gate's limits exactly, and new tests pin the 0.38.2 fixes and clean up after themselves, with no change in any guard decision.
+**Architecture:** one private `scan(command, withComments)` in `extensions/lib/shell.ts` holds today's loop; `blankQuoted` and the new `quotedComments` are thin exports; `extensions/lib/patterns.ts` calls `quotedComments`. Everything else is tests and docs.
+**Stack / constraints:** Node ≥ 22.18 running `.ts` directly, `node:test`; no new dependencies; English in code and docs, Russian only in `docs/*.ru.md`; version 0.38.4.
+**Verification:** `npm test` and `npm run typecheck` (or the kit verify script).
+
+### Review focus
+1. A comment inside a `$'…'` or `"…"` quote, and a `#` glued to a word (`a#b`), must stay non-comments after the move — the existing guard.test.ts rows cover them; confirm they ran green in Task 1.
+2. `blankQuoted` with one argument must give byte-identical text for every caller (ten call sites) — covered by the full suite in Task 1.
+3. Three comments in a row, each with an apostrophe — Task 2.
+
+### Post-implementation
+- CHANGELOG.md: a 0.38.4 entry (no behavior change; scanner split, docs, tests) — Task 4.
+- docs/ARCHITECTURE.md and docs/ARCHITECTURE.ru.md: the review gate's known limits gain the heredoc gaps — Task 4.
+- Version 0.38.4 in `package.json`, `package-lock.json` (both entries), `templates/settings.json`, the `@v0.38.3` install lines in `README.md`, `docs/GETTING-STARTED.md` and `docs/GETTING-STARTED.ru.md` — Task 4.
+- What outlives this file: nothing new for docs/decisions; the private FRAMEWORK-SOURCES §11.53 in the workspace (not in this repo).
+
+Files: `extensions/lib/shell.ts` (scanner and its two exports) · `extensions/lib/patterns.ts` (caller) · `tests/guard.test.ts` (comment rows) · `tests/reviews.test.ts` (unsafe rows, temp folders, `quotedComments` unit test) · docs and version files above.
+
+### Task 1: one-purpose comment scanner
+
+**Files:** Modify `extensions/lib/shell.ts`, `extensions/lib/patterns.ts` · Test `tests/reviews.test.ts`
+**Interfaces:** Produces `blankQuoted(command: string): string` and `quotedComments(command: string): Array<{ start: number; end: number }>`
+
+- [ ] Write test `quotedComments finds each comment once, quotes inside it open nothing` next to the `blankQuoted` test: `quotedComments("ls # it's\n# it's\necho '#x'")` deep-equals `[{ start: 3, end: 9 }, { start: 10, end: 16 }]`, and `quotedComments("a#b \"# x\"")` equals `[]`; add a stub `export function quotedComments(): Array<{ start: number; end: number }> { return []; }` in `extensions/lib/shell.ts`
+- [ ] Run `node --test tests/reviews.test.ts` → expect FAIL: the first deep-equal gets `[]`
+- [ ] Move the loop into a private `scan(command: string, withComments: boolean): { text: string; comments: Array<{ start: number; end: number }> }`; `blankQuoted(command)` returns `scan(command, false).text` (drop its second parameter); `quotedComments(command)` returns `scan(command, true).comments`. Its doc comment (criterion 3): an unquoted `#` that starts a word (after any blank, an operator or a backtick) runs to the next `\n` and a quote inside it opens nothing; PowerShell ends a line at `\r` too, so there a comment may end sooner than this range; U+00A0 and `\r` count as blanks because PowerShell reads them so, which for bash only adds a reading (and so maybe a question). In `extensions/lib/patterns.ts` delete `comments()`, import `quotedComments` instead of `blankQuoted`, and call it in `withoutComments`
+- [ ] Run `npm test` and `npm run typecheck` → expect PASS
+- [ ] Mutation: in `scan`, let the comment branch record the comment without skipping its text (`out += ch` in place of the slice, no `i = stop - 1`) → expect guard.test.ts comment rows to FAIL; revert
+- [ ] Commit `refactor(guard): split the comment scan out of blankQuoted`
+
+### Task 2: comment rows pin the single-pass skip (criterion 5)
+
+**Files:** Test `tests/guard.test.ts`
+
+- [ ] Add `"# it's\n# it's\n# it's\nrm -rf ~"` to the block list that holds `"echo hi \r# it's\nrm -rf ~"` (the comment-hiding block rows)
+- [ ] Run `node --test tests/guard.test.ts` → expect PASS (behavior already right)
+- [ ] Mutation as in Task 1 (comment branch doesn't skip) → expect this row to FAIL with `block` expected; revert
+- [ ] Commit `test(guard): pin several apostrophe comments in a row`
+
+### Task 3: review-gate rows and temp folders (criteria 6–7)
+
+**Files:** Test `tests/reviews.test.ts`
+
+- [ ] Move `"git branch ')'"`, `"git branch \\)"` and `"git remote -v ')'"` from their own `for` line (comment «Final review of 0.38.2…») into the `unsafe` array under the same comment, and delete the old line, so they also match `/runs a step before it lands/`
+- [ ] Run `node --test tests/reviews.test.ts` → expect PASS; mutation: `const textParens = false` in `extensions/lib/reviews.ts` → expect the three rows to FAIL; revert
+- [ ] Replace each of the 18 direct `mkdtempSync(join(tmpdir(), "<prefix>"))` calls with `temp("<prefix>")`; delete a `t.after(() => rmSync(<dir>…))` only where `<dir>` now comes from `temp()`; drop `mkdtempSync` from the import if unused
+- [ ] Count `$TMPDIR` entries matching the file's prefixes before and after `node --test tests/reviews.test.ts` → expect no new entries; `grep -c "mkdtempSync(join(tmpdir" tests/reviews.test.ts` → expect 1 (inside `temp()`)
+- [ ] Run `npm test` → expect PASS
+- [ ] Commit `test(reviews): pin quoted parentheses with their reason; clean up every temp folder`
+
+### Task 4: docs and version
+
+**Files:** Modify `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE.ru.md` · `CHANGELOG.md` · `package.json`, `package-lock.json` (both entries), `templates/settings.json`, the `@v0.38.3` install lines in `README.md`, `docs/GETTING-STARTED.md` and `docs/GETTING-STARTED.ru.md`
+
+- [ ] docs/ARCHITECTURE.md "Known limits of the review gate" (and the matching sentence in ARCHITECTURE.ru.md): after the clause on a substitution's own quoting and PowerShell's syntax, add that heredoc bodies are found as written: a `<<` inside quotes after a body with an unmatched quote, and a heredoc with CRLF line ends that never closes, may hide the lines after them
+- [ ] Version 0.38.4 in `package.json`, `package-lock.json` (both entries), `templates/settings.json`, the `@v0.38.3` install lines in `README.md`, `docs/GETTING-STARTED.md` and `docs/GETTING-STARTED.ru.md`; CHANGELOG `## 0.38.4`: one bullet — no change in what the guard decides; the comment scanner is split from `blankQuoted`; the scanner's and the review gate's documented limits are precise; tests pin quoted parentheses and several comments in a row, and the review-gate tests remove their temp folders
+- [ ] Run `npm test` and `npm run typecheck` → expect PASS
+- [ ] Commit `chore(release): 0.38.4`
 
 ## Progress
 
