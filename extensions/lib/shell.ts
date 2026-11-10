@@ -29,7 +29,7 @@ function ansiQuoteAt(command: string, i: number): number {
 
 /** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
 export function blankQuoted(command: string): string {
-	return scan(command, false).text;
+	return scanQuotes(command, false).text;
 }
 
 /**
@@ -39,11 +39,14 @@ export function blankQuoted(command: string): string {
  * PowerShell reads them so; for bash that only adds a reading, and so maybe a question.
  */
 export function quotedComments(command: string): Array<{ start: number; end: number }> {
-	return scan(command, true).comments;
+	return scanQuotes(command, true).comments;
 }
 
-/** blankQuoted's text and, with `withComments`, the comments, skipped in the same pass. */
-function scan(command: string, withComments: boolean): { text: string; comments: Array<{ start: number; end: number }> } {
+/**
+ * The text and the comments in one pass. Without `withComments` the text is blankQuoted's; with it, comments are
+ * collected and their text is copied as written, so the text is no longer blankQuoted's.
+ */
+function scanQuotes(command: string, withComments: boolean): { text: string; comments: Array<{ start: number; end: number }> } {
 	const comments: Array<{ start: number; end: number }> = [];
 	let out = "";
 	let quote: string | null = null;

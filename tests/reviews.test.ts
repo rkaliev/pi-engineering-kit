@@ -1438,7 +1438,7 @@ test("every landing in one segment is judged: a merge after a commit in find -ex
 });
 
 // In PowerShell `\` is a plain character and `;` separates statements, so `cat x \; Set-Content …` writes.
-test("gate files: a segment holding a quoted operator word is never read-only", (t) => {
+test("gate files: a segment holding a quoted operator word is never read-only", () => {
 	const project = temp("gate-files-");
 	mkdirSync(join(project, ".claude"));
 	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
@@ -1473,6 +1473,7 @@ test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
 test("quotedComments finds each comment once, quotes inside it open nothing", () => {
 	assert.deepEqual(quotedComments("ls # it's\n# it's\necho '#x'"), [{ start: 3, end: 9 }, { start: 10, end: 16 }]);
 	assert.deepEqual(quotedComments('a#b "# x"'), []);
+	assert.deepEqual(quotedComments("echo $'it\\'s # x'"), [], "a # inside $'…' is no comment");
 });
 
 // A marked word that is a move without its mark (`$'\u0063d'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
