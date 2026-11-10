@@ -856,6 +856,10 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	assert.match(String(checkReviewerCommand("rm f", project, [], kit)?.reason), /reviewer is read-only/);
 	// Review round 3 of 0.38.1: another shell may split on other blanks or drop `\r` (otherReadings).
 	for (const split of ["git diff --out\rput=src/a.ts", "git diff\u00a0--output=x", "git log\u0085--ou=x"]) assert.equal(check(split), "block", JSON.stringify(split));
+	// Review round 4 of 0.38.1: bash reads one revision word here, so only the blank refusal stops PowerShell's `--output=x`.
+	assert.equal(check("git diff a..b\u00a0--output=x"), "block");
+	// Review round 3 of 0.38.2: a comment may hide the lines after it.
+	for (const commented of ["cat x # it's\ngit commit -qam y", "git status # note"]) assert.equal(check(commented), "block", JSON.stringify(commented));
 });
 
 test("a project reached through a symlink keeps its review records", () => {
@@ -1261,7 +1265,7 @@ test("a PR created inside a compound command is registered, even when a later st
 	notePr(dir, "t5", `PR=$(cd ${wk} && gh pr create --fill)`, dir, root);
 	settlePr(dir, "t5", true, root);
 	assert.deepEqual(open(), ["feat/a", "feat/n", "feat/m", "feat/k"], "a move inside an unquoted substitution names the PR's folder");
-	for (const [n, cmd] of [["j", (p: string) => `PR=$($"cd" ${p} && gh pr create --fill)`], ["i", (p: string) => `PR=$(cd $"${p}" && gh pr create --fill)`]] as const) {
+	for (const [n, cmd] of [["j", (p: string) => `PR=$($"cd" ${p} && gh pr create --fill)`], ["i", (p: string) => `PR=$(cd $"${p}" && gh pr create --fill)`], ["p", (p: string) => `PR=$(cd $"-P" ${p} && gh pr create --fill)`]] as const) {
 		const w = join(dir, ".worktrees", n);
 		git("worktree", "add", "-q", "-b", `feat/${n}`, w, "main");
 		commit({ [`src/${n}.ts`]: "export const x = 1;\n" }, w);
@@ -1556,12 +1560,66 @@ test("folder tracking reads a marked export or git path without its mark", () =>
 	assert.equal(segmentFolders('$"/usr/bin/git" -C b status', ws)[0]!.dir, join(ws, "b"));
 });
 
-test("the review gate reads a marked program-running or ref-moving option without its mark", () => {
+test("the review gate reads a marked rg --pre without its mark, and a marked git word is never safe", () => {
 	const { head, check, review, base } = repo();
 	review(report(head, "Yes", base));
 	assert.equal(check("rg x . && gh pr create --fill"), undefined, "a reviewed head lands after a read-only step");
 	assert.equal(action(check('rg $"--pre=sh" x . && gh pr create --fill')), "block");
 	assert.equal(action(check('git branch $"-f" main feat/a && git push origin main')), "block");
+});
+
+test("the review gate trusts only listing forms of git branch and remote, and only -C, --no-pager and -P, before a landing", () => {
+	const { head, check, review, base } = repo();
+	review(report(head, "Yes", base));
+	const safe = [
+		"git branch", "git branch --show-current", "git branch -av", "git branch --list feat/a", "git branch --contains=HEAD", "git branch --contains HEAD feat/a",
+		"git remote -v", "git remote get-url origin", "git --no-pager log -1", "git -C . status",
+		"git remote", "git remote --verbose", "git remote -v show origin", "git log --format=%H -1", "git diff HEAD~1", "git log origin/main..HEAD",
+	];
+	for (const step of safe) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
+	// Each of these moves or deletes a ref, changes the upstream or a remote's URL, or lets git run a program or read another repository.
+	const unsafe = [
+		"git branch --forc main feat/a", "git branch -d x", "git branch --delete x", "git branch --move x y", "git branch -u origin/main",
+		"git branch --set-upstream-to=origin/main", "git branch feat/x main", "git branch -dv x", "git branch --sort -x",
+		"git remote set-url origin /tmp/x", "git remote add x /tmp/x",
+		"git -c core.fsmonitor=x status", "git --config-env=core.pager=X log", "git --git-dir=x status", "git --work-tree=x status", "git --exec-path=x status", "git -C",
+		// Review round 1 of 0.38.2: git takes `-v` before a remote subcommand.
+		"git remote -v set-url origin /tmp/x", "git remote --verbose add x /tmp/x", "git remote -v update",
+		// A marked word reads one way to the guard and another to the shell: bash ends `$'…'` at a decoded NUL.
+		"git $\"branch\" --$'\\x00format='force --$'\\x00merged='quiet main feat/a", 'git $"status"', 'git $"-C" . status', "git branch --list $'\\x00'--no-list $'\\x00'-f feat/a HEAD",
+		// A word the shell expands may hand git other options (user ruling «Отказывать всегда»: a quoted glob too).
+		"git branch --list {--no-list,-f,feat/a,HEAD}", "git branch --format=$_", "git branch --list 'feat/*'", "git log `echo -1`", "git status @x,y",
+		"git branch --list 'feat/?'", "git branch --list '[f]eat/a'", "git status @x", "git status x,y", "git log --grep='a(b'",
+		// Review round 2 of 0.38.2: edge parentheses (process substitution, PowerShell's `(…)`) and an empty word.
+		"git diff <(git branch -f main feat/a)", "git status (git branch -f main feat/a)", "git -C '' --git-dir=x status",
+	];
+	for (const step of unsafe) {
+		const found = check(`${step} && gh pr create --fill`);
+		assert.equal(action(found), "block", step);
+		assert.match(String(found?.reason), /runs a step before it lands/, step);
+	}
+	// A comment ends the line for the shell: `--list` after `#` lists nothing.
+	assert.equal(action(check("git branch feat/x main # --list\ngh pr create --fill")), "block");
+	// User ruling «Под PowerShell — не безопасен»: the tokenizer reads bash, so under PowerShell no git step is safe.
+	assert.equal(action(check("git status && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
+	assert.equal(check("git status && gh pr create --fill"), undefined, "the same step from bash");
+	// Review round 3 of 0.38.2: PowerShell's quoting may hide a git call inside any step's arguments.
+	assert.equal(action(check("echo hi && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
+	// A subshell's own parentheses are no arguments.
+	for (const step of ["( git status )", "(git branch --show-current 2>/dev/null)"]) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
+	// Final review of 0.38.2: a quoted or escaped `)` is an argument, not a subshell's parenthesis.
+	for (const step of ["git branch ')'", "git branch \\)", "git remote -v ')'"]) assert.equal(action(check(`${step} && gh pr create --fill`)), "block", step);
+});
+
+test("a comment hides no landing from the review gate", () => {
+	const { head, check, review, base } = repo();
+	// Review round 2 of 0.38.2: the apostrophe in the comment opened a quote that swallowed the next line.
+	assert.equal(action(check("# Let's open the PR\ngh pr create --fill")), "block", "an unreviewed head");
+	review(report(head, "Yes", base));
+	assert.equal(check("# Let's open the PR\ngh pr create --fill"), undefined, "a reviewed head lands");
+	assert.equal(check("git status # it's fine"), undefined, "a comment alone lands nothing");
+	// Review round 3 of 0.38.2: a comment inside a quoted substitution.
+	assert.match(String(check('echo "$(true # it\'s\ngh pr create --fill\n)"')?.reason), /can't read where this command lands/);
 });
 
 test("the PR record reads PowerShell's split", () => {

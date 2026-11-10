@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, judgeReadings, otherReadings, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { commandName, foldPath, judgeReadings, otherReadings, withoutComments, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { bare, blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
@@ -516,6 +516,10 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 	// The same segments as below, each with the folder it runs in as far as the guard can place it.
 	const placed = options.workspace ? segmentFolders(command, cwd, options.powershell) : [];
 	let unsafeBefore = false;
+	// A parenthesis in quotes or after a backslash is an argument: the tokenizer drops its quotes, so only a command
+	// without one may drop a word that was a subshell's parenthesis alone (as Subshells tells them apart).
+	const count = (s: string) => s.match(/[()]/g)?.length ?? 0;
+	const textParens = count(command) !== count(blankQuoted(command).replace(/\\./g, ""));
 	for (const [index, { raw, alone, before }] of segmentsOf(tokenize(stripRedirects(command))).entries()) {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -525,7 +529,12 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		// none of it is a safe step, and a landing in it may follow a switch or a commit.
 		const several = tokens.some((t) => OPERATOR_WORD.test(t) || BARE_OPERATORS.has(t.replaceAll("\0", "")));
 		if (found.every((l) => l.kind === "commit")) {
-			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) || several) unsafeBefore = true;
+			// A subshell's own parentheses go, and a word that was only those parentheses (`( git status )`) with them.
+			const edges = raw
+				.map((t, i) => (i === 0 ? t.replace(/^\(+/, "") : t))
+				.map((t, i, all) => (i === all.length - 1 ? t.replace(/\)+$/, "") : t))
+				.filter((t, i) => t !== "" || raw[i] === "" || textParens);
+			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify, edges, options.powershell)) || several) unsafeBefore = true;
 			continue;
 		}
 		const dir = shell.dir;
@@ -604,7 +613,8 @@ function hiddenLanding(command: string): boolean {
 	// Each landing as many times as it appears: a landing-like line in a heredoc body, or a repeat of a visible
 	// landing, must not stand in for a hidden one.
 	const seen = landings(command);
-	return [...landings(text)].some(([l, n]) => n > (seen.get(l) ?? 0)) || [...quotedSubstitutions(text), ...substitutions].some((s) => landings(s).size > 0);
+	// A substitution is read without its comments too: an apostrophe in one would swallow its next lines.
+	return [...landings(text)].some(([l, n]) => n > (seen.get(l) ?? 0)) || [...quotedSubstitutions(text), ...substitutions].some((s) => landings(s).size > 0 || landings(withoutComments(s) ?? s).size > 0);
 }
 
 /** Folders named after any move word, `$(cd x`, `` `cd x`` and `(cd x` included, that exist from `cwd`. */
@@ -634,6 +644,8 @@ export function checkReviewerCommand(command: string, cwd: string, verify: strin
 	if (/[\\$`(){}<*?[]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces, `<` or a glob");
 	// PowerShell splits words on other blanks, and bash with `igncr` drops `\r` (otherReadings): the allowlist reads one split.
 	if (/[^\S \t\n]|\u0085/u.test(command)) return refuse("a blank other than a space, tab or line end");
+	// A comment may hide the lines after it from the allowlist (an apostrophe in it opens a quote the shell never sees).
+	if (withoutComments(command) !== undefined) return refuse("a comment");
 	const bare = command.replace(/(^|\s)(?:2>&1|2>\/dev\/null|&?>\/dev\/null)(?=\s|$)/g, " ");
 	if (bare.includes(">") || /\btee\b/.test(bare)) return refuse("a writing redirection or tee");
 	const all = tokenize(bare);
@@ -792,18 +804,61 @@ function childConfig(projectDir: string, path: string, guardConfig: string): boo
 	return slash > 0 && !rel.startsWith("../") && foldPath(rel.slice(slash + 1)) === guardConfig;
 }
 
-function isSafe(tokens: string[], verify: string[]): boolean {
+/** A mark (`\0`, a word bash and zsh may read differently) or a character the shell may expand into other words: a
+ * variable or substitution, braces, a glob, and PowerShell's `,` and `@`; quoted too, since the tokenizer drops the
+ * quotes. A comment is read away by withoutComments. */
+const SHELL_EXPANDS = /[\0$`(){}*?[\],@]/;
+/** `git branch` options that only list branches; git also accepts unambiguous prefixes (`--forc`), which are refused. */
+const BRANCH_LIST_OPTIONS = new Set(["-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose", "--show-current", "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case"]);
+/** `git branch` options that take a commit or pattern: with one of them, the other words are its operands, not a new branch. */
+const BRANCH_LIST_MODE = new Set(["-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"]);
+
+/**
+ * A git call whose global options and `branch`/`remote` forms neither move a ref nor change where a push goes. An
+ * allowlist: only `-C <dir>`, `--no-pager` and `-P` before the subcommand (`-c`, `--config-env`, `--git-dir`… may run
+ * a program or read another repository), `git branch` and `git remote` only in their listing forms, `fetch` with no
+ * `:` in any word, and the other SAFE_GIT subcommands, whose options are not checked. A marked word or
+ * one the shell may expand is never safe: the guard can't tell which arguments git gets.
+ */
+function safeGit(words: string[]): boolean {
+	if (words.some((t) => SHELL_EXPANDS.test(t))) return false;
+	let i = 1;
+	for (; i < words.length && words[i]!.startsWith("-"); i++) {
+		if (words[i] === "-C") {
+			if (++i >= words.length) return false;
+		} else if (words[i] !== "--no-pager" && words[i] !== "-P") return false;
+	}
+	const sub = words[i] ?? "";
+	const rest = words.slice(i + 1);
+	if (sub === "fetch") return !rest.some((t) => t.includes(":"));
+	if (sub === "remote") {
+		// git takes `-v` between `remote` and any subcommand (`git remote -v set-url …`).
+		const verb = rest.find((t) => t !== "-v" && t !== "--verbose");
+		return verb === undefined || verb === "get-url" || verb === "show";
+	}
+	if (sub === "branch") {
+		const options = rest.filter((t) => t.startsWith("-"));
+		const listing = (t: string) => BRANCH_LIST_OPTIONS.has(t) || BRANCH_LIST_MODE.has(t) || /^-[arlvi]+$/.test(t) || /^--(format|sort|contains|no-contains|merged|no-merged|points-at)=/.test(t);
+		if (!options.every(listing)) return false;
+		return options.length === rest.length || options.some((t) => BRANCH_LIST_MODE.has(t.split("=")[0]!) || /^-[arvi]*l/.test(t));
+	}
+	return SAFE_GIT.has(sub);
+}
+
+/**
+ * Whether a segment may run before a landing. `raw` is the segment's words with only a subshell's opening `(` and closing
+ * `)` removed, so an edge parenthesis in an argument (`<(…)`, PowerShell's `(…)`) and an empty word still count. Under
+ * PowerShell, whose syntax the tokenizer doesn't read, no step is safe (user rulings after 0.38.2 review rounds 2 and 3).
+ */
+function isSafe(tokens: string[], verify: string[], raw: string[] = tokens, powershell = false): boolean {
+	// PowerShell's quoting (`\` is no escape) may hide another statement in any step's arguments.
+	if (powershell) return false;
 	// `rg --pre <program>` runs that program on every file it searches.
 	// A marked option (`$"--pre=…"`) is read without its mark too.
 	if (tokens[0] === "rg" && tokens.some((t) => bare(t).startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
-	if (tokens[0] === "git") {
-		const sub = tokens.slice(1).find((t, i, all) => !t.startsWith("-") && all[i - 1] !== "-C" && all[i - 1] !== "-c") ?? "";
-		if (sub === "fetch") return !tokens.some((t) => t.includes(":"));
-		if (sub === "branch") return !tokens.some((t) => /^-[a-zA-Z]*[fDmMcC]/.test(bare(t)) || bare(t) === "--force");
-		return SAFE_GIT.has(sub);
-	}
+	if (tokens[0] === "git") return safeGit(raw);
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
 }
 

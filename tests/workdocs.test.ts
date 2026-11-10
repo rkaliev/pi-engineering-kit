@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
@@ -184,6 +184,8 @@ test("in a workspace, a landing is judged in the repository it lands in", () => 
 	assert.equal(act("git -C a push origin feat/x:main"), "block");
 	assert.equal(act("gh pr create", join(root, "a")), "block", "a command started inside the repository");
 	assert.equal(act("cd b && gh pr create"), "allow");
+	// Review round 2 of 0.38.2: an apostrophe in a comment must not hide the landing on the next line.
+	assert.equal(act("# Let's open the PR\ncd a && gh pr create"), "block");
 });
 
 test("in a workspace, a repository's workDocs folders decide its task files", () => {
@@ -284,6 +286,20 @@ test("in a workspace, an unplaced commit is judged within a deadline, and a slow
 		const started = Date.now();
 		assert.equal(check("cd $D && git commit -m x")?.action, "block");
 		assert.ok(Date.now() - started < 3900, "within the deadline, not git's 4 s hangs");
+	} finally {
+		slow.restore();
+	}
+});
+
+test("in a workspace, an unplaced commit spends one budget across the readings and asks git once per repository", () => {
+	const { root, check } = workspace();
+	// Review round 4 of 0.38.1: with `\r` the command has three readings; a 2 s git each time was ~6 s against the hook's 10 s.
+	const slow = slowGit(realpathSync(join(root, "a")), "diff", 2);
+	try {
+		const started = Date.now();
+		assert.equal(check("cd $D && git commit -m x\r"), undefined, "nothing is staged");
+		assert.ok(Date.now() - started < 3500, `one 3 s budget, not one per reading: ${Date.now() - started} ms`);
+		assert.equal(readFileSync(slow.log, "utf8").split("\n").filter((l) => l.includes("diff --cached")).length, 1, "a repository's staged task files are read once");
 	} finally {
 		slow.restore();
 	}

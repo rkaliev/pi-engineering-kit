@@ -81,6 +81,40 @@ test("&> and &>> are redirections, not a background &: they don't hide what decl
 	assert.equal(action("declare >|log -x GIT_DIR=/x; git status"), "confirm", ">| is a redirection, not a pipe");
 });
 
+test("a comment hides nothing: the command is also read without its comments", () => {
+	// Review round 2 of 0.38.2: the apostrophe in the comment opened a quote that swallowed the next line.
+	assert.equal(action("# Let's clean up\nrm -rf ~"), "block");
+	assert.equal(action("echo hi # it's done\ngit push --force"), "block");
+	assert.equal(action("echo 'a # b' && ls"), "allow", "a quoted # is no comment");
+	// Review round 3 of 0.38.2: quotes as the tokenizer reads them, a `#` after any blank or a backtick, heredoc bodies.
+	for (const cmd of [
+		"echo \"it's\" # it's\nrm -rf ~", "echo $'it\\'s' # it's\nrm -rf ~", "echo \\$'a\\' # it's\nrm -rf ~", "echo $\\\n'\\'' # it's\nrm -rf ~",
+		"echo hi \r# it's\nrm -rf ~", "echo hi\u00a0# it's\nrm -rf ~", "echo `# it's\nrm -rf ~\n`",
+		"cat > /tmp/n.md <<'EOF'\nit's\nEOF\nrm -rf ~",
+	]) {
+		assert.equal(action(cmd), "block", JSON.stringify(cmd));
+	}
+});
+
+test("a long heredoc full of comment lines is read in linear time", () => {
+	// Final review of 0.38.2: removing one comment at a time rescanned the whole command (2.4 s for this one, per reading),
+	// and a hook past its timeout lets the call through.
+	const body = Array.from({ length: 6000 }, (_, i) => (i % 3 === 0 ? `# step ${i}: configure the job` : `  key${i}: value${i}`)).join("\n");
+	const started = Date.now();
+	assert.equal(action(`cat > ci.yml <<'EOF'\n${body}\nEOF`), "allow");
+	assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+});
+
+test("a comment that holds a quote before more lines asks; other comments don't", () => {
+	// User ruling after 0.38.2 review round 3, «Закрыто по умолчанию»: the guard can't be sure which lines such a command runs.
+	assert.equal(action("echo ok # it's fine\nls"), "confirm");
+	assert.equal(action("echo ok\u00a0# it's fine\nls"), "confirm", "PowerShell reads U+00A0 as a blank");
+	assert.equal(action("echo ok # fine\nls"), "allow");
+	assert.equal(action("ls # it's the last line"), "allow");
+	assert.equal(action("git commit -m \"fix #12, it's done\"\nls"), "allow", "a # inside quotes is no comment");
+	assert.equal(action("python3 - <<'EOF'\n# it's a body line\nprint(1)\nEOF"), "allow", "a heredoc body is not a comment");
+});
+
 test("blocks force push but allows --force-with-lease with confirmation", () => {
 	assert.equal(action("git push --force"), "block");
 	assert.equal(action("git push \\\n  --force origin main"), "block", "a line continuation joins the command");

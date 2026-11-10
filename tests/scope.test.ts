@@ -20,10 +20,10 @@ function temp(prefix: string): string {
 }
 
 
-/** A folder outside git holding repositories `a` and `b`, each root's config taken from `configs` (by `""`, `a`, `b`). */
-function workspace(configs: Record<string, GuardConfig> = {}) {
+/** A folder outside git holding the repositories `repos`, each root's config taken from `configs` (by `""` or the repository's name). */
+function workspace(configs: Record<string, GuardConfig> = {}, repos = ["a", "b"]) {
 	const ws = temp("scope-");
-	for (const r of ["a", "b"]) mkdirSync(join(ws, r, ".git"), { recursive: true });
+	for (const r of repos) mkdirSync(join(ws, r, ".git"), { recursive: true });
 	const scope = guardScope(ws, (root) => configs[root === ws ? "" : root.slice(ws.length + 1)] ?? {}, ".pi/guard.json");
 	const command = (cmd: string, powershell = false) => checkCommand(cmd, ws, scopedConfig(cmd, ws, scope, powershell), ws).action;
 	return { ws, scope, command };
@@ -63,6 +63,13 @@ test("scopedConfig: a repository's allow applies only when the whole command run
 	assert.equal(workspace({ "": { allow: ["npm run deploy"] } }).command("cd b && npm run deploy"), "allow");
 	// Review round 3 of 0.38.1: bash with `igncr` reads `c\rd .\r.` as `cd ..`, so the deploy may run outside `a`.
 	assert.equal(command("cd a && c\rd .\r. && npm run deploy"), "confirm", "every reading must run in the repository");
+});
+
+test("scopedConfig: every reading adds the rules of the repositories it touches", () => {
+	// Review round 4 of 0.38.1: bash with `igncr` reads `c\rd ../we\rb` as `cd ../web`, so `make release` may run in `web`.
+	assert.equal(workspace({ web: { block: ["make release"] } }, ["api", "web"]).command("cd api && c\rd ../we\rb && make release"), "block");
+	// `c\rd $X` moves only in the igncr reading, and to a folder the guard can't follow: every repository's rules.
+	assert.equal(workspace({ a: { block: ["make release"] } }).command("cd b && c\rd $X && make release"), "block");
 });
 
 test("strictest: block, then confirm, then allow; a tie keeps the first", () => {

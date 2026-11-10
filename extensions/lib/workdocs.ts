@@ -45,15 +45,21 @@ export function checkWorkDocs(
 	dirs = WORK_DOC_DIRS,
 	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
 ): GuardDecision | undefined {
-	// Also as other shells read it (otherReadings); the stricter decision wins.
-	return judgeReadings(command, (text) => workDocsGate(text, projectDir, dirs, workspace));
+	// Also as other shells read it (otherReadings); the stricter decision wins. For commits the guard can't place, the
+	// readings share one budget and judgeCommit runs at most once per repository.
+	const budget: UnplacedBudget = { until: Date.now() + UNPLACED_BUDGET_MS, seen: new Map() };
+	return judgeReadings(command, (text) => workDocsGate(text, projectDir, dirs, workspace, budget));
 }
+
+/** The deadline for commits the guard can't place, and what judgeCommit found in each repository so far. */
+type UnplacedBudget = { until: number; seen: Map<string, GuardDecision | "late" | undefined> };
 
 function workDocsGate(
 	command: string,
 	projectDir: string,
 	dirs: string[],
-	workspace?: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] },
+	workspace: { cwd: string; repos: string[]; dirsFor: (repo: string) => string[]; powershell?: boolean; slow?: string[] } | undefined,
+	budget: UnplacedBudget,
 ): GuardDecision | undefined {
 	if (!workspace) return judge(splitSegments(tokenize(command)).flatMap(allLandings), projectDir, dirs);
 	const folders = workspace.repos.map((name) => join(projectDir, name));
@@ -72,12 +78,15 @@ function workDocsGate(
 			// A commit lands where it runs: one that can't be placed is judged in every repository, within one deadline.
 			if (l.kind === "commit" && dir === undefined) {
 				if (!watched) continue;
-				const until = Date.now() + UNPLACED_BUDGET_MS;
 				for (const repo of folders) {
 					const own = workspace.dirsFor(repo);
 					if (own.length === 0) continue;
-					if ((workspace.slow ?? []).includes(basename(repo)) || Date.now() >= until) return cantTell;
-					const found = judgeCommit(repo, own, until);
+					if ((workspace.slow ?? []).includes(basename(repo))) return cantTell;
+					if (!budget.seen.has(repo)) {
+						if (Date.now() >= budget.until) return cantTell;
+						budget.seen.set(repo, judgeCommit(repo, own, budget.until));
+					}
+					const found = budget.seen.get(repo);
 					if (found === "late") return cantTell;
 					if (found) return found;
 				}
