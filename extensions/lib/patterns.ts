@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { projectRepos, repoOf } from "./repos.ts";
+import { blankQuoted, heredocs } from "./shell.ts";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
@@ -93,59 +94,60 @@ export function wideBlankReading(command: string): string | undefined {
 
 /**
  * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), with every `\r` dropped, as
- * bash with `igncr` (Cygwin, MSYS) does, and without its comments (withoutComments). The guard and the gates judge each
- * and keep the stricter decision (user rulings after 0.38.1 review rounds 1 and 2 and 0.38.2 review round 2). The first
- * two differ from the command and from each other: the PowerShell reading replaces at least one blank and keeps no
- * `\r`, and the igncr reading drops a `\r` and keeps every other blank.
+ * bash with `igncr` (Cygwin, MSYS) does, without its heredoc bodies (the lines the shell itself runs), and each of
+ * those without its comments (withoutComments). The guard and the gates judge each and keep the stricter decision
+ * (user rulings after 0.38.1 review rounds 1 and 2 and 0.38.2 review rounds 2 and 3).
  */
 export function otherReadings(command: string): string[] {
 	const wide = wideBlankReading(command);
-	const readings = [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
-	const uncommented = withoutComments(command);
-	return uncommented === undefined || readings.includes(uncommented) ? readings : [...readings, uncommented];
+	const igncr = command.includes("\r") ? command.replaceAll("\r", "") : undefined;
+	const body = heredocs(command).text;
+	const lines = body === command ? undefined : body;
+	const readings = [wide, igncr, lines].filter((r): r is string => r !== undefined);
+	const uncommented = [command, ...readings].map(withoutComments).filter((r): r is string => r !== undefined);
+	return [...readings, ...uncommented];
 }
 
 /**
- * The command without its comments, as bash and zsh read it: an unquoted `#` that starts a word ends the line.
- * Undefined when it has none. The tokenizer has no comment rule, so an apostrophe in a comment (`# it's`) opens a quote
- * that would swallow the lines after it; this reading shows them.
+ * Where each comment is, as the tokenizer's quote model (blankQuoted) reads the command: an unquoted `#` that starts a
+ * word, after any blank (PowerShell and bash with `igncr` read `\r` and U+00A0 as one), an operator or a backtick,
+ * up to the end of its line. Only the first is exact: a quote inside it may hide the rest from the model.
+ */
+function firstComment(command: string): { start: number; end: number } | undefined {
+	const text = blankQuoted(command);
+	for (let i = 0; i < text.length; i++) {
+		if (text[i] !== "#" || (i > 0 && !/[\s\u0085;&|()<>`]/u.test(text[i - 1]!))) continue;
+		const end = command.indexOf("\n", i);
+		return { start: i, end: end === -1 ? command.length : end };
+	}
+	return undefined;
+}
+
+/**
+ * The command without its comments, each removed in turn. Undefined when it has none. The tokenizer has no comment
+ * rule, so an apostrophe in a comment (`# it's`) opens a quote that would swallow the lines after it; this reading
+ * shows them.
  */
 export function withoutComments(command: string): string | undefined {
-	let out = "";
-	let quote: "'" | "$'" | '"' | undefined;
-	let found = false;
-	for (let i = 0; i < command.length; i++) {
-		const c = command[i]!;
-		if (quote === "'") {
-			if (c === "'") quote = undefined;
-			out += c;
-			continue;
-		}
-		// A backslash escapes the next character outside quotes, in double quotes and in `$'…'`.
-		if (c === "\\") {
-			out += c + (command[i + 1] ?? "");
-			i++;
-			continue;
-		}
-		if (quote !== undefined) {
-			if (c === quote.at(-1)) quote = undefined;
-			out += c;
-			continue;
-		}
-		if (c === "'" || c === '"') {
-			quote = c === "'" && command[i - 1] === "$" ? "$'" : c;
-			out += c;
-			continue;
-		}
-		if (c === "#" && (i === 0 || /[ \t\n;&|()<>]/.test(command[i - 1]!))) {
-			found = true;
-			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
-			continue;
-		}
-		out += c;
-	}
-	return found ? out : undefined;
+	let text = command;
+	for (let found = firstComment(text); found; found = firstComment(text)) text = text.slice(0, found.start) + text.slice(found.end);
+	return text === command ? undefined : text;
 }
+
+/**
+ * A comment that holds a quote or backtick, with more of the command after its line: the guard's quote model and the
+ * shell's may part there, so it can't be sure which lines run (user ruling after 0.38.2 review round 3, «Закрыто по
+ * умолчанию»). Heredoc bodies are data here: their lines are no comments.
+ */
+export function commentHidesLines(command: string): boolean {
+	let text = heredocs(command).text;
+	for (let found = firstComment(text); found; found = firstComment(text)) {
+		if (/['"`]/.test(text.slice(found.start, found.end)) && text.slice(found.end).trim() !== "") return true;
+		text = text.slice(0, found.start) + text.slice(found.end);
+	}
+	return false;
+}
+
 
 /** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
 export function judgeReadings<D extends GuardDecision | undefined>(command: string, judge: (text: string) => D): D {
@@ -176,8 +178,14 @@ export function checkCommand(
 	env: NodeJS.ProcessEnv = process.env,
 	judgeWrite: (target: string) => GuardDecision = (target) => checkPath("write", target, cwd, config),
 ): GuardDecision {
-	return judgeReadings(command, (text) => judgeCommand(text, cwd, config, dir, env, judgeWrite));
+	const decision = judgeReadings(command, (text) => judgeCommand(text, cwd, config, dir, env, judgeWrite));
+	return commentHidesLines(command) ? stricterOf(decision, COMMENT_CONFIRM) : decision;
 }
+
+const COMMENT_CONFIRM: GuardDecision = {
+	action: "confirm",
+	reason: "A comment in this command holds a quote or backtick and more lines follow it, so the guard can't be sure which lines run. Remove the quote from the comment, or put the comment on the last line.",
+};
 
 function judgeCommand(
 	command: string,

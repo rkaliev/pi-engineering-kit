@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, judgeReadings, otherReadings, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { commandName, foldPath, judgeReadings, otherReadings, withoutComments, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
 import { bare, blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
@@ -525,7 +525,11 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		// none of it is a safe step, and a landing in it may follow a switch or a commit.
 		const several = tokens.some((t) => OPERATOR_WORD.test(t) || BARE_OPERATORS.has(t.replaceAll("\0", "")));
 		if (found.every((l) => l.kind === "commit")) {
-			const edges = raw.map((t, i) => (i === 0 ? t.replace(/^\(+/, "") : t)).map((t, i, all) => (i === all.length - 1 ? t.replace(/\)+$/, "") : t));
+			// A subshell's own parentheses go, and a word that was only those parentheses (`( git status )`) with them.
+			const edges = raw
+				.map((t, i) => (i === 0 ? t.replace(/^\(+/, "") : t))
+				.map((t, i, all) => (i === all.length - 1 ? t.replace(/\)+$/, "") : t))
+				.filter((t, i) => t !== "" || raw[i] === "");
 			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify, edges, options.powershell)) || several) unsafeBefore = true;
 			continue;
 		}
@@ -605,7 +609,8 @@ function hiddenLanding(command: string): boolean {
 	// Each landing as many times as it appears: a landing-like line in a heredoc body, or a repeat of a visible
 	// landing, must not stand in for a hidden one.
 	const seen = landings(command);
-	return [...landings(text)].some(([l, n]) => n > (seen.get(l) ?? 0)) || [...quotedSubstitutions(text), ...substitutions].some((s) => landings(s).size > 0);
+	// A substitution is read without its comments too: an apostrophe in one would swallow its next lines.
+	return [...landings(text)].some(([l, n]) => n > (seen.get(l) ?? 0)) || [...quotedSubstitutions(text), ...substitutions].some((s) => landings(s).size > 0 || landings(withoutComments(s) ?? s).size > 0);
 }
 
 /** Folders named after any move word, `$(cd x`, `` `cd x`` and `(cd x` included, that exist from `cwd`. */
@@ -635,6 +640,8 @@ export function checkReviewerCommand(command: string, cwd: string, verify: strin
 	if (/[\\$`(){}<*?[]/.test(command)) return refuse("a backslash, `$`, a backtick, parentheses, braces, `<` or a glob");
 	// PowerShell splits words on other blanks, and bash with `igncr` drops `\r` (otherReadings): the allowlist reads one split.
 	if (/[^\S \t\n]|\u0085/u.test(command)) return refuse("a blank other than a space, tab or line end");
+	// A comment may hide the lines after it from the allowlist (an apostrophe in it opens a quote the shell never sees).
+	if (withoutComments(command) !== undefined) return refuse("a comment");
 	const bare = command.replace(/(^|\s)(?:2>&1|2>\/dev\/null|&?>\/dev\/null)(?=\s|$)/g, " ");
 	if (bare.includes(">") || /\btee\b/.test(bare)) return refuse("a writing redirection or tee");
 	const all = tokenize(bare);
@@ -837,15 +844,17 @@ function safeGit(words: string[]): boolean {
 /**
  * Whether a segment may run before a landing. `raw` is the segment's words with only a subshell's opening `(` and closing
  * `)` removed, so an edge parenthesis in an argument (`<(…)`, PowerShell's `(…)`) and an empty word still count. Under
- * PowerShell, whose syntax the tokenizer doesn't read, no git step is safe (user ruling after 0.38.2 review round 2).
+ * PowerShell, whose syntax the tokenizer doesn't read, no step is safe (user rulings after 0.38.2 review rounds 2 and 3).
  */
 function isSafe(tokens: string[], verify: string[], raw: string[] = tokens, powershell = false): boolean {
+	// PowerShell's quoting (`\` is no escape) may hide another statement in any step's arguments.
+	if (powershell) return false;
 	// `rg --pre <program>` runs that program on every file it searches.
 	// A marked option (`$"--pre=…"`) is read without its mark too.
 	if (tokens[0] === "rg" && tokens.some((t) => bare(t).startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
-	if (tokens[0] === "git") return !powershell && safeGit(raw);
+	if (tokens[0] === "git") return safeGit(raw);
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
 }
 

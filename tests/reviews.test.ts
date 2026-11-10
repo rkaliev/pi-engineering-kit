@@ -858,6 +858,8 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 	for (const split of ["git diff --out\rput=src/a.ts", "git diff\u00a0--output=x", "git log\u0085--ou=x"]) assert.equal(check(split), "block", JSON.stringify(split));
 	// Review round 4 of 0.38.1: bash reads one revision word here, so only the blank refusal stops PowerShell's `--output=x`.
 	assert.equal(check("git diff a..b\u00a0--output=x"), "block");
+	// Review round 3 of 0.38.2: a comment may hide the lines after it.
+	for (const commented of ["cat x # it's\ngit commit -qam y", "git status # note"]) assert.equal(check(commented), "block", JSON.stringify(commented));
 });
 
 test("a project reached through a symlink keeps its review records", () => {
@@ -1601,6 +1603,10 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 	// User ruling «Под PowerShell — не безопасен»: the tokenizer reads bash, so under PowerShell no git step is safe.
 	assert.equal(action(check("git status && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
 	assert.equal(check("git status && gh pr create --fill"), undefined, "the same step from bash");
+	// Review round 3 of 0.38.2: PowerShell's quoting may hide a git call inside any step's arguments.
+	assert.equal(action(check("echo hi && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
+	// A subshell's own parentheses are no arguments.
+	for (const step of ["( git status )", "(git branch --show-current 2>/dev/null)"]) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
 });
 
 test("a comment hides no landing from the review gate", () => {
@@ -1610,6 +1616,8 @@ test("a comment hides no landing from the review gate", () => {
 	review(report(head, "Yes", base));
 	assert.equal(check("# Let's open the PR\ngh pr create --fill"), undefined, "a reviewed head lands");
 	assert.equal(check("git status # it's fine"), undefined, "a comment alone lands nothing");
+	// Review round 3 of 0.38.2: a comment inside a quoted substitution.
+	assert.match(String(check('echo "$(true # it\'s\ngh pr create --fill\n)"')?.reason), /can't read where this command lands/);
 });
 
 test("the PR record reads PowerShell's split", () => {
