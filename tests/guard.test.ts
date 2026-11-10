@@ -81,6 +81,13 @@ test("&> and &>> are redirections, not a background &: they don't hide what decl
 	assert.equal(action("declare >|log -x GIT_DIR=/x; git status"), "confirm", ">| is a redirection, not a pipe");
 });
 
+test("a comment hides nothing: the command is also read without its comments", () => {
+	// Review round 2 of 0.38.2: the apostrophe in the comment opened a quote that swallowed the next line.
+	assert.equal(action("# Let's clean up\nrm -rf ~"), "block");
+	assert.equal(action("echo hi # it's done\ngit push --force"), "block");
+	assert.equal(action("echo 'a # b' && ls"), "allow", "a quoted # is no comment");
+});
+
 test("blocks force push but allows --force-with-lease with confirmation", () => {
 	assert.equal(action("git push --force"), "block");
 	assert.equal(action("git push \\\n  --force origin main"), "block", "a line continuation joins the command");

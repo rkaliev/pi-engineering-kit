@@ -1558,7 +1558,7 @@ test("folder tracking reads a marked export or git path without its mark", () =>
 	assert.equal(segmentFolders('$"/usr/bin/git" -C b status', ws)[0]!.dir, join(ws, "b"));
 });
 
-test("the review gate reads a marked program-running or ref-moving option without its mark", () => {
+test("the review gate reads a marked rg --pre without its mark, and a marked git word is never safe", () => {
 	const { head, check, review, base } = repo();
 	review(report(head, "Yes", base));
 	assert.equal(check("rg x . && gh pr create --fill"), undefined, "a reviewed head lands after a read-only step");
@@ -1572,6 +1572,7 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 	const safe = [
 		"git branch", "git branch --show-current", "git branch -av", "git branch --list feat/a", "git branch --contains=HEAD", "git branch --contains HEAD feat/a",
 		"git remote -v", "git remote get-url origin", "git --no-pager log -1", "git -C . status",
+		"git remote", "git remote --verbose", "git remote -v show origin", "git log --format=%H -1", "git diff HEAD~1", "git log origin/main..HEAD",
 	];
 	for (const step of safe) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
 	// Each of these moves or deletes a ref, changes the upstream or a remote's URL, or lets git run a program or read another repository.
@@ -1586,12 +1587,29 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 		"git $\"branch\" --$'\\x00format='force --$'\\x00merged='quiet main feat/a", 'git $"status"', 'git $"-C" . status', "git branch --list $'\\x00'--no-list $'\\x00'-f feat/a HEAD",
 		// A word the shell expands may hand git other options (user ruling «Отказывать всегда»: a quoted glob too).
 		"git branch --list {--no-list,-f,feat/a,HEAD}", "git branch --format=$_", "git branch --list 'feat/*'", "git log `echo -1`", "git status @x,y",
+		"git branch --list 'feat/?'", "git branch --list '[f]eat/a'", "git status @x", "git status x,y", "git log --grep='a(b'",
+		// Review round 2 of 0.38.2: edge parentheses (process substitution, PowerShell's `(…)`) and an empty word.
+		"git diff <(git branch -f main feat/a)", "git status (git branch -f main feat/a)", "git -C '' --git-dir=x status",
 	];
 	for (const step of unsafe) {
 		const found = check(`${step} && gh pr create --fill`);
 		assert.equal(action(found), "block", step);
 		assert.match(String(found?.reason), /runs a step before it lands/, step);
 	}
+	// A comment ends the line for the shell: `--list` after `#` lists nothing.
+	assert.equal(action(check("git branch feat/x main # --list\ngh pr create --fill")), "block");
+	// User ruling «Под PowerShell — не безопасен»: the tokenizer reads bash, so under PowerShell no git step is safe.
+	assert.equal(action(check("git status && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
+	assert.equal(check("git status && gh pr create --fill"), undefined, "the same step from bash");
+});
+
+test("a comment hides no landing from the review gate", () => {
+	const { head, check, review, base } = repo();
+	// Review round 2 of 0.38.2: the apostrophe in the comment opened a quote that swallowed the next line.
+	assert.equal(action(check("# Let's open the PR\ngh pr create --fill")), "block", "an unreviewed head");
+	review(report(head, "Yes", base));
+	assert.equal(check("# Let's open the PR\ngh pr create --fill"), undefined, "a reviewed head lands");
+	assert.equal(check("git status # it's fine"), undefined, "a comment alone lands nothing");
 });
 
 test("the PR record reads PowerShell's split", () => {

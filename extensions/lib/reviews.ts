@@ -525,7 +525,8 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 		// none of it is a safe step, and a landing in it may follow a switch or a commit.
 		const several = tokens.some((t) => OPERATOR_WORD.test(t) || BARE_OPERATORS.has(t.replaceAll("\0", "")));
 		if (found.every((l) => l.kind === "commit")) {
-			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify)) || several) unsafeBefore = true;
+			const edges = raw.map((t, i) => (i === 0 ? t.replace(/^\(+/, "") : t)).map((t, i, all) => (i === all.length - 1 ? t.replace(/\)+$/, "") : t));
+			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify, edges, options.powershell)) || several) unsafeBefore = true;
 			continue;
 		}
 		const dir = shell.dir;
@@ -792,8 +793,9 @@ function childConfig(projectDir: string, path: string, guardConfig: string): boo
 	return slash > 0 && !rel.startsWith("../") && foldPath(rel.slice(slash + 1)) === guardConfig;
 }
 
-/** A mark (`\0`, a word bash and zsh may read differently) or a character the shell may expand into other words:
- * a variable or substitution, braces, a glob (quoted too: the tokenizer drops the quotes), and PowerShell's `,` and `@`. */
+/** A mark (`\0`, a word bash and zsh may read differently) or a character the shell may expand into other words: a
+ * variable or substitution, braces, a glob, and PowerShell's `,` and `@`; quoted too, since the tokenizer drops the
+ * quotes. A comment is read away by withoutComments. */
 const SHELL_EXPANDS = /[\0$`(){}*?[\],@]/;
 /** `git branch` options that only list branches; git also accepts unambiguous prefixes (`--forc`), which are refused. */
 const BRANCH_LIST_OPTIONS = new Set(["-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose", "--show-current", "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case"]);
@@ -803,8 +805,8 @@ const BRANCH_LIST_MODE = new Set(["-l", "--list", "--contains", "--no-contains",
 /**
  * A git call whose global options and `branch`/`remote` forms neither move a ref nor change where a push goes. An
  * allowlist: only `-C <dir>`, `--no-pager` and `-P` before the subcommand (`-c`, `--config-env`, `--git-dir`… may run
- * a program or read another repository), `git branch` and `git remote` only in their listing forms, `fetch` without a
- * refspec that writes a local ref, and the other SAFE_GIT subcommands, whose options are not checked. A marked word or
+ * a program or read another repository), `git branch` and `git remote` only in their listing forms, `fetch` with no
+ * `:` in any word, and the other SAFE_GIT subcommands, whose options are not checked. A marked word or
  * one the shell may expand is never safe: the guard can't tell which arguments git gets.
  */
 function safeGit(words: string[]): boolean {
@@ -832,13 +834,18 @@ function safeGit(words: string[]): boolean {
 	return SAFE_GIT.has(sub);
 }
 
-function isSafe(tokens: string[], verify: string[]): boolean {
+/**
+ * Whether a segment may run before a landing. `raw` is the segment's words with only a subshell's opening `(` and closing
+ * `)` removed, so an edge parenthesis in an argument (`<(…)`, PowerShell's `(…)`) and an empty word still count. Under
+ * PowerShell, whose syntax the tokenizer doesn't read, no git step is safe (user ruling after 0.38.2 review round 2).
+ */
+function isSafe(tokens: string[], verify: string[], raw: string[] = tokens, powershell = false): boolean {
 	// `rg --pre <program>` runs that program on every file it searches.
 	// A marked option (`$"--pre=…"`) is read without its mark too.
 	if (tokens[0] === "rg" && tokens.some((t) => bare(t).startsWith("--pre"))) return false;
 	if (READ_ONLY.has(tokens[0] ?? "")) return true;
 	if (verify.some((v) => splitSegments(tokenize(v)).some((seg) => seg.length === tokens.length && seg.every((t, i) => t === tokens[i])))) return true;
-	if (tokens[0] === "git") return safeGit(tokens);
+	if (tokens[0] === "git") return !powershell && safeGit(raw);
 	return SAFE_COMMANDS.has(tokens[0] ?? "") || (tokens[0] === "gh" && ["view", "list", "checks", "status"].includes(tokens[2] ?? ""));
 }
 

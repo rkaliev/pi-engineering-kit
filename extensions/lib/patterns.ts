@@ -92,14 +92,59 @@ export function wideBlankReading(command: string): string | undefined {
 }
 
 /**
- * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), and with every `\r` dropped,
- * as bash with `igncr` (Cygwin, MSYS) does. The guard and the gates judge each and keep the stricter decision (user
- * rulings after 0.38.1 review rounds 1 and 2). Each differs from the command and from the other: the PowerShell reading
- * replaces at least one blank and keeps no `\r`, and the igncr reading drops a `\r` and keeps every other blank.
+ * The other ways a shell may read the command: as PowerShell splits it (wideBlankReading), with every `\r` dropped, as
+ * bash with `igncr` (Cygwin, MSYS) does, and without its comments (withoutComments). The guard and the gates judge each
+ * and keep the stricter decision (user rulings after 0.38.1 review rounds 1 and 2 and 0.38.2 review round 2). The first
+ * two differ from the command and from each other: the PowerShell reading replaces at least one blank and keeps no
+ * `\r`, and the igncr reading drops a `\r` and keeps every other blank.
  */
 export function otherReadings(command: string): string[] {
 	const wide = wideBlankReading(command);
-	return [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
+	const readings = [...(wide === undefined ? [] : [wide]), ...(command.includes("\r") ? [command.replaceAll("\r", "")] : [])];
+	const uncommented = withoutComments(command);
+	return uncommented === undefined || readings.includes(uncommented) ? readings : [...readings, uncommented];
+}
+
+/**
+ * The command without its comments, as bash and zsh read it: an unquoted `#` that starts a word ends the line.
+ * Undefined when it has none. The tokenizer has no comment rule, so an apostrophe in a comment (`# it's`) opens a quote
+ * that would swallow the lines after it; this reading shows them.
+ */
+export function withoutComments(command: string): string | undefined {
+	let out = "";
+	let quote: "'" | "$'" | '"' | undefined;
+	let found = false;
+	for (let i = 0; i < command.length; i++) {
+		const c = command[i]!;
+		if (quote === "'") {
+			if (c === "'") quote = undefined;
+			out += c;
+			continue;
+		}
+		// A backslash escapes the next character outside quotes, in double quotes and in `$'…'`.
+		if (c === "\\") {
+			out += c + (command[i + 1] ?? "");
+			i++;
+			continue;
+		}
+		if (quote !== undefined) {
+			if (c === quote.at(-1)) quote = undefined;
+			out += c;
+			continue;
+		}
+		if (c === "'" || c === '"') {
+			quote = c === "'" && command[i - 1] === "$" ? "$'" : c;
+			out += c;
+			continue;
+		}
+		if (c === "#" && (i === 0 || /[ \t\n;&|()<>]/.test(command[i - 1]!))) {
+			found = true;
+			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
+			continue;
+		}
+		out += c;
+	}
+	return found ? out : undefined;
 }
 
 /** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */

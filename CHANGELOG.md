@@ -2,7 +2,8 @@
 
 ## 0.38.2
 
-- **Stricter safe steps before a landing.** `git branch` and `git remote` count as safe only in their listing forms, and git only with `-C`, `--no-pager` or `-P` before the subcommand. `git branch --forc` (a prefix git expands), `-d`, `--move`, `-u`, `git branch <name> <start>`, `git remote set-url` (also after `-v`), `git -c core.fsmonitor=…`, `--git-dir=`, and any git step with a marked word or a word the shell may expand (`{…}`, `$_`, a glob even in quotes) before `gh pr create` or a push are treated like any other unsafe step. The options of the other read-only git subcommands are not checked yet.
+- **Stricter safe steps before a landing.** `git branch` and `git remote` count as safe only in their listing forms, and git only with `-C`, `--no-pager` or `-P` before the subcommand. `git branch --forc` (a prefix git expands), `-d`, `--move`, `-u`, `git branch <name> <start>`, `git remote set-url` (also after `-v`), `git -c core.fsmonitor=…`, `--git-dir=`, any git step with a marked word or a word the shell may expand (`{…}`, `$_`, `<(…)`, PowerShell's `(…)`, a glob character, quoted or not), and any git step under PowerShell before `gh pr create` or a push are treated like any other unsafe step. Not checked yet: the options of the other read-only git subcommands (`fetch --upload-pack`, `log --output`, `--ext-diff`) and a command substitution in a non-git safe step's arguments.
+- **A comment hides nothing.** The guard and the gates also read the command without its comments, so an apostrophe in a comment (`# Let's open the PR`) no longer swallows the next lines: the landing or the blocked command after it is judged.
 - **The task-file guard stays within one time budget.** A commit it can't place is judged once per repository for all readings of the command, so a command with `\r` no longer spends up to three budgets against the hook's timeout.
 
 ## 0.38.1

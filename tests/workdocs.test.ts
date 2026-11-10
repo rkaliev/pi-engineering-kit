@@ -184,6 +184,8 @@ test("in a workspace, a landing is judged in the repository it lands in", () => 
 	assert.equal(act("git -C a push origin feat/x:main"), "block");
 	assert.equal(act("gh pr create", join(root, "a")), "block", "a command started inside the repository");
 	assert.equal(act("cd b && gh pr create"), "allow");
+	// Review round 2 of 0.38.2: an apostrophe in a comment must not hide the landing on the next line.
+	assert.equal(act("# Let's open the PR\ncd a && gh pr create"), "block");
 });
 
 test("in a workspace, a repository's workDocs folders decide its task files", () => {
