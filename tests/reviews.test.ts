@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { blankQuoted, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
+import { blankQuoted, quotedComments, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -1469,6 +1469,11 @@ test("a word joined by Unicode whitespace is not a move", () => {
 test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
 	assert.ok(blankQuoted("$\\\n'a\\' b' c").endsWith("' c"));
 	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
+});
+
+test("quotedComments finds each comment once, quotes inside it open nothing", () => {
+	assert.deepEqual(quotedComments("ls # it's\n# it's\necho '#x'"), [{ start: 3, end: 9 }, { start: 10, end: 16 }]);
+	assert.deepEqual(quotedComments('a#b "# x"'), []);
 });
 
 // A marked word that is a move without its mark (`$'\u0063d'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may

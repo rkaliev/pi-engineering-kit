@@ -27,12 +27,24 @@ function ansiQuoteAt(command: string, i: number): number {
 	return command[at] === "'" ? at : -1;
 }
 
+/** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
+export function blankQuoted(command: string): string {
+	return scan(command, false).text;
+}
+
 /**
- * The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word.
- * With `comments`, each comment is also collected there and skipped in the same pass: an unquoted `#` that starts a
- * word (after any blank, an operator or a backtick) runs to the end of its line, and a quote inside it opens nothing.
+ * The comments of a command, in one pass with blankQuoted's quote model: an unquoted `#` that starts a word (after
+ * any blank, an operator or a backtick) runs to the next `\n`, and a quote inside it opens nothing. PowerShell also
+ * ends a line at `\r`, so there a comment may end before this range does. U+00A0 and `\r` count as blanks because
+ * PowerShell reads them so; for bash that only adds a reading, and so maybe a question.
  */
-export function blankQuoted(command: string, comments?: Array<{ start: number; end: number }>): string {
+export function quotedComments(command: string): Array<{ start: number; end: number }> {
+	return scan(command, true).comments;
+}
+
+/** blankQuoted's text and, with `withComments`, the comments, skipped in the same pass. */
+function scan(command: string, withComments: boolean): { text: string; comments: Array<{ start: number; end: number }> } {
+	const comments: Array<{ start: number; end: number }> = [];
 	let out = "";
 	let quote: string | null = null;
 	for (let i = 0; i < command.length; i++) {
@@ -56,7 +68,7 @@ export function blankQuoted(command: string, comments?: Array<{ start: number; e
 			quote = "$'";
 			out += command.slice(i, at + 1);
 			i = at;
-		} else if (comments && ch === "#" && (i === 0 || /[\s\u0085;&|()<>`]/u.test(command[i - 1]!))) {
+		} else if (withComments && ch === "#" && (i === 0 || /[\s\u0085;&|()<>`]/u.test(command[i - 1]!))) {
 			const end = command.indexOf("\n", i);
 			const stop = end === -1 ? command.length : end;
 			comments.push({ start: i, end: stop });
@@ -67,7 +79,7 @@ export function blankQuoted(command: string, comments?: Array<{ start: number; e
 			out += ch;
 		}
 	}
-	return out;
+	return { text: out, comments };
 }
 
 /**

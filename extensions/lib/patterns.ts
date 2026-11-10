@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { projectRepos, repoOf } from "./repos.ts";
-import { blankQuoted, heredocs } from "./shell.ts";
+import { heredocs, quotedComments } from "./shell.ts";
 import { baseBranch, currentBranch } from "./workdocs.ts";
 
 export type GuardAction = "allow" | "confirm" | "block";
@@ -109,21 +109,11 @@ export function otherReadings(command: string): string[] {
 }
 
 /**
- * The comments of a command, in one pass with the tokenizer's quote model (blankQuoted). A `#` after any blank counts,
- * since PowerShell reads `\r` and U+00A0 as blanks; for bash that only adds a reading.
- */
-function comments(command: string): Array<{ start: number; end: number }> {
-	const found: Array<{ start: number; end: number }> = [];
-	blankQuoted(command, found);
-	return found;
-}
-
-/**
  * The command without its comments. Undefined when it has none. The tokenizer has no comment rule, so an apostrophe
  * in a comment (`# it's`) opens a quote that would swallow the lines after it; this reading shows them.
  */
 export function withoutComments(command: string): string | undefined {
-	const found = comments(command);
+	const found = quotedComments(command);
 	if (found.length === 0) return undefined;
 	let out = "";
 	let at = 0;
@@ -141,7 +131,7 @@ export function withoutComments(command: string): string | undefined {
  */
 export function commentHidesLines(command: string): boolean {
 	const text = heredocs(command).text;
-	return comments(text).some(({ start, end }) => /['"`]/.test(text.slice(start, end)) && text.slice(end).trim() !== "");
+	return quotedComments(text).some(({ start, end }) => /['"`]/.test(text.slice(start, end)) && text.slice(end).trim() !== "");
 }
 
 /** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
