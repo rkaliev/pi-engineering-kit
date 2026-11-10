@@ -109,29 +109,29 @@ export function otherReadings(command: string): string[] {
 }
 
 /**
- * Where each comment is, as the tokenizer's quote model (blankQuoted) reads the command: an unquoted `#` that starts a
- * word, after any blank (PowerShell and bash with `igncr` read `\r` and U+00A0 as one), an operator or a backtick,
- * up to the end of its line. Only the first is exact: a quote inside it may hide the rest from the model.
+ * The comments of a command, in one pass with the tokenizer's quote model (blankQuoted). A `#` after any blank counts,
+ * since PowerShell reads `\r` and U+00A0 as blanks; for bash that only adds a reading.
  */
-function firstComment(command: string): { start: number; end: number } | undefined {
-	const text = blankQuoted(command);
-	for (let i = 0; i < text.length; i++) {
-		if (text[i] !== "#" || (i > 0 && !/[\s\u0085;&|()<>`]/u.test(text[i - 1]!))) continue;
-		const end = command.indexOf("\n", i);
-		return { start: i, end: end === -1 ? command.length : end };
-	}
-	return undefined;
+function comments(command: string): Array<{ start: number; end: number }> {
+	const found: Array<{ start: number; end: number }> = [];
+	blankQuoted(command, found);
+	return found;
 }
 
 /**
- * The command without its comments, each removed in turn. Undefined when it has none. The tokenizer has no comment
- * rule, so an apostrophe in a comment (`# it's`) opens a quote that would swallow the lines after it; this reading
- * shows them.
+ * The command without its comments. Undefined when it has none. The tokenizer has no comment rule, so an apostrophe
+ * in a comment (`# it's`) opens a quote that would swallow the lines after it; this reading shows them.
  */
 export function withoutComments(command: string): string | undefined {
-	let text = command;
-	for (let found = firstComment(text); found; found = firstComment(text)) text = text.slice(0, found.start) + text.slice(found.end);
-	return text === command ? undefined : text;
+	const found = comments(command);
+	if (found.length === 0) return undefined;
+	let out = "";
+	let at = 0;
+	for (const { start, end } of found) {
+		out += command.slice(at, start);
+		at = end;
+	}
+	return out + command.slice(at);
 }
 
 /**
@@ -140,14 +140,9 @@ export function withoutComments(command: string): string | undefined {
  * умолчанию»). Heredoc bodies are data here: their lines are no comments.
  */
 export function commentHidesLines(command: string): boolean {
-	let text = heredocs(command).text;
-	for (let found = firstComment(text); found; found = firstComment(text)) {
-		if (/['"`]/.test(text.slice(found.start, found.end)) && text.slice(found.end).trim() !== "") return true;
-		text = text.slice(0, found.start) + text.slice(found.end);
-	}
-	return false;
+	const text = heredocs(command).text;
+	return comments(text).some(({ start, end }) => /['"`]/.test(text.slice(start, end)) && text.slice(end).trim() !== "");
 }
-
 
 /** `judge` over the command and each other reading (otherReadings): the stricter decision wins, and a block ends the search. */
 export function judgeReadings<D extends GuardDecision | undefined>(command: string, judge: (text: string) => D): D {

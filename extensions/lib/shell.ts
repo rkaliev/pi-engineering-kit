@@ -27,8 +27,12 @@ function ansiQuoteAt(command: string, i: number): number {
 	return command[at] === "'" ? at : -1;
 }
 
-/** The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word. */
-export function blankQuoted(command: string): string {
+/**
+ * The command with the text inside quotes replaced by spaces; the quotes stay, so a quoted target is still a word.
+ * With `comments`, each comment is also collected there and skipped in the same pass: an unquoted `#` that starts a
+ * word (after any blank, an operator or a backtick) runs to the end of its line, and a quote inside it opens nothing.
+ */
+export function blankQuoted(command: string, comments?: Array<{ start: number; end: number }>): string {
 	let out = "";
 	let quote: string | null = null;
 	for (let i = 0; i < command.length; i++) {
@@ -52,6 +56,12 @@ export function blankQuoted(command: string): string {
 			quote = "$'";
 			out += command.slice(i, at + 1);
 			i = at;
+		} else if (comments && ch === "#" && (i === 0 || /[\s\u0085;&|()<>`]/u.test(command[i - 1]!))) {
+			const end = command.indexOf("\n", i);
+			const stop = end === -1 ? command.length : end;
+			comments.push({ start: i, end: stop });
+			out += command.slice(i, stop);
+			i = stop - 1;
 		} else {
 			if (ch === "'" || ch === '"') quote = ch;
 			out += ch;

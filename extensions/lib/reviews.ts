@@ -516,6 +516,10 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 	// The same segments as below, each with the folder it runs in as far as the guard can place it.
 	const placed = options.workspace ? segmentFolders(command, cwd, options.powershell) : [];
 	let unsafeBefore = false;
+	// A parenthesis in quotes or after a backslash is an argument: the tokenizer drops its quotes, so only a command
+	// without one may drop a word that was a subshell's parenthesis alone (as Subshells tells them apart).
+	const count = (s: string) => s.match(/[()]/g)?.length ?? 0;
+	const textParens = count(command) !== count(blankQuoted(command).replace(/\\./g, ""));
 	for (const [index, { raw, alone, before }] of segmentsOf(tokenize(stripRedirects(command))).entries()) {
 		shell.enter(raw, before);
 		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
@@ -529,7 +533,7 @@ function checkSegments(command: string, cwd: string, projectDir: string, options
 			const edges = raw
 				.map((t, i) => (i === 0 ? t.replace(/^\(+/, "") : t))
 				.map((t, i, all) => (i === all.length - 1 ? t.replace(/\)+$/, "") : t))
-				.filter((t, i) => t !== "" || raw[i] === "");
+				.filter((t, i) => t !== "" || raw[i] === "" || textParens);
 			if ((shell.move(raw, alone, before) !== "plain" && !isSafe(tokens, options.verify, edges, options.powershell)) || several) unsafeBefore = true;
 			continue;
 		}

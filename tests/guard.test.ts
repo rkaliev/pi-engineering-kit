@@ -96,6 +96,15 @@ test("a comment hides nothing: the command is also read without its comments", (
 	}
 });
 
+test("a long heredoc full of comment lines is read in linear time", () => {
+	// Final review of 0.38.2: removing one comment at a time rescanned the whole command (2.4 s for this one, per reading),
+	// and a hook past its timeout lets the call through.
+	const body = Array.from({ length: 6000 }, (_, i) => (i % 3 === 0 ? `# step ${i}: configure the job` : `  key${i}: value${i}`)).join("\n");
+	const started = Date.now();
+	assert.equal(action(`cat > ci.yml <<'EOF'\n${body}\nEOF`), "allow");
+	assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+});
+
 test("a comment that holds a quote before more lines asks; other comments don't", () => {
 	// User ruling after 0.38.2 review round 3, «Закрыто по умолчанию»: the guard can't be sure which lines such a command runs.
 	assert.equal(action("echo ok # it's fine\nls"), "confirm");

@@ -1607,6 +1607,8 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 	assert.equal(action(check("echo hi && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
 	// A subshell's own parentheses are no arguments.
 	for (const step of ["( git status )", "(git branch --show-current 2>/dev/null)"]) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
+	// Final review of 0.38.2: a quoted or escaped `)` is an argument, not a subshell's parenthesis.
+	for (const step of ["git branch ')'", "git branch \\)", "git remote -v ')'"]) assert.equal(action(check(`${step} && gh pr create --fill`)), "block", step);
 });
 
 test("a comment hides no landing from the review gate", () => {
