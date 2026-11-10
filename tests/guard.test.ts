@@ -91,6 +91,8 @@ test("a comment hides nothing: the command is also read without its comments", (
 		"echo \"it's\" # it's\nrm -rf ~", "echo $'it\\'s' # it's\nrm -rf ~", "echo \\$'a\\' # it's\nrm -rf ~", "echo $\\\n'\\'' # it's\nrm -rf ~",
 		"echo hi \r# it's\nrm -rf ~", "echo hi\u00a0# it's\nrm -rf ~", "echo `# it's\nrm -rf ~\n`",
 		"cat > /tmp/n.md <<'EOF'\nit's\nEOF\nrm -rf ~",
+		// Follow-up of 0.38.2: several comments in a row, each skipped whole in the one pass.
+		"# it's\n# it's\n# it's\nrm -rf ~",
 	]) {
 		assert.equal(action(cmd), "block", JSON.stringify(cmd));
 	}
