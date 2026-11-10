@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
 import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
-import { blankQuoted, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
+import { blankQuoted, quotedComments, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
 const made: string[] = [];
@@ -152,7 +152,7 @@ test("parallel reviewers of one prompt combine to the worst verdict; a later pro
 });
 
 test("shell writes to the gate's own files: records are blocked, the guard config asks, reads pass", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	mkdirSync(join(project, ".pi"));
 	const guard = ".pi/guard.json";
 	const check = (command: string) => checkGateFiles(command, project, project, guard)?.action ?? "allow";
@@ -209,7 +209,7 @@ test("a PR merge checks the remote head too; glab -s names the branch", () => {
 	const { dir, git, run, commit, head, check, review, base } = repo();
 	git("push", "-q", "origin", "feat/a");
 	review(report(head, "Yes", base));
-	const clone = mkdtempSync(join(tmpdir(), "reviews-clone-"));
+	const clone = temp("reviews-clone-");
 	run(clone, "clone", "-q", "-b", "feat/a", git("remote", "get-url", "origin"), ".");
 	run(clone, "config", "user.email", "o@example.com");
 	run(clone, "config", "user.name", "o");
@@ -234,7 +234,7 @@ test("before a landing: read-only steps and the project's verify commands may ru
 });
 
 test("gate files: reads with stderr redirects, jq and unrelated mentions pass; the records folder is matched exactly", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	mkdirSync(join(project, ".pi"));
 	const check = (command: string) => checkGateFiles(command, project, project, ".pi/guard.json")?.action ?? "allow";
 	for (const read of ["grep -rn eng-kit/reviews src 2>/dev/null", "cat .pi/guard.json 2>&1", "jq . .pi/guard.json", "git commit -m 'eng-kit/reviews: tidy'"]) assert.equal(check(read), "allow", read);
@@ -320,7 +320,7 @@ test("nothing new to land needs no review", () => {
 
 test("commits on the base count as landed only against the push remote's tracking branch, never the local base", () => {
 	const { dir, git, run, commit, check } = repo();
-	const other = mkdtempSync(join(tmpdir(), "reviews-github-"));
+	const other = temp("reviews-github-");
 	run(other, "init", "-q", "--bare", "-b", "main");
 	git("remote", "add", "github", other);
 	git("switch", "-q", "main");
@@ -535,7 +535,7 @@ test("in a workspace, a PR branch is found from a worktree of its repository out
 	notePr(ws, "t1", "cd a && gh pr create --fill", ws, root);
 	settlePr(ws, "t1", true, root);
 	a.git("switch", "-q", "main");
-	const wt = join(mkdtempSync(join(tmpdir(), "reviews-wt-")), "a");
+	const wt = join(temp("reviews-wt-"), "a");
 	a.git("worktree", "add", "-q", wt, "feat/a");
 	const next = a.commit({ "src/a.ts": "export const a = 2;\n" }, wt);
 	assert.match(String(check(`git -C ${wt} push origin feat/a`)?.reason), new RegExp(`no reviewer verdict recorded for ${next.slice(0, 7)}`));
@@ -826,7 +826,7 @@ test("a PR branch named with --head (fork syntax too) is remembered; a merged PR
 });
 
 test("shell writes to the open-PR list are blocked like the verdict records", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const records = join(tmpdir(), "eng-kit", "reviews");
 	assert.equal(checkGateFiles(`echo '{}' > ${records}/h/prs.json`, project, project, ".pi/guard.json")?.action, "block");
 });
@@ -865,7 +865,7 @@ test("the reviewer's shell runs only inspection, temp worktrees, the verify comm
 test("a project reached through a symlink keeps its review records", () => {
 	const { dir, root, head, base, review } = repo();
 	review(report(head, "Yes", base));
-	const link = join(mkdtempSync(join(tmpdir(), "reviews-link-")), "project");
+	const link = join(temp("reviews-link-"), "project");
 	symlinkSync(dir, link);
 	assert.equal(readReviews(link, root)[0]?.sha, head);
 });
@@ -887,7 +887,7 @@ test("a backslash line continuation joins the command, as the shell does", () =>
 
 test("a push to a remote with no tracking ref still anchors the chain on the remote base, not the local one", () => {
 	const { git, run, commit, check, review } = repo();
-	const fork = mkdtempSync(join(tmpdir(), "reviews-fork-"));
+	const fork = temp("reviews-fork-");
 	run(fork, "init", "-q", "--bare", "-b", "main");
 	git("remote", "add", "fork", fork);
 	git("switch", "-q", "main");
@@ -940,7 +940,7 @@ test("a PR opened but not confirmed by the tool result isn't registered; an old 
 });
 
 test("gate files: shell writes to the verify-run records are blocked; reading them passes", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json");
 	const runs = join(tmpdir(), "eng-kit", "runs");
 	for (const write of [
@@ -959,7 +959,7 @@ test("gate files: shell writes to the verify-run records are blocked; reading th
 });
 
 test("gate files: the records and the guard config are found in any letter case, as macOS and Windows open them", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action;
 	for (const write of [
 		"echo x > $TMPDIR/ENG-KIT/runs/x.json",
@@ -974,7 +974,7 @@ test("gate files: the records and the guard config are found in any letter case,
 });
 
 test("gate files: a letter the file system folds is folded, also in a record folder or guard config that doesn't exist yet", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action;
 	for (const write of ["echo x > $TMPDIR/eng-kit/run\u017f/x.json", `echo x > ${join(tmpdir(), "eng-kit", "run\u017f", "x.json")}`, "echo x > $TMPDIR/eng-kit/review\u017f/h/x.json"]) {
 		assert.equal(check(write), "block", write);
@@ -983,7 +983,7 @@ test("gate files: a letter the file system folds is folded, also in a record fol
 });
 
 test("gate files: a workspace repository's guard config is found in any letter case, as written and by its real path", () => {
-	const ws = mkdtempSync(join(tmpdir(), "gate-files-ws-"));
+	const ws = temp("gate-files-ws-");
 	mkdirSync(join(ws, "a", ".claude"), { recursive: true });
 	const check = (command: string) => checkGateFiles(command, ws, ws, ".claude/guard.json", true)?.action;
 	for (const write of ["cd a/.CLAUDE && echo '{}' > guard.json", "echo '{}' > a/.CLAUDE//guard.json", "echo '{}' > a/.claude/guard.j\u017fon"]) {
@@ -992,14 +992,14 @@ test("gate files: a workspace repository's guard config is found in any letter c
 });
 
 test("gate files: a workspace repository's guard config reached through a symlink asks", () => {
-	const ws = mkdtempSync(join(tmpdir(), "gate-files-ws-"));
+	const ws = temp("gate-files-ws-");
 	mkdirSync(join(ws, "a", ".claude"), { recursive: true });
 	symlinkSync(join(ws, "a", ".claude"), join(ws, "cfg"));
 	assert.equal(checkGateFiles("echo '{}' > cfg/guard.json", ws, ws, ".claude/guard.json", true)?.action, "confirm");
 });
 
 test("gate files: >| and >&file are writes too", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const records = join(tmpdir(), "eng-kit", "reviews");
 	for (const write of [`echo x >| ${records}/h/a.json`, `echo x >&${records}/h/a.json`]) {
 		assert.equal(checkGateFiles(write, project, project, ".pi/guard.json")?.action, "block", write);
@@ -1043,7 +1043,7 @@ test("a push without a refspec lands where @{push} points", () => {
 
 test("the remote @{push} names decides what is already landed", () => {
 	const { dir, git, run, check } = repo();
-	const other = mkdtempSync(join(tmpdir(), "reviews-other-"));
+	const other = temp("reviews-other-");
 	run(other, "init", "-q", "--bare", "-b", "main");
 	git("remote", "add", "up", other);
 	git("push", "-q", "up", "HEAD:main");
@@ -1073,7 +1073,7 @@ test("&> needs no space before it: the words after it stay with the command", ()
 });
 
 test("gate files: every folder a cd, pushd or popd may reach is checked, in any form", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	mkdirSync(join(project, ".pi"));
 	const records = join(tmpdir(), "eng-kit", "reviews");
 	const check = (command: string, cwd = tmpdir()) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
@@ -1228,7 +1228,7 @@ test("cd options, cd -, pushd and popd are followed to the checkout a landing ru
 });
 
 test("gate files: a > is a write wherever it stands, since the guard can't pair quotes as the shell does", () => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
+	const project = temp("gate-files-");
 	const records = join(tmpdir(), "eng-kit", "reviews");
 	const check = (command: string, cwd = project) => checkGateFiles(command, cwd, project, ".pi/guard.json")?.action ?? "allow";
 	assert.equal(check(`cat x > ${records}/y`), "block");
@@ -1438,9 +1438,8 @@ test("every landing in one segment is judged: a merge after a commit in find -ex
 });
 
 // In PowerShell `\` is a plain character and `;` separates statements, so `cat x \; Set-Content …` writes.
-test("gate files: a segment holding a quoted operator word is never read-only", (t) => {
-	const project = mkdtempSync(join(tmpdir(), "gate-files-"));
-	t.after(() => rmSync(project, { recursive: true, force: true }));
+test("gate files: a segment holding a quoted operator word is never read-only", () => {
+	const project = temp("gate-files-");
 	mkdirSync(join(project, ".claude"));
 	const check = (command: string) => checkGateFiles(command, project, project, ".claude/guard.json")?.action ?? "allow";
 	assert.equal(check("cat x \\; Set-Content .claude/guard.json '{}'"), "confirm");
@@ -1469,6 +1468,12 @@ test("a word joined by Unicode whitespace is not a move", () => {
 test("shell helpers find the $\\⏎'…' boundary as tokenize does", () => {
 	assert.ok(blankQuoted("$\\\n'a\\' b' c").endsWith("' c"));
 	assert.ok(stripRedirects("$\\\n'a\\' > b' c").includes(">"), "the > is inside the quote");
+});
+
+test("quotedComments finds each comment once, quotes inside it open nothing", () => {
+	assert.deepEqual(quotedComments("ls # it's\n# it's\necho '#x'"), [{ start: 3, end: 9 }, { start: 10, end: 16 }]);
+	assert.deepEqual(quotedComments('a#b "# x"'), []);
+	assert.deepEqual(quotedComments("echo $'it\\'s # x'"), [], "a # inside $'…' is no comment");
 });
 
 // A marked word that is a move without its mark (`$'\u0063d'` is cd in bash 4.2+ and zsh, not in bash 3.2) may or may
@@ -1592,6 +1597,8 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 		"git branch --list 'feat/?'", "git branch --list '[f]eat/a'", "git status @x", "git status x,y", "git log --grep='a(b'",
 		// Review round 2 of 0.38.2: edge parentheses (process substitution, PowerShell's `(…)`) and an empty word.
 		"git diff <(git branch -f main feat/a)", "git status (git branch -f main feat/a)", "git -C '' --git-dir=x status",
+		// Final review of 0.38.2: a quoted or escaped `)` is an argument, not a subshell's parenthesis.
+		"git branch ')'", "git branch \\)", "git remote -v ')'",
 	];
 	for (const step of unsafe) {
 		const found = check(`${step} && gh pr create --fill`);
@@ -1607,8 +1614,6 @@ test("the review gate trusts only listing forms of git branch and remote, and on
 	assert.equal(action(check("echo hi && gh pr create --fill", { ...OPTIONS, powershell: true })), "block");
 	// A subshell's own parentheses are no arguments.
 	for (const step of ["( git status )", "(git branch --show-current 2>/dev/null)"]) assert.equal(check(`${step} && gh pr create --fill`), undefined, step);
-	// Final review of 0.38.2: a quoted or escaped `)` is an argument, not a subshell's parenthesis.
-	for (const step of ["git branch ')'", "git branch \\)", "git remote -v ')'"]) assert.equal(action(check(`${step} && gh pr create --fill`)), "block", step);
 });
 
 test("a comment hides no landing from the review gate", () => {
