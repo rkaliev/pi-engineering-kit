@@ -144,9 +144,9 @@ Files:
 
 ### Task 3: docs and version
 
-- [ ] Update the Post-implementation docs, CHANGELOG 0.39.0, version
-- [ ] Run the kit verify script from the workspace root → all pass
-- [ ] Commit `docs: verify paths`
+- [x] Update the Post-implementation docs, CHANGELOG 0.39.0, version
+- [x] Run the kit verify script from the workspace root → all pass
+- [x] Commit `docs: verify paths`
 
 ## Progress
 
@@ -155,3 +155,5 @@ Task 1: complete (5f866e1..e90a02e, `npm test` → all pass, typecheck clean; fu
 Ruling: the paths notice goes out at an agent_end with unverified edits and a UI (no UI, no one to tell), once per session — mirrors the Claude edition's first Stop with unverified edits.
 Ruling: the unknown-`only` text says `--only "zz"` like the Claude script, so both editions report the same words.
 Task 2: complete (9514b57..63e7522, `npm test` → 740 pass, existing tests unchanged, typecheck clean; C3 and C5 passed before the change and were mutation-checked)
+Ruling: install pins `@v0.38.4` in README, GETTING-STARTED(.ru) and templates/settings.json bumped to v0.39.0 (release check requires them to match package.json).
+Task 3: complete (b4a0a05..44fbe72, kit verify script from the workspace root → all 4 checks pass)
