@@ -3,8 +3,9 @@
  *
  * - `/verify` and the `run_verification` tool run the project's verification commands
  *   (`.pi/verify.json`, else the Commands section of AGENTS.md, else the ones the manifests imply).
- * - Files edited since the last fully green run make the workspace "unverified": by `edit`/`write`, or by
- *   a shell call, found from a git working-tree fingerprint taken before and after it (lib/worktree.ts).
+ * - Files edited since the last green run make the workspace "unverified" (by `edit`/`write`, or by a shell call,
+ *   found from a git working-tree fingerprint taken before and after it, lib/worktree.ts), owing the commands whose
+ *   verify.json `paths` cover them (every command without an entry, and every command for a path that isn't certain).
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence and its whole
  *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
  *   already followed up get one notice to the user instead); with no commands at all the user gets

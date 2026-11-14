@@ -14,7 +14,7 @@ If you haven't run the check in this session after your last change, you can't c
 ## The gate
 
 1. **Identify**: which command proves the claim? Use the project's commands (`run_verification`, AGENTS.md, `.pi/verify.json`, CI config).
-2. **Run** the full command, fresh. Don't use a filtered subset (the verify gate's `only` is not one: the project's verify.json says the other checks don't cover the changed files), and don't pipe it into `tail` in a way that hides the exit code.
+2. **Run** the full command, fresh. Don't use a filtered subset (the verify gate's `only` is not one: the other checks already passed since the last edit, or the project's verify.json says they don't cover the changed files), and don't pipe it into `tail` in a way that hides the exit code.
 3. **Read** the output: exit code, count of failures, warnings.
 4. **Verify**: does the output confirm the claim? If not, report the actual state with the evidence.
 5. **Only then claim it**, and quote the evidence ("`npm test`: 142 passed, 0 failed").
