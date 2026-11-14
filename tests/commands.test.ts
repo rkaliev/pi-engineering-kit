@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -173,6 +173,24 @@ test("resolveVerifyPaths: a glob whose * matches only folders is a problem (roun
 	mkdirSync(join(dir, "apps", "web"), { recursive: true });
 	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": ["apps/*"] } }));
 	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]).problems, ['paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")']);
+});
+
+test("resolveVerifyPaths: apps/* is a problem beside dot files, READMEs and folder symlinks (0.39.1, U2)", () => {
+	const problem = 'paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")';
+	const withApps = (glob: string, files: Record<string, string>, folders: string[], links: Record<string, string> = {}) => {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		for (const f of folders) mkdirSync(join(dir, f), { recursive: true });
+		for (const [f, text] of Object.entries(files)) writeFileSync(join(dir, f), text);
+		for (const [link, target] of Object.entries(links)) symlinkSync(target, join(dir, link));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": [glob] } }));
+		return resolveVerifyPaths(dir, ["npm test"]).problems;
+	};
+	const extras = { "apps/.DS_Store": "", "apps/.gitkeep": "", "apps/README.md": "# apps\n", "apps/notes.txt": "n\n" };
+	assert.deepEqual(withApps("apps/*", extras, ["apps/web", "apps/api"]), [problem], "dot files, a README and notes beside the packages");
+	assert.deepEqual(withApps("apps/*", { "apps/README.md": "# apps\n" }, ["apps", "pkgs/web"], { "apps/web": "../pkgs/web" }), [problem], "a package that is a symlink to a folder");
+	assert.deepEqual(withApps("src/*", { "src/index.ts": "export {};\n" }, ["src/lib"]), [], "a code file beside the folders");
+	assert.deepEqual(withApps("apps/*", { "apps/README.md": "# apps\n" }, ["apps"]), [], "no folder at all");
 });
 
 test("resolveVerifyPaths: a glob that can never match a project path is a problem, and its command checks every file (R7)", () => {

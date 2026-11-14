@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectJson } from "./config.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -45,7 +45,8 @@ export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths
 
 /**
  * Why a `paths` glob can never match a changed file, or undefined. Globs are `isIgnored` globs (`*`, `**`, `?`) matched
- * against project-relative paths: other tools' syntax, a path outside the project or a bare folder name never match.
+ * against project-relative paths: other tools' syntax, a path outside the project, a bare folder name, or `apps/*` over a
+ * folder of package folders (`*` stays within one folder) never match.
  */
 function globProblem(cwd: string, glob: string): string | undefined {
 	const p = glob.replaceAll("\\", "/");
@@ -62,11 +63,15 @@ function globProblem(cwd: string, glob: string): string | undefined {
 	return undefined;
 }
 
-/** A folder that holds at least one folder and no files. */
+/**
+ * A folder that holds at least one folder (or a symlink to one) and no files but what sits beside packages: dot files
+ * (`.DS_Store`, `.gitkeep`), `README*`, `*.md` and `*.txt`.
+ */
 function onlyFolders(path: string): boolean {
 	try {
-		const entries = readdirSync(path, { withFileTypes: true });
-		return entries.some((e) => e.isDirectory()) && entries.every((e) => e.isDirectory());
+		const entries = readdirSync(path, { withFileTypes: true }).filter((e) => !/^\.|^readme|\.(md|txt)$/i.test(e.name));
+		const folder = (e: Dirent) => e.isDirectory() || (e.isSymbolicLink() && isFolder(join(path, e.name)));
+		return entries.length > 0 && entries.every(folder);
 	} catch {
 		return false;
 	}
