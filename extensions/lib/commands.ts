@@ -54,7 +54,22 @@ function globProblem(cwd: string, glob: string): string | undefined {
 	}
 	if (/[{}[\]()]/.test(glob) || glob.startsWith("!")) return `has a glob with syntax paths doesn't support: ${JSON.stringify(glob)} (only *, ** and ? work)`;
 	if (!/[*?]/.test(glob) && isFolder(join(cwd, glob))) return `has a glob that names a folder, not its files: ${JSON.stringify(glob)} (write "${glob}/**")`;
+	// `apps/*`, copied from a workspaces list, names the packages, not their files.
+	const parent = glob.endsWith("/*") ? glob.slice(0, -2) : undefined;
+	if (parent !== undefined && !/[*?]/.test(parent) && onlyFolders(join(cwd, parent))) {
+		return `has a glob whose * matches only folders here: ${JSON.stringify(glob)} (* stays within one folder; write "${parent}/**")`;
+	}
 	return undefined;
+}
+
+/** A folder that holds at least one folder and no files. */
+function onlyFolders(path: string): boolean {
+	try {
+		const entries = readdirSync(path, { withFileTypes: true });
+		return entries.some((e) => e.isDirectory()) && entries.every((e) => e.isDirectory());
+	} catch {
+		return false;
+	}
 }
 
 function isFolder(path: string): boolean {
@@ -69,17 +84,25 @@ function isFolder(path: string): boolean {
  * The commands, in config order, whose files include one of `changed` (project-relative files a fingerprint or an edit
  * confirmed; callers owe every command for paths they only guessed).
  */
-export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>, options: { foldCase?: boolean } = {}): string[] {
+export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>): string[] {
 	// Letter case is folded everywhere: a Linux process can work on a case-insensitive mount (a devcontainer, WSL), and
 	// folding only owes more.
-	const fold = options.foldCase ?? true;
-	const norm = (s: string) => (fold ? s.toLowerCase() : s);
+	const norm = (s: string) => s.toLowerCase();
 	// An edit of the config may change any command or its paths; an unknown file or a whole folder may be any file.
 	if (changed.some((p) => p === UNKNOWN_FILE || p.endsWith("/") || norm(p.replaceAll("\\", "/")) === norm(VERIFY_FILE))) return [...commands];
 	return commands.filter((c) => {
 		const globs = scopes.get(c);
 		return !globs || changed.some((p) => isIgnored(norm(p), globs.map(norm)));
 	});
+}
+
+/**
+ * The commands with a glob inside `folder` (letter case folded): what a folder that is gone (a deleted submodule, which git
+ * lists by its bare path) may have held.
+ */
+export function commandsUnder(folder: string, commands: string[], scopes: Map<string, string[]>): string[] {
+	const prefix = `${folder.replaceAll("\\", "/").toLowerCase()}/`;
+	return commands.filter((c) => scopes.get(c)?.some((g) => g.toLowerCase().startsWith(prefix)));
 }
 
 export const UNKNOWN_FILE = "(unknown file)";

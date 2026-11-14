@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, callChangesSplit, changedPaths, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -268,6 +268,11 @@ test("callChangesSplit: fingerprint changes are exact; targets read from the com
 	const seen = fingerprint(w);
 	writeFileSync(join(w, "a", "f.ts"), "export const f = 9;\n");
 	assert.deepEqual(callChangesSplit(seen, fingerprint(w), w, { command: "python gen.py", cwd: w }), { exact: ["a/f.ts"], guessed: [] });
+});
+
+test("trackedChanges: a text target stays a guess even when the fingerprint lists it; ignored paths drop (round 3, T5)", () => {
+	const ignored = (p: string) => p.endsWith(".md");
+	assert.deepEqual(trackedChanges({ exact: ["a/f.ts", "b.md"], guessed: ["a/f.ts", "c.md", "d.ts"] }, ignored), { exact: ["a/f.ts"], guessed: ["a/f.ts", "d.ts"], paths: ["a/f.ts", "d.ts"] });
 });
 
 test("callChanges: with only symlinks blind, a move the hook can't follow counts only targets under a symlink", () => {

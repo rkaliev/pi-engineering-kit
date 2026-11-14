@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import { commandMatches, owedCommands, parseAgentsCommands, resolveVerifyCommands, resolveVerifyPaths } from "../extensions/lib/commands.ts";
+import { commandMatches, commandsUnder, owedCommands, parseAgentsCommands, resolveVerifyCommands, resolveVerifyPaths } from "../extensions/lib/commands.ts";
 
 /** Temp folders the `paths` tests make, removed when the file's tests end. */
 const made: string[] = [];
@@ -139,12 +139,25 @@ test("owedCommands: a folder label owes every command; a file name with $, @ or 
 	assert.deepEqual(owedCommands(["docs/@types.md"], ["fmt", "test"], scopes), ["fmt"]);
 });
 
-test("owedCommands: on a case-insensitive file system globs match in any case, so a change owes more, never less", () => {
+test("owedCommands: globs match in any letter case, so a change owes more, never less (round 3, T2)", () => {
 	const scopes = new Map([["test", ["src/**"]]]);
-	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes, { foldCase: true }), ["fmt", "test"]);
-	assert.deepEqual(owedCommands([".PI/Verify.json"], ["fmt", "test"], new Map([["fmt", ["x/**"]], ["test", ["x/**"]]]), { foldCase: true }), ["fmt", "test"]);
-	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes, { foldCase: false }), ["fmt"]);
-	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes), ["fmt", "test"], "folding is the default on every platform: Linux mounts can ignore case too");
+	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes), ["fmt", "test"], "a Linux mount can ignore case too");
+	assert.deepEqual(owedCommands([".PI/Verify.json"], ["fmt", "test"], new Map([["fmt", ["x/**"]], ["test", ["x/**"]]])), ["fmt", "test"]);
+});
+
+test("commandsUnder: the commands with a glob inside a folder that is gone (round 3, T1)", () => {
+	const scopes = new Map([["fmt", ["docs/**"]], ["test", ["src/**", "Vendor/lib/**"]]]);
+	assert.deepEqual(commandsUnder("vendor/lib", ["fmt", "test"], scopes), ["test"]);
+	assert.deepEqual(commandsUnder("vendor", ["fmt", "test"], scopes), ["test"]);
+	assert.deepEqual(commandsUnder("vendor/li", ["fmt", "test"], scopes), [], "a prefix of a folder name is another folder");
+});
+
+test("resolveVerifyPaths: a glob whose * matches only folders is a problem (round 3, T4)", () => {
+	const dir = temp("paths-");
+	mkdirSync(join(dir, ".pi"));
+	mkdirSync(join(dir, "apps", "web"), { recursive: true });
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": ["apps/*"] } }));
+	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]).problems, ['paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")']);
 });
 
 test("resolveVerifyPaths: a glob that can never match a project path is a problem, and its command checks every file (R7)", () => {

@@ -336,6 +336,16 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 	return [...new Set([...exact, ...guessed])].sort();
 }
 
+/**
+ * A call's changes as the verify gates count them: `ignored` paths left out, and a text target kept a guess even when the
+ * fingerprint lists the same label (it may name another file); `paths` is each label once.
+ */
+export function trackedChanges(split: { exact: string[]; guessed: string[] }, ignored: (path: string) => boolean): { exact: string[]; guessed: string[]; paths: string[] } {
+	const exact = split.exact.filter((p) => !ignored(p));
+	const guessed = split.guessed.filter((p) => !ignored(p));
+	return { exact, guessed, paths: [...new Set([...exact, ...guessed])] };
+}
+
 /** `callChanges`, split into what the fingerprints show (`exact`) and the targets read from the command's text (`guessed`). */
 export function callChangesSplit(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): { exact: string[]; guessed: string[] } {
 	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);

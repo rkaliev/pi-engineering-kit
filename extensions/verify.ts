@@ -13,17 +13,17 @@
  *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
  *   files must be deleted).
  */
-import { realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/approvals.ts";
 import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
-import { commandMatches, owedCommands, resolveIgnore, resolveVerifyCommands, resolveVerifyPaths, UNKNOWN_FILE, type VerifyConfig } from "./lib/commands.ts";
+import { commandMatches, commandsUnder, owedCommands, resolveIgnore, resolveVerifyCommands, resolveVerifyPaths, UNKNOWN_FILE, type VerifyConfig } from "./lib/commands.ts";
 import { guardScope } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChangesSplit, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChangesSplit, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -95,7 +95,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		// `passed` ran in the call that made these changes: they aren't owed again for them. A guessed path (read from a
 		// command's text, or an edit that isn't the file itself) may be any file: it owes every command.
 		const owing = commands.filter((c) => !passed.includes(c));
-		const owedBy = (paths: string[]) => owedCommands(paths, owing, scopes);
+		// A label that is gone (a deleted file or submodule) may have been a folder: it also owes the commands with globs inside it.
+		const owedBy = (paths: string[]) => {
+			const gone = paths.flatMap((p) => (existsSync(join(ctx.cwd, p)) ? [] : commandsUnder(p, owing, scopes)));
+			const owed = new Set([...owedCommands(paths, owing, scopes), ...gone]);
+			return owing.filter((c) => owed.has(c));
+		};
 		const counted = commands.length === 0 ? [...exact, ...guessed] : [...exact.filter((p) => owedBy([p]).length > 0), ...(owing.length > 0 ? guessed : [])];
 		if (counted.length === 0) return;
 		const owed = guessed.length > 0 ? owing : owedBy(counted);
@@ -129,11 +134,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
 		const before = own ?? tree;
 		const ignored = ignoreFilter(cwd, ignore);
-		const split = callChangesSplit(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell });
-		const exact = split.exact.filter((p) => !ignored(p));
-		// A text target stays a guess even when the fingerprint lists the same label: it may name another file.
-		const guessed = split.guessed.filter((p) => !ignored(p));
-		const paths = [...new Set([...exact, ...guessed])];
+		const { exact, guessed, paths } = trackedChanges(callChangesSplit(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }), ignored);
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
 		const exempted = !!(after?.exempt && own);
 		const counts = after ? !exempted : ctx.hasUI;
@@ -246,7 +247,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			const label = path ? relative(ctx.cwd, abs).replaceAll("\\", "/") : UNKNOWN_FILE;
 			// Only a path that is the file itself may narrow the commands owed (verify.json `paths`): pi's own reading of the
 			// path (`@`, `~`), a symlink or another letter case owes them all.
-			if (path && isFileAt(ctx.cwd, abs, label)) markEdited([label], ctx);
+			// pi strips a leading `@` and expands `~` before it writes, so such a raw path never names the file it looks like.
+			if (path && !/^[@~]/.test(path) && isFileAt(ctx.cwd, abs, label)) markEdited([label], ctx);
 			else markEdited([], ctx, [label]);
 			// The edit is counted; the next comparison starts after it.
 			track(ctx);
