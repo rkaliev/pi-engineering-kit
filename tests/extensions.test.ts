@@ -1872,9 +1872,9 @@ test("token ledger: subagent results and the session's usage fill the branch's l
 });
 
 /** A project whose verify.json maps `test` to `src/**`; `fmt` checks every file (docs included: `ignore` is empty). */
-async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }) {
+async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }, codes: Record<string, number> = {}) {
 	const dir = project({ ".pi/verify.json": JSON.stringify(config), "docs/x.md": "x\n", "docs/y.md": "y\n", "src/a.ts": "export const a = 1;\n", "notes.txt": "n\n" });
-	const f = fakePi();
+	const f = fakePi(codes);
 	verify(f.pi);
 	const c = ctx(dir);
 	await f.emit("session_start", { reason: "startup" }, c);
@@ -1888,6 +1888,29 @@ async function pathsProject(config: object = { commands: ["fmt", "test"], paths:
 	const run = (only?: string[]) => f.tools.get("run_verification").execute("id", only ? { only } : {}, undefined, undefined, c);
 	return { ...f, c, edit, end, prompt, run };
 }
+
+test("verify: a failed run_verification takes the checks it didn't pass out of green (0.39.1)", async () => {
+	const codes: Record<string, number> = {};
+	const p = await pathsProject(undefined, codes);
+	await p.edit("src/a.ts");
+	await p.run(["fmt"]);
+	codes.fmt = 1;
+	await p.run();
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+	assert.doesNotMatch(followUp, /only:/, "both are owed again: the plain call");
+
+	const subsetCodes: Record<string, number> = {};
+	const subset = await pathsProject({ commands: ["fmt", "lint", "test"], paths: { lint: ["src/**"], test: ["src/**"] }, ignore: [] }, subsetCodes);
+	await subset.edit("docs/x.md");
+	await subset.edit("src/a.ts");
+	await subset.run(["lint"]);
+	subsetCodes.fmt = 1;
+	await subset.run(["fmt"]);
+	const subsetFollowUp = await subset.end();
+	assert.match(subsetFollowUp, /only: \["fmt","test"\]/, "a run of a subset takes out only what it selected");
+});
 
 test("verify paths: a doc edit owes only the commands that cover it, and the follow-up names them with only (C1, C10)", async () => {
 	const p = await pathsProject();

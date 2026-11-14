@@ -181,6 +181,11 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		// The checks' own changes (a formatter, `lint --fix`) don't count against them, only against the checks that didn't run.
 		const { own } = track(ctx, undefined, { command: "", exempt: true });
 		if (ok) markGreen(commands, resolved.commands, ctx);
+		else if (unverified) {
+			// The check that failed and the ones it skipped don't stand green any more, like a failed plain command.
+			for (const c of commands.slice(results.length - 1)) greenSinceEdit.delete(c);
+			setStatus(ctx);
+		}
 		if (own.exact.length + own.guessed.length > 0) markEdited(own.exact, ctx, own.guessed, ok ? commands : []);
 
 		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.truncated ? "OUTPUT LIMIT" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
