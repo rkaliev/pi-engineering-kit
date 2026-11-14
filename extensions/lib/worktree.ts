@@ -330,10 +330,28 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
  * Without both fingerprints, only its text.
  */
 export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
+	const { exact, guessed } = callChangesSplit(before, now, projectDir, after);
+	if (guessed.length === 0) return exact;
+	if (exact.length === 0) return guessed;
+	return [...new Set([...exact, ...guessed])].sort();
+}
+
+/**
+ * A call's changes as the verify gates count them: `ignored` paths left out, and a text target kept a guess even when the
+ * fingerprint lists the same label (it may name another file); `paths` is each label once.
+ */
+export function trackedChanges(split: { exact: string[]; guessed: string[] }, ignored: (path: string) => boolean): { exact: string[]; guessed: string[]; paths: string[] } {
+	const exact = split.exact.filter((p) => !ignored(p));
+	const guessed = split.guessed.filter((p) => !ignored(p));
+	return { exact, guessed, paths: [...new Set([...exact, ...guessed])] };
+}
+
+/** `callChanges`, split into what the fingerprints show (`exact`) and the targets read from the command's text (`guessed`). */
+export function callChangesSplit(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): { exact: string[]; guessed: string[] } {
 	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);
-	if (!before || !now) return written();
+	if (!before || !now) return { exact: [], guessed: written() };
 	const blind = new Set([...(before.blind ?? []), ...(now.blind ?? [])]);
-	if (blind.size === 0) return changedPaths(before, now, projectDir);
+	if (blind.size === 0) return { exact: changedPaths(before, now, projectDir), guessed: [] };
 	const parts = [...new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind])].filter((r) => r !== "");
 	const unseenBefore = new Set(before.unseen ?? []);
 	const paths = changedPaths(before, now, projectDir).filter((p) => !unseenBefore.has(partOf(p, parts)));
@@ -349,7 +367,7 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 				? written().filter((p) => wide || blind.has(partOf(p, parts)))
 				: [...new Set(where.flatMap((cwd) => written(cwd)))].filter((p) => blind.has(partOf(p, parts)));
 	}
-	return [...new Set([...paths, ...targets])].sort();
+	return { exact: paths, guessed: [...new Set(targets)].sort() };
 }
 
 /** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
@@ -651,7 +669,8 @@ function realPath(path: string): string {
 const SEPARATORS = new Set(["&&", "||", ";", "|", "|&", "&", "\n"]);
 
 /**
- * A command that does nothing but verify, so its own writes (a formatter, `lint --fix`) stay off the count: no writing
+ * A command that does nothing but verify, so its own writes (a formatter, `lint --fix`) stay off the count for the checks it
+ * ran (the gates owe them to the checks that didn't run): no writing
  * redirection, and outside heredoc bodies only checks (`commands` exactly, or a call `isScript` accepts) joined by
  * `&&`, where a call `isScript` accepts may be piped into `tail`, `head` or `grep` (it records its own result; a check
  * piped elsewhere would hide its exit code).

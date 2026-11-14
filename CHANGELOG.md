@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.39.0
+
+- **The verify gate asks only for the checks that cover what changed.** `"paths": {"<command>": ["<glob>", …]}` in `.pi/verify.json` says which files a command checks; a command without an entry checks every file. A change owes only the commands whose globs cover it, the follow-up names just those, and `run_verification` with `only` runs them in config order and says so in its header. A one-file docs edit in a monorepo whose formatter reads Markdown no longer runs every suite. Only a path the extension is sure of narrows what is owed: a file a bash command's text names, a whole folder, an edited path pi reads differently (`@`, `~`), through a symlink or in another letter case, and verify.json itself owe every command. A changed submodule counts as a whole folder, a deleted one owes the commands with globs inside it, and globs match in any letter case. Globs use `*`, `**` and `?`; a broken entry, or a glob that can never match a file (outside the project, a bare folder name, `apps/*` over package folders, or `{a,b}`, `[ab]`, `!` syntax), is reported once and its command checks every file; an unknown `only` command runs nothing. Without `paths`, every edit still owes every command.
+- **A check's own changes owe the checks that didn't run with it.** A formatter or `lint --fix` run as one of the commands used to keep the others green although it changed the code after them; now they are asked for again (a passing full `run_verification` is unaffected; a failed run's own changes owe every check they touch).
+
 ## 0.38.4
 
 - **No change in what the guard decides.** The comment scan is split from `blankQuoted` into its own function. The comment scan's code comment states its PowerShell limit, the docs name the review gate's heredoc gap. Tests pin a quoted or escaped `)` before a landing with its reason and several apostrophe comments in a row, and the review-gate tests remove every temp folder they make.

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectJson } from "./config.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -8,7 +8,104 @@ export interface VerifyConfig {
 	timeoutSec?: number;
 	/** Globs (relative to the project) whose edits don't make the workspace unverified. */
 	ignore?: string[];
+	/** Per command, the globs of the files it checks; a command without an entry checks every file. */
+	paths?: unknown;
 }
+
+/** The project's verification config file, relative to the project. */
+export const VERIFY_FILE = ".pi/verify.json";
+
+export interface VerifyPaths {
+	/** The globs of each command with a valid entry. */
+	scopes: Map<string, string[]>;
+	/** What is wrong with `paths`, one line each; the commands concerned check every file. */
+	problems: string[];
+}
+
+/** The `paths` map of verify.json for `commands` (configured ones only). */
+export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths {
+	const scopes = new Map<string, string[]>();
+	if (resolveVerifyCommands(cwd).source !== VERIFY_FILE) return { scopes, problems: [] };
+	const paths = readProjectJson<VerifyConfig>(cwd, "verify").paths;
+	if (paths === undefined) return { scopes, problems: [] };
+	if (typeof paths !== "object" || paths === null || Array.isArray(paths)) return { scopes, problems: ["paths must be an object"] };
+	const problems: string[] = [];
+	for (const [command, globs] of Object.entries(paths)) {
+		if (!commands.includes(command)) problems.push(`paths: ${JSON.stringify(command)} is not one of the commands`);
+		else if (!Array.isArray(globs) || globs.length === 0 || !globs.every((g) => typeof g === "string" && g !== "")) {
+			problems.push(`paths: ${JSON.stringify(command)} needs a non-empty list of globs`);
+		} else {
+			const problem = globs.map((g) => globProblem(cwd, g)).find((m) => m !== undefined);
+			if (problem !== undefined) problems.push(`paths: ${JSON.stringify(command)} ${problem}`);
+			else scopes.set(command, globs);
+		}
+	}
+	return { scopes, problems };
+}
+
+/**
+ * Why a `paths` glob can never match a changed file, or undefined. Globs are `isIgnored` globs (`*`, `**`, `?`) matched
+ * against project-relative paths: other tools' syntax, a path outside the project or a bare folder name never match.
+ */
+function globProblem(cwd: string, glob: string): string | undefined {
+	const p = glob.replaceAll("\\", "/");
+	if (glob.includes("\\") || glob.startsWith("./") || /^[~/]/.test(p) || /^[A-Za-z]:/.test(p) || p.endsWith("/") || p.split("/").includes("..")) {
+		return `has a glob that can never match a project path: ${JSON.stringify(glob)} (write it relative to the project, like "src/**")`;
+	}
+	if (/[{}[\]()]/.test(glob) || glob.startsWith("!")) return `has a glob with syntax paths doesn't support: ${JSON.stringify(glob)} (only *, ** and ? work)`;
+	if (!/[*?]/.test(glob) && isFolder(join(cwd, glob))) return `has a glob that names a folder, not its files: ${JSON.stringify(glob)} (write "${glob}/**")`;
+	// `apps/*`, copied from a workspaces list, names the packages, not their files.
+	const parent = glob.endsWith("/*") ? glob.slice(0, -2) : undefined;
+	if (parent !== undefined && !/[*?]/.test(parent) && onlyFolders(join(cwd, parent))) {
+		return `has a glob whose * matches only folders here: ${JSON.stringify(glob)} (* stays within one folder; write "${parent}/**")`;
+	}
+	return undefined;
+}
+
+/** A folder that holds at least one folder and no files. */
+function onlyFolders(path: string): boolean {
+	try {
+		const entries = readdirSync(path, { withFileTypes: true });
+		return entries.some((e) => e.isDirectory()) && entries.every((e) => e.isDirectory());
+	} catch {
+		return false;
+	}
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The commands, in config order, whose files include one of `changed` (project-relative files a fingerprint or an edit
+ * confirmed; callers owe every command for paths they only guessed).
+ */
+export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>): string[] {
+	// Letter case is folded everywhere: a Linux process can work on a case-insensitive mount (a devcontainer, WSL), and
+	// folding only owes more.
+	const norm = (s: string) => s.toLowerCase();
+	// An edit of the config may change any command or its paths; an unknown file or a whole folder may be any file.
+	if (changed.some((p) => p === UNKNOWN_FILE || p.endsWith("/") || norm(p.replaceAll("\\", "/")) === norm(VERIFY_FILE))) return [...commands];
+	return commands.filter((c) => {
+		const globs = scopes.get(c);
+		return !globs || changed.some((p) => isIgnored(norm(p), globs.map(norm)));
+	});
+}
+
+/**
+ * The commands with a glob inside `folder` (letter case folded): what a folder that is gone (a deleted submodule, which git
+ * lists by its bare path) may have held.
+ */
+export function commandsUnder(folder: string, commands: string[], scopes: Map<string, string[]>): string[] {
+	const prefix = `${folder.replaceAll("\\", "/").toLowerCase()}/`;
+	return commands.filter((c) => scopes.get(c)?.some((g) => g.toLowerCase().startsWith(prefix)));
+}
+
+export const UNKNOWN_FILE = "(unknown file)";
 
 /** Docs don't change what the checks verify. A project that lints them sets `"ignore": []`. */
 export const DEFAULT_IGNORE = ["**/*.md", "**/*.mdx", "**/*.txt", "docs/**"];

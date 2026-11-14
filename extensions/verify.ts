@@ -3,8 +3,9 @@
  *
  * - `/verify` and the `run_verification` tool run the project's verification commands
  *   (`.pi/verify.json`, else the Commands section of AGENTS.md, else the ones the manifests imply).
- * - Files edited since the last fully green run make the workspace "unverified": by `edit`/`write`, or by
- *   a shell call, found from a git working-tree fingerprint taken before and after it (lib/worktree.ts).
+ * - Files edited since the last green run make the workspace "unverified" (by `edit`/`write`, or by a shell call,
+ *   found from a git working-tree fingerprint taken before and after it, lib/worktree.ts), owing the commands whose
+ *   verify.json `paths` cover them (every command without an entry, and every command for a path that isn't certain).
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence and its whole
  *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
  *   already followed up get one notice to the user instead); with no commands at all the user gets
@@ -12,16 +13,17 @@
  *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
  *   files must be deleted).
  */
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
 import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/approvals.ts";
 import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
-import { commandMatches, resolveIgnore, resolveVerifyCommands, type VerifyConfig } from "./lib/commands.ts";
+import { commandMatches, commandsUnder, owedCommands, resolveIgnore, resolveVerifyCommands, resolveVerifyPaths, UNKNOWN_FILE, type VerifyConfig } from "./lib/commands.ts";
 import { guardScope } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChanges, ignoredPath, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChangesSplit, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -58,6 +60,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let edited: string[] = [];
 	/** The user was already told this session that there are no verification commands. */
 	let notified = false;
+	/** The user was already told this session what is wrong with verify.json `paths`. */
+	let pathsNoted = false;
 	/** Counted edits so far; `judged` is the count an agent_end last judged, `noted` the one the user was told about. */
 	let editCount = 0;
 	let judged = -1;
@@ -78,11 +82,34 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		setStatus(ctx);
 	};
 
-	const markEdited = (paths: string[], ctx: ExtensionContext) => {
+	/**
+	 * Counts edited `paths`: each owes the commands whose verify.json `paths` cover it (every command without an entry),
+	 * and those leave the green ones. Paths no command covers change nothing; without commands every edit counts.
+	 */
+	const markEdited = (certain: string[], ctx: ExtensionContext, guesses: string[] = [], passed: string[] = []) => {
+		// A folder label (a submodule git lists by its path) stands for any file in it.
+		const exact = certain.filter((p) => !isFolder(join(ctx.cwd, p)));
+		const guessed = [...new Set([...guesses, ...certain.filter((p) => !exact.includes(p))])];
+		const { commands } = resolveVerifyCommands(ctx.cwd);
+		const { scopes } = resolveVerifyPaths(ctx.cwd, commands);
+		// `passed` ran in the call that made these changes: they aren't owed again for them. A guessed path (read from a
+		// command's text, or an edit that isn't the file itself) may be any file: it owes every command.
+		const owing = commands.filter((c) => !passed.includes(c));
+		// A label that is gone (a deleted file or submodule) may have been a folder: it also owes the commands with globs inside it.
+		const owedBy = (paths: string[]) => {
+			const gone = paths.flatMap((p) => (existsSync(join(ctx.cwd, p)) ? [] : commandsUnder(p, owing, scopes)));
+			const owed = new Set([...owedCommands(paths, owing, scopes), ...gone]);
+			return owing.filter((c) => owed.has(c));
+		};
+		const counted = commands.length === 0 ? [...exact, ...guessed] : [...exact.filter((p) => owedBy([p]).length > 0), ...(owing.length > 0 ? guessed : [])];
+		if (counted.length === 0) return;
+		const owed = guessed.length > 0 ? owing : owedBy(counted);
+		// Before the first counted edit, or after a green run, every command stands green.
+		greenSinceEdit = new Set((unverified ? [...greenSinceEdit] : commands).filter((c) => !owed.includes(c)));
 		unverified = verifyState.unverified = true;
 		editCount++;
-		greenSinceEdit = new Set();
-		edited = [...edited.filter((e) => !paths.includes(e)), ...paths].slice(-MAX_LISTED);
+		const listed = [...new Set(counted)];
+		edited = [...edited.filter((e) => !listed.includes(e)), ...listed].slice(-MAX_LISTED);
 		setStatus(ctx);
 	};
 
@@ -95,7 +122,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
 	 * its siblings' writes aren't its own.
 	 */
-	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): string[] => {
+	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): { marked: string[]; own: { exact: string[]; guessed: string[] } } => {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
 		const why: { slow?: boolean; slowParts?: string[] } = {};
@@ -107,22 +134,30 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const own = after ? (callId !== undefined ? pending.get(callId) : tree) : undefined;
 		const before = own ?? tree;
 		const ignored = ignoreFilter(cwd, ignore);
-		const paths = callChanges(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }).filter((p) => !ignored(p));
+		const { exact, guessed, paths } = trackedChanges(callChangesSplit(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell }), ignored);
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
-		const counts = after ? !(after.exempt && own) : ctx.hasUI;
+		const exempted = !!(after?.exempt && own);
+		const counts = after ? !exempted : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];
-		if (marked.length > 0) markEdited(marked, ctx);
+		if (marked.length > 0) markEdited(exact, ctx, guessed);
 		if (callId !== undefined) {
 			pending.delete(callId);
 			if (!after && now) pending.set(callId, now);
 			while (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value!);
 		}
 		if (now) tree = now;
-		return marked;
+		return { marked, own: exempted ? { exact, guessed } : { exact: [], guessed: [] } };
 	};
 
-	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
+	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal, only: string[] = []): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
 		const resolved = resolveVerifyCommands(ctx.cwd);
+		const unknown = only.filter((c) => !resolved.commands.includes(c));
+		if (resolved.commands.length > 0 && unknown.length > 0) {
+			const report = unknown.map((c) => `--only ${JSON.stringify(c)} is not one of the verification commands (${resolved.source}).`).join("\n");
+			return { ok: false, results: [], report };
+		}
+		// A subset keeps the configured order: the cheap checks the project puts first still go first.
+		const commands = only.length > 0 ? resolved.commands.filter((c) => only.includes(c)) : resolved.commands;
 		if (resolved.commands.length === 0) {
 			const why = resolved.error ?? "No verification commands found.";
 			return {
@@ -135,26 +170,31 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		track(ctx);
 		const timeoutSec = readProjectJson<VerifyConfig>(ctx.cwd, "verify").timeoutSec ?? DEFAULT_TIMEOUT_SEC;
 		const results: CheckResult[] = [];
-		for (const command of resolved.commands) {
+		for (const command of commands) {
 			const [shell, args] = process.platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", command]] : ["sh", ["-c", command]];
 			const r = await pi.exec(shell as string, args as string[], { cwd: ctx.cwd, timeout: timeoutSec * 1000, signal });
 			const output = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
 			results.push({ command, code: r.code, killed: r.killed, truncated: r.truncated === true, tail: output.slice(-TAIL_CHARS) });
 			if (r.code !== 0) break; // later checks rarely matter while an earlier one fails
 		}
-		const ok = results.length === resolved.commands.length && results.every((r) => r.code === 0);
-		// The checks' own changes (a formatter, `lint --fix`) don't count against them.
-		track(ctx, undefined, { command: "", exempt: true });
-		if (ok) markGreen(resolved.commands, resolved.commands, ctx);
+		const ok = results.length === commands.length && results.every((r) => r.code === 0);
+		// The checks' own changes (a formatter, `lint --fix`) don't count against them, only against the checks that didn't run.
+		const { own } = track(ctx, undefined, { command: "", exempt: true });
+		if (ok) markGreen(commands, resolved.commands, ctx);
+		if (own.exact.length + own.guessed.length > 0) markEdited(own.exact, ctx, own.guessed, ok ? commands : []);
 
 		const lines = results.map((r) => `${r.code === 0 ? "PASS" : r.truncated ? "OUTPUT LIMIT" : r.killed ? "TIMEOUT" : "FAIL"}  ${r.command}  (exit ${r.code})`);
-		const skipped = resolved.commands.slice(results.length).map((c) => `SKIP  ${c}  (earlier check failed)`);
+		const skipped = commands.slice(results.length).map((c) => `SKIP  ${c}  (earlier check failed)`);
 		const failed = results.find((r) => r.code !== 0);
 		const report = [
-			`Verification (${resolved.source}): ${ok ? "all checks passed" : "FAILED"}`,
+			// A subset names itself, so a report quoting the header doesn't claim checks that didn't run.
+			commands.length < resolved.commands.length
+				? `Verification (${resolved.source}, only: ${commands.length} of ${resolved.commands.length}): ${ok ? "selected checks passed" : "FAILED"}`
+				: `Verification (${resolved.source}): ${ok ? "all checks passed" : "FAILED"}`,
 			...lines,
 			...skipped,
 			...(failed ? ["", `Output tail of \`${failed.command}\`:`, failed.tail] : []),
+			...resolveVerifyPaths(ctx.cwd, resolved.commands).problems.map((p) => `Note: ${p} (a command a broken entry names checks every file).`),
 		].join("\n");
 		return { ok, results, report };
 	}
@@ -167,6 +207,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		workDocsRemindedThisPrompt = false;
 		edited = [];
 		notified = false;
+		pathsNoted = false;
 		editCount = 0;
 		judged = noted = -1;
 		answering = false;
@@ -202,7 +243,13 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
 			const path = String(event.input.path ?? "");
 			if (!countsAsEdit(path, ctx.cwd)) return undefined;
-			markEdited([path ? relative(ctx.cwd, resolve(ctx.cwd, path)).replaceAll("\\", "/") : "(unknown file)"], ctx);
+			const abs = resolve(ctx.cwd, path);
+			const label = path ? relative(ctx.cwd, abs).replaceAll("\\", "/") : UNKNOWN_FILE;
+			// Only a path that is the file itself may narrow the commands owed (verify.json `paths`): pi's own reading of the
+			// path (`@`, `~`), a symlink or another letter case owes them all.
+			// pi strips a leading `@` and expands `~` before it writes, so such a raw path never names the file it looks like.
+			if (path && !/^[@~]/.test(path) && isFileAt(ctx.cwd, abs, label)) markEdited([label], ctx);
+			else markEdited([], ctx, [label]);
 			// The edit is counted; the next comparison starts after it.
 			track(ctx);
 			return undefined;
@@ -217,12 +264,15 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			const ran = commands.filter((c) => commandMatches(shell, c));
 			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
 			// passed and did nothing else keeps its own changes off the count.
-			const marked = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands), powershell: event.toolName === "powershell" });
+			const { marked, own } = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands), powershell: event.toolName === "powershell" });
 			// A call that changed files proves nothing about them, whatever checks it also ran.
-			if (!unverified || marked.length > 0) return undefined;
-			if (ran.length === 0) return undefined;
-			if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
-			else markGreen(ran, commands, ctx);
+			if (marked.length > 0) return undefined;
+			if (unverified && ran.length > 0) {
+				if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
+				else markGreen(ran, commands, ctx);
+			}
+			// A check's own changes (a formatter, `lint --fix`) are off the count for the checks that ran, not for the others.
+			if (own.exact.length + own.guessed.length > 0) markEdited(own.exact, ctx, own.guessed, ran);
 		}
 		return undefined;
 	});
@@ -259,7 +309,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			} else if (commands.length > 0) {
 				remindedThisPrompt = true;
 				const changed = edited.length > 0 ? ` Changed since the last green run: ${edited.join(", ")}.` : "";
-				const how = `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`;
+				// verify.json `paths` can leave some commands green: name only the owed ones.
+				const owed = commands.filter((c) => !greenSinceEdit.has(c));
+				const subset = owed.length > 0 && owed.length < commands.length;
+				const how = subset
+					? `Run the run_verification tool with only: ${JSON.stringify(owed)} (or: ${owed.map((c) => `\`${c}\``).join(", ")}) and read the output.`
+					: `Run the run_verification tool (or: ${commands.map((c) => `\`${c}\``).join(", ")}) and read the output.`;
 				parts.push(
 					`Verify gate: files changed since the last passing verification.${changed} ${how} Report only checks that actually ran in this session; if a check fails, fix the cause or say it is failing. Your next message is the last one the user reads: make it the complete final report (what changed, what the user must do next, the checks you ran and their results), not only the verification.`,
 				);
@@ -267,6 +322,13 @@ export default function verifyExtension(pi: ExtensionAPI) {
 				// Nothing to run, so a follow-up would only repeat the agent's report: tell the user once instead.
 				notified = true;
 				if (ctx.hasUI) ctx.ui.notify('Verify gate: no verification commands found, so edits in this session weren\'t checked. Run /kit-init or add .pi/verify.json ({"commands": ["npm test"]}).', "warning");
+			}
+		}
+		if (unverified && !pathsNoted && ctx.hasUI) {
+			const { problems } = resolveVerifyPaths(ctx.cwd, resolveVerifyCommands(ctx.cwd).commands);
+			if (problems.length > 0) {
+				pathsNoted = true;
+				ctx.ui.notify(`Verify gate: ${problems.join("; ")} in .pi/verify.json; a command a broken entry names checks every file.`, "warning");
 			}
 		}
 		answering = parts.length > followed;
@@ -299,9 +361,11 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			"Run the project's verification commands (tests, typecheck, lint, build) from .pi/verify.json, AGENTS.md or the project's manifests and return pass/fail with the failing output tail.",
 		promptSnippet: "run_verification: run the project's tests/typecheck/lint/build and get evidence",
 		promptGuidelines: ["Run run_verification before claiming work is complete, fixed, or passing."],
-		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
-			const { report, ok, results } = await runChecks(ctx, signal);
+		parameters: Type.Object({
+			only: Type.Optional(Type.Array(Type.String(), { description: "Run only these verification commands, as the verify gate names them" })),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const { report, ok, results } = await runChecks(ctx, signal, params.only ?? []);
 			return { content: [{ type: "text", text: report }], details: { ok, results } };
 		},
 	});
@@ -318,6 +382,23 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			pi.sendMessage({ customType: "verify-result", display: true, content: report });
 		},
 	});
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** Whether `abs` names the file itself at `label`: it exists, and its real path (symlinks resolved, letter case as stored) is `label`. */
+function isFileAt(cwd: string, abs: string, label: string): boolean {
+	try {
+		return relative(realpathSync.native(cwd), realpathSync.native(abs)).replaceAll("\\", "/") === label;
+	} catch {
+		return false;
+	}
 }
 
 /**

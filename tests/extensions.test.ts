@@ -717,7 +717,8 @@ test("verify: a file changed from the shell marks the workspace, also when the c
 	}
 });
 
-test("verify: a verification run that changes files doesn't mark the workspace again", async () => {
+test("verify: a verification run's own changes owe the checks that didn't run in it, not itself", async () => {
+	// User ruling 2026-11-14 (0.39.0 review round 1, R11 «Везде»): npm test passed before the typecheck run changed the code.
 	const { dir, edit } = gitProject(COMMANDS);
 	const { pi, emit, sent } = fakePi();
 	verify(pi);
@@ -727,7 +728,9 @@ test("verify: a verification run that changes files doesn't mark the workspace a
 	await bashCall(emit, c, "npm test");
 	await bashCall(emit, c, "npm run typecheck", false, () => edit("export const a = 3;\n"));
 	await emit("agent_end", { messages: [] }, c);
-	assert.equal(sent.length, 0, "the typecheck run's own change keeps npm test green");
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /`npm test`/);
+	assert.doesNotMatch(sent[0]!.message.content, /`npm run typecheck`/, "the typecheck run's own change doesn't owe it again");
 });
 
 test("verify: outside git the command's text decides", async () => {
@@ -1867,3 +1870,241 @@ test("token ledger: subagent results and the session's usage fill the branch's l
 	await g.commands.get("usage").handler("", c);
 	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k", "a run without a UI (a subagent's own process) adds no session: the parent already counted it");
 });
+
+/** A project whose verify.json maps `test` to `src/**`; `fmt` checks every file (docs included: `ignore` is empty). */
+async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }) {
+	const dir = project({ ".pi/verify.json": JSON.stringify(config), "docs/x.md": "x\n", "docs/y.md": "y\n", "src/a.ts": "export const a = 1;\n", "notes.txt": "n\n" });
+	const f = fakePi();
+	verify(f.pi);
+	const c = ctx(dir);
+	await f.emit("session_start", { reason: "startup" }, c);
+	const edit = (path: string) => f.emit("tool_result", { toolName: "edit", input: { path }, isError: false }, c);
+	const end = async () => {
+		const before = f.sent.length;
+		await f.emit("agent_end", { messages: [] }, c);
+		return f.sent.slice(before).map((s) => String(s.message.content)).join("\n");
+	};
+	const prompt = () => f.emit("input", { text: "go on", source: "interactive" }, c);
+	const run = (only?: string[]) => f.tools.get("run_verification").execute("id", only ? { only } : {}, undefined, undefined, c);
+	return { ...f, c, edit, end, prompt, run };
+}
+
+test("verify paths: a doc edit owes only the commands that cover it, and the follow-up names them with only (C1, C10)", async () => {
+	const p = await pathsProject();
+	await p.edit("docs/x.md");
+	const followUp = await p.end();
+	assert.match(followUp, /only: \["fmt"\]/);
+	assert.match(followUp, /`fmt`/);
+	assert.doesNotMatch(followUp, /`test`/);
+});
+
+test("verify paths: a passed run of the owed subset clears the gate; one missing an owed command doesn't (C2)", async () => {
+	const subset = await pathsProject();
+	await subset.edit("docs/x.md");
+	await subset.run(["fmt"]);
+	assert.equal(await subset.end(), "");
+
+	const missing = await pathsProject();
+	await missing.edit("docs/x.md");
+	await missing.edit("src/a.ts");
+	await missing.run(["fmt"]);
+	const followUp = await missing.end();
+	assert.match(followUp, /only: \["test"\]/);
+	assert.doesNotMatch(followUp, /`fmt`/);
+});
+
+test("verify paths: owed commands add up (C3)", async () => {
+	const p = await pathsProject();
+	await p.edit("docs/x.md");
+	await p.edit("src/a.ts");
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+	assert.doesNotMatch(followUp, /only:/, "every command is owed: the plain call");
+});
+
+test("verify paths: an edit no command covers leaves the workspace verified (C4)", async () => {
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { fmt: ["src/**"], test: ["src/**"] }, ignore: [] });
+	await p.edit("notes.txt");
+	assert.equal(await p.end(), "");
+});
+
+test("verify paths: an edit of .pi/verify.json owes every command (C5)", async () => {
+	const p = await pathsProject();
+	await p.edit(".pi/verify.json");
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+});
+
+test("run_verification with only runs those commands in config order; an unknown one runs nothing (C7)", async () => {
+	const p = await pathsProject();
+	const unknown = await p.run(["zz"]);
+	assert.equal(unknown.details.ok, false);
+	assert.match(unknown.content[0].text, /--only "zz" is not one of the verification commands/);
+	assert.deepEqual(p.execs, []);
+
+	await p.run(["test", "fmt"]);
+	assert.deepEqual(p.execs, ["fmt", "test"]);
+	const one = await p.run(["test"]);
+	assert.deepEqual(p.execs, ["fmt", "test", "test"], "only the named command");
+	assert.match(one.content[0].text, /^Verification \(\.pi\/verify\.json, only: 1 of 2\): selected checks passed$/m);
+});
+
+test("verify paths: a bad paths entry is told once per session and noted in the report (C8)", async () => {
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { test: [] }, ignore: [] });
+	await p.edit("docs/x.md");
+	assert.match(await p.end(), /`test`/, "the command with a bad entry checks every file");
+	assert.equal(p.c.notes.filter((n) => /paths: "test" needs a non-empty list of globs/.test(n)).length, 1);
+	await p.prompt();
+	await p.edit("docs/y.md");
+	await p.end();
+	assert.equal(p.c.notes.filter((n) => /paths:/.test(n)).length, 1, "once per session");
+	assert.match((await p.run()).content[0].text, /Note: paths: "test" needs a non-empty list of globs/);
+});
+
+test("verify paths: an edited path that isn't the file itself owes every command (round 1, R1)", async () => {
+	for (const path of ["docs/new.md", "@docs/x.md", "@docs/lit.md"]) {
+		const p = await pathsProject();
+		// pi writes `docs/lit.md` for `@docs/lit.md`, even when a literal `@docs/lit.md` exists (round 3, T3).
+		if (path === "@docs/lit.md") {
+			mkdirSync(join(p.c.cwd, "@docs"));
+			writeFileSync(join(p.c.cwd, "@docs", "lit.md"), "x\n");
+		}
+		await p.edit(path);
+		const followUp = await p.end();
+		assert.match(followUp, /`fmt`/, path);
+		assert.match(followUp, /`test`/, path);
+	}
+	const linked = await pathsProject();
+	symlinkSync(join(linked.c.cwd, "docs"), join(linked.c.cwd, "manual"));
+	await linked.edit("manual/x.md");
+	assert.match(await linked.end(), /`fmt`[\s\S]*`test`/, "a path through a symlink");
+});
+
+test("verify paths: a path in another letter case owes every command on a case-insensitive file system", { skip: !["darwin", "win32"].includes(process.platform) && "platform: case-insensitive file system" }, async () => {
+	const p = await pathsProject();
+	await p.edit("DOCS/x.md");
+	assert.match(await p.end(), /`fmt`[\s\S]*`test`/);
+});
+
+test("verify paths: shell targets read from the command's text owe every command (round 1, R1)", async () => {
+	const p = await pathsProject();
+	await bashCall(p.emit, p.c, "echo x >> docs/x.md");
+	assert.match(await p.end(), /`fmt`[\s\S]*`test`/);
+});
+
+const PATHS_CONFIG = { ".pi/verify.json": JSON.stringify({ commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }), "docs/x.md": "x\n" };
+
+test("verify paths: a check's own changes owe the commands that didn't run in it (round 1, R11)", async () => {
+	const { dir } = gitProject(PATHS_CONFIG);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "docs/x.md" }, isError: false }, c);
+	await bashCall(emit, c, "fmt", false, () => writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n"));
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /`test`/);
+	assert.doesNotMatch(String(sent[0]?.message.content), /`fmt`/);
+});
+
+test("verify paths: a change between calls owes by its path (review focus)", async () => {
+	const { dir } = gitProject(PATHS_CONFIG);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	writeFileSync(join(dir, "docs/x.md"), "changed\n");
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /only: \["fmt"\]/);
+});
+
+test("verify paths: run_verification with only counts a change made before it first (review focus)", async () => {
+	const { dir, edit } = gitProject(PATHS_CONFIG);
+	const f = fakePi();
+	verify(f.pi);
+	const c = ctx(dir);
+	await f.emit("session_start", { reason: "startup" }, c);
+	edit("export const a = 2;\n");
+	await f.tools.get("run_verification").execute("id", { only: ["fmt"] }, undefined, undefined, c);
+	await f.emit("agent_end", { messages: [] }, c);
+	assert.match(String(f.sent[0]?.message.content), /only: \["test"\]/);
+});
+
+test("verify paths: /verify runs every command (review focus)", async () => {
+	const p = await pathsProject();
+	await p.edit("docs/x.md");
+	await p.commands.get("verify").handler("", p.c);
+	assert.deepEqual(p.execs, ["fmt", "test"]);
+});
+
+test("verify paths: a new session tells the user about a broken entry again (review focus)", async () => {
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { test: [] }, ignore: [] });
+	await p.edit("docs/x.md");
+	await p.end();
+	await p.emit("session_start", { reason: "startup" }, p.c);
+	await p.edit("docs/y.md");
+	await p.end();
+	assert.equal(p.c.notes.filter((n) => /paths: "test"/.test(n)).length, 2);
+});
+
+test("verify paths: a changed submodule (a folder label) owes every command (round 2, Q3)", async () => {
+	const config = { commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["src/**", "vendor/lib/**"] }, ignore: [] };
+	const { dir } = gitProject({ ".pi/verify.json": JSON.stringify(config) });
+	const sub = join(dir, "vendor", "lib");
+	mkdirSync(sub, { recursive: true });
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+	git(sub, "init", "-q", "-b", "main");
+	writeFileSync(join(sub, "x.ts"), "export const x = 1;\n");
+	git(sub, "add", "-A");
+	git(sub, "commit", "-q", "-m", "sub");
+	git(dir, "add", "vendor/lib");
+	git(dir, "commit", "-q", "-m", "add submodule");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "node gen.js", false, () => writeFileSync(join(sub, "x.ts"), "export const x = 2;\n"));
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /`fmt`[\s\S]*`test`/);
+});
+
+test("verify paths: run_verification with only owes its checks' own changes to the commands it didn't run (round 2, Q5)", async () => {
+	for (const failing of [false, true]) {
+		const { dir } = gitProject(PATHS_CONFIG);
+		const f = fakePi(failing ? { fmt: 1 } : {}, (command) => command === "fmt" && writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n"));
+		verify(f.pi);
+		const c = ctx(dir);
+		await f.emit("session_start", { reason: "startup" }, c);
+		// A passing run starts after a docs edit; a failing one from a verified workspace, so only its own change owes.
+		if (!failing) await f.emit("tool_result", { toolName: "edit", input: { path: "docs/x.md" }, isError: false }, c);
+		await f.tools.get("run_verification").execute("id", { only: ["fmt"] }, undefined, undefined, c);
+		await f.emit("agent_end", { messages: [] }, c);
+		const followUp = String(f.sent[0]?.message.content);
+		if (failing) assert.match(followUp, /`fmt`[\s\S]*`test`/, "a failed run's own change owes every check it touches, the failed one too");
+		else assert.match(followUp, /only: \["test"\]/, "a passing subset's own change");
+	}
+});
+
+test("verify paths: a deleted submodule owes the commands with globs inside it (round 3, T1)", async () => {
+	const config = { commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["src/**", "vendor/lib/**"] }, ignore: [] };
+	const { dir } = gitProject({ ".pi/verify.json": JSON.stringify(config) });
+	const sub = join(dir, "vendor", "lib");
+	mkdirSync(sub, { recursive: true });
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+	git(sub, "init", "-q", "-b", "main");
+	writeFileSync(join(sub, "x.ts"), "export const x = 1;\n");
+	git(sub, "add", "-A");
+	git(sub, "commit", "-q", "-m", "sub");
+	git(dir, "add", "vendor/lib");
+	git(dir, "commit", "-q", "-m", "add submodule");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "rm -rf vendor/lib", false, () => rmSync(sub, { recursive: true, force: true }));
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /only: \["test"\]/);
+});
+

@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import { commandMatches, parseAgentsCommands, resolveVerifyCommands } from "../extensions/lib/commands.ts";
+import test, { after } from "node:test";
+import { commandMatches, commandsUnder, owedCommands, parseAgentsCommands, resolveVerifyCommands, resolveVerifyPaths } from "../extensions/lib/commands.ts";
+
+/** Temp folders the `paths` tests make, removed when the file's tests end. */
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+function temp(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
 
 test("parses verification commands from an AGENTS.md Commands section", () => {
 	const md = `# App
@@ -73,4 +84,111 @@ test("an unreadable Makefile doesn't break command detection", () => {
 	mkdirSync(join(dir, "Makefile"));
 	assert.deepEqual(resolveVerifyCommands(dir), { commands: [], source: "none" });
 	assert.deepEqual(resolveVerifyCommands(dir, { detect: false }), { commands: [], source: "none" });
+});
+
+test("owedCommands: a change is owed by the commands whose paths cover it; a command without paths covers every file", () => {
+	const scopes = new Map([["test", ["src/**"]]]);
+	assert.deepEqual(owedCommands(["docs/a.md"], ["fmt", "test"], scopes), ["fmt"]);
+	assert.deepEqual(owedCommands(["src/a.ts"], ["fmt", "test"], scopes), ["fmt", "test"]);
+	assert.deepEqual(owedCommands(["x.txt"], ["fmt", "test"], new Map([["fmt", ["src/**"]], ["test", ["src/**"]]])), [], "no command covers it");
+});
+
+test("owedCommands: an unknown file or the verify config itself owes every command, in config order", () => {
+	const scopes = new Map([["fmt", ["src/**"]], ["test", ["src/**"]]]);
+	assert.deepEqual(owedCommands(["(unknown file)"], ["fmt", "test"], scopes), ["fmt", "test"]);
+	assert.deepEqual(owedCommands([".pi/verify.json"], ["fmt", "test"], scopes), ["fmt", "test"]);
+});
+
+test("resolveVerifyPaths reads verify.json paths and reports entries that would hide a check", () => {
+	const project = (config: object) => {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify(config));
+		return dir;
+	};
+	const commands = ["npm run fmt", "npm test"];
+	const valid = resolveVerifyPaths(project({ commands, paths: { "npm test": ["src/**"] } }), commands);
+	assert.deepEqual([...valid.scopes], [["npm test", ["src/**"]]]);
+	assert.deepEqual(valid.problems, []);
+
+	assert.deepEqual(resolveVerifyPaths(project({ commands, paths: { "npm tset": ["src/**"] } }), commands), {
+		scopes: new Map(),
+		problems: ['paths: "npm tset" is not one of the commands'],
+	});
+	for (const bad of [[], "src/**", [1]]) {
+		assert.deepEqual(resolveVerifyPaths(project({ commands, paths: { "npm test": bad } }), commands), {
+			scopes: new Map(),
+			problems: ['paths: "npm test" needs a non-empty list of globs'],
+		}, JSON.stringify(bad));
+	}
+	assert.deepEqual(resolveVerifyPaths(project({ commands, paths: ["src/**"] }), commands), { scopes: new Map(), problems: ["paths must be an object"] });
+});
+
+test("resolveVerifyPaths: paths apply only to commands from verify.json, not to AGENTS.md ones", () => {
+	const dir = temp("paths-");
+	writeFileSync(join(dir, "AGENTS.md"), "## Commands\n- `npm test`\n");
+	mkdirSync(join(dir, ".pi"));
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ paths: { "npm test": ["src/**"] } }));
+	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]), { scopes: new Map(), problems: [] });
+});
+
+test("owedCommands: a folder label owes every command; a file name with $, @ or ~ narrows by its globs (round 2, Q10)", () => {
+	const scopes = new Map([["fmt", ["docs/**"]], ["test", ["src/**"]]]);
+	assert.deepEqual(owedCommands(["repoA/"], ["fmt", "test"], scopes), ["fmt", "test"], "a whole repository");
+	assert.deepEqual(owedCommands(["src/routes/posts.$slug.tsx"], ["fmt", "test"], scopes), ["test"], "a Remix route file");
+	assert.deepEqual(owedCommands(["docs/@types.md"], ["fmt", "test"], scopes), ["fmt"]);
+});
+
+test("owedCommands: globs match in any letter case, so a change owes more, never less (round 3, T2)", () => {
+	const scopes = new Map([["test", ["src/**"]]]);
+	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes), ["fmt", "test"], "a Linux mount can ignore case too");
+	assert.deepEqual(owedCommands([".PI/Verify.json"], ["fmt", "test"], new Map([["fmt", ["x/**"]], ["test", ["x/**"]]])), ["fmt", "test"]);
+});
+
+test("commandsUnder: the commands with a glob inside a folder that is gone (round 3, T1)", () => {
+	const scopes = new Map([["fmt", ["docs/**"]], ["test", ["src/**", "Vendor/lib/**"]]]);
+	assert.deepEqual(commandsUnder("vendor/lib", ["fmt", "test"], scopes), ["test"]);
+	assert.deepEqual(commandsUnder("vendor", ["fmt", "test"], scopes), ["test"]);
+	assert.deepEqual(commandsUnder("vendor/li", ["fmt", "test"], scopes), [], "a prefix of a folder name is another folder");
+});
+
+test("resolveVerifyPaths: a glob whose * matches only folders is a problem (round 3, T4)", () => {
+	const dir = temp("paths-");
+	mkdirSync(join(dir, ".pi"));
+	mkdirSync(join(dir, "apps", "web"), { recursive: true });
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": ["apps/*"] } }));
+	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]).problems, ['paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")']);
+});
+
+test("resolveVerifyPaths: a glob that can never match a project path is a problem, and its command checks every file (R7)", () => {
+	const commands = ["npm test"];
+	for (const glob of ["./src/**", "src/", "/abs/src/**", "~/src/**", "C:/src/**", "src\\**", "../src/**", "src/../x/**"]) {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands, paths: { "npm test": ["lib/**", glob] } }));
+		const r = resolveVerifyPaths(dir, commands);
+		assert.equal(r.scopes.has("npm test"), false, glob);
+		assert.deepEqual(r.problems, [`paths: "npm test" has a glob that can never match a project path: ${JSON.stringify(glob)} (write it relative to the project, like "src/**")`], glob);
+	}
+});
+
+test("resolveVerifyPaths: glob syntax paths doesn't support, and a bare folder name, are problems (round 2, Q1)", () => {
+	const commands = ["npm test"];
+	const check = (glob: string, problem: string) => {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		mkdirSync(join(dir, "src"));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands, paths: { "npm test": ["lib/**", glob] } }));
+		const r = resolveVerifyPaths(dir, commands);
+		assert.equal(r.scopes.has("npm test"), false, glob);
+		assert.deepEqual(r.problems, [problem], glob);
+	};
+	for (const glob of ["**/*.{ts,tsx}", "src/**/*.[jt]s", "!docs/**", "src/@(a|b)/**"]) {
+		check(glob, `paths: "npm test" has a glob with syntax paths doesn't support: ${JSON.stringify(glob)} (only *, ** and ? work)`);
+	}
+	check("src", `paths: "npm test" has a glob that names a folder, not its files: "src" (write "src/**")`);
+	const dir = temp("paths-");
+	mkdirSync(join(dir, ".pi"));
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands, paths: { "npm test": ["routes/posts.$slug.tsx", "Makefile"] } }));
+	assert.deepEqual(resolveVerifyPaths(dir, commands).problems, [], "a literal file name is fine, $ included");
 });
