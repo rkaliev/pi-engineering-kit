@@ -2,7 +2,7 @@
 
 Status: design approved (2026-11-14)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
-Base: 1ebbd1d
+Base: 26b7cd4
 Links: None
 
 <details><summary>Original request</summary>
@@ -89,7 +89,64 @@ Minor release 0.39.0 in both editions; additive config field, no migration. Roll
 
 ## Plan
 
-None yet
+> Execute with the executing-plans skill. Only this section uses `- [ ]` checkboxes.
+
+**Goal:** `paths` in `.pi/verify.json` makes the verify gate owe, name and credit only the commands whose globs cover the changed files.
+**Architecture:** `extensions/lib/commands.ts` reads the map and computes owed commands (same code as the Claude edition, `VERIFY_FILE = ".pi/verify.json"`); `extensions/verify.ts` keeps `greenSinceEdit` per command (an edit removes only the owed ones), names the owed subset in the follow-up, and `run_verification` takes `only`.
+**Stack / constraints:** pi extension API, TypeBox `Type`, `node:test`; no new dependencies; without `paths` every existing test passes unchanged (criterion 6). Version 0.39.0.
+**Verification:** the project's commands (`npm test`, `npm run typecheck`), run as the kit verify script from the workspace root.
+
+### Review focus
+- Edits counted between calls (`track` with a UI) owe by path like `edit`/`write`.
+- `run_verification` with `only` after an edit made before the run: the pre-run `track(ctx)` owes first, then the subset credits only what it ran.
+- `/verify` command still runs every command.
+- Session start resets the paths notice.
+
+### Post-implementation
+- `README.md` verify section, `docs/ARCHITECTURE.md` + `.ru.md`: `paths`, owed subset, `run_verification` `only`.
+- `skills/verification-before-completion/SKILL.md`: a subset only as the gate names it.
+- `CHANGELOG.md` 0.39.0, `package.json` version 0.39.0.
+- Topic chapter: README verify section; no decision record.
+
+Files:
+- Modify `extensions/lib/commands.ts`: as Claude Task 1.
+- Modify `extensions/verify.ts`: owed edits, `runChecks(ctx, signal, only)`, `run_verification` `only`, follow-up wording, paths notice.
+- Test `tests/commands.test.ts`, `tests/extensions.test.ts`.
+
+### Task 1: owed commands from `paths`
+
+**Files:** Modify `extensions/lib/commands.ts` · Test `tests/commands.test.ts`
+**Interfaces:** Produces `resolveVerifyPaths`, `owedCommands`, `VERIFY_FILE` with the Claude edition's signatures and problem texts.
+
+- [ ] Port the Claude edition's Task 1 tests with `.pi/verify.json` (source `".pi/verify.json"`); stubs as there
+- [ ] Run `node --test tests/commands.test.ts` → FAIL on the `["fmt"]` assertion
+- [ ] Implement (diff against the Claude edition's functions shows only the file name)
+- [ ] Run → PASS, full suite
+- [ ] Commit `feat(verify): owed commands from verify.json paths`
+
+### Task 2: owed edits, `only`, follow-up
+
+**Files:** Modify `extensions/verify.ts` · Test `tests/extensions.test.ts`
+**Interfaces:** Consumes Task 1. `run_verification` parameters `Type.Object({ only: Type.Optional(Type.Array(Type.String(), { description: "Run only these verification commands, as the verify gate names them" })) })`.
+
+- [ ] Write failing tests, `.pi/verify.json` `{"commands":["fmt","test"],"paths":{"test":["src/**"]},"ignore":[]}`:
+  - C1/C10: edit `docs/x.md`, agent_end → follow-up names `only: ["fmt"]` and `` `fmt` `` and not `` `test` ``.
+  - C2: `run_verification` `{only:["fmt"]}` passing → next agent_end sends nothing; after an edit of `src/a.ts` too → follow-up names `test`.
+  - C3: edits `docs/x.md` then `src/a.ts` → follow-up names both, no `only`.
+  - C4: paths covering both with `src/**`; edit `notes.txt` → no follow-up, status not set.
+  - C5: edit `.pi/verify.json` → all owed.
+  - C7: `{only:["zz"]}` → `details.ok` false, report `--only "zz" is not one of the verification commands`, nothing run; `{only:["test","fmt"]}` runs fmt then test.
+  - C8: bad entry → one `ui.notify` warning per session naming it; report has the `Note:` line.
+- [ ] Run `node --test tests/extensions.test.ts` → FAIL at C1 (follow-up names `test`)
+- [ ] Implement: `markEdited(paths)` owes like Claude `oweFor` (nothing owed → no change, `editCount` not bumped); `runChecks(ctx, signal, only?)` filters in config order and calls `markGreen(ran, all)`; follow-up for a subset: `Run the run_verification tool with only: ["fmt"] (or: \`fmt\`) and read the output.`
+- [ ] Run → PASS; full suite, existing tests unchanged
+- [ ] Commit `feat(verify): owe and credit commands by path`
+
+### Task 3: docs and version
+
+- [ ] Update the Post-implementation docs, CHANGELOG 0.39.0, version
+- [ ] Run the kit verify script from the workspace root → all pass
+- [ ] Commit `docs: verify paths`
 
 ## Progress
 
