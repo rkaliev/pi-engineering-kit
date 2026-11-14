@@ -1,6 +1,6 @@
 # Verify gate asks only for the checks that cover the changed files
 
-Status: plan approved (2026-11-14)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: 26b7cd4
 Links: None
@@ -118,11 +118,11 @@ Files:
 **Files:** Modify `extensions/lib/commands.ts` · Test `tests/commands.test.ts`
 **Interfaces:** Produces `resolveVerifyPaths`, `owedCommands`, `VERIFY_FILE` with the Claude edition's signatures and problem texts.
 
-- [ ] Port the Claude edition's Task 1 tests with `.pi/verify.json` (source `".pi/verify.json"`); stubs as there
-- [ ] Run `node --test tests/commands.test.ts` → FAIL on the `["fmt"]` assertion
-- [ ] Implement (diff against the Claude edition's functions shows only the file name)
-- [ ] Run → PASS, full suite
-- [ ] Commit `feat(verify): owed commands from verify.json paths`
+- [x] Port the Claude edition's Task 1 tests with `.pi/verify.json` (source `".pi/verify.json"`); stubs as there
+- [x] Run `node --test tests/commands.test.ts` → FAIL on the `["fmt"]` assertion
+- [x] Implement (diff against the Claude edition's functions shows only the file name)
+- [x] Run → PASS, full suite
+- [x] Commit `feat(verify): owed commands from verify.json paths`
 
 ### Task 2: owed edits, `only`, follow-up
 
@@ -150,4 +150,5 @@ Files:
 
 ## Progress
 
-None yet
+Baseline 2026-11-14: kit verify script from the workspace root → all checks passed (both editions). Drift: none since Base.
+Task 1: complete (5f866e1..e90a02e, `npm test` → all pass, typecheck clean; functions identical to the Claude edition but `VERIFY_FILE`; AGENTS.md and unknown-file tests mutation-checked)
