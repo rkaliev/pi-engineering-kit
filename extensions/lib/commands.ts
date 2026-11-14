@@ -119,6 +119,9 @@ function reachesInto(glob: string, folder: string): boolean {
 		if (fi === f.length) return gi < g.length;
 		if (gi === g.length) return false;
 		if (g[gi] === "**") return from(gi + 1, fi) || from(gi, fi + 1);
+		// `**` inside a segment (`**.ts`, `src/**.ts`) spans folders too: what comes before it only has to start this one.
+		const deep = g[gi]!.indexOf("**");
+		if (deep >= 0) return globToRegExp(`${g[gi]!.slice(0, deep)}*`).test(f[fi]!);
 		return globToRegExp(g[gi]!).test(f[fi]!) && from(gi + 1, fi + 1);
 	};
 	return from(0, 0);

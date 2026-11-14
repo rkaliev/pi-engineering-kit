@@ -167,6 +167,17 @@ test("commandsUnder: a glob that can match a path inside a gone label (0.39.1, U
 	assert.deepEqual(commandsUnder("vendor\\lib", ["tsc", "star"], scopes), ["tsc"], "a glob that ends at the label names the label, not a file in it");
 });
 
+test("commandsUnder: a ** inside a segment reaches into a gone label like a bare ** (0.39.1 review, V2)", () => {
+	const scopes = new Map([
+		["any", ["**.ts"]],
+		["under", ["vendor/**.ts"]],
+		["prefix", ["vendor/l**"]],
+		["other", ["src/**.ts"]],
+		["otherPrefix", ["vendor/x**"]],
+	]);
+	assert.deepEqual(commandsUnder("vendor/lib", [...scopes.keys()], scopes), ["any", "under", "prefix"]);
+});
+
 test("resolveVerifyPaths: a glob whose * matches only folders is a problem (round 3, T4)", () => {
 	const dir = temp("paths-");
 	mkdirSync(join(dir, ".pi"));

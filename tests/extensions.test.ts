@@ -1912,6 +1912,20 @@ test("verify: a failed run_verification takes the checks it didn't pass out of g
 	assert.match(subsetFollowUp, /only: \["fmt","test"\]/, "a run of a subset takes out only what it selected");
 });
 
+test("verify: a failed run_verification also takes the checks it skipped out of green (0.39.1 review, V3)", async () => {
+	const codes: Record<string, number> = {};
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["src/**"] }, ignore: [] }, codes);
+	await p.edit("src/a.ts");
+	await p.run(["test"]);
+	await p.edit("docs/x.md");
+	codes.fmt = 1;
+	await p.run();
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/, "test was skipped after fmt failed: it is owed again");
+	assert.doesNotMatch(followUp, /only:/);
+});
+
 test("verify paths: a doc edit owes only the commands that cover it, and the follow-up names them with only (C1, C10)", async () => {
 	const p = await pathsProject();
 	await p.edit("docs/x.md");
