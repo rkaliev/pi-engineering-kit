@@ -1867,3 +1867,92 @@ test("token ledger: subagent results and the session's usage fill the branch's l
 	await g.commands.get("usage").handler("", c);
 	assert.equal(notes.at(-1), "Tokens on feat/u: main 5k · scout 1k · total 6k", "a run without a UI (a subagent's own process) adds no session: the parent already counted it");
 });
+
+/** A project whose verify.json maps `test` to `src/**`; `fmt` checks every file (docs included: `ignore` is empty). */
+async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }) {
+	const dir = project({ ".pi/verify.json": JSON.stringify(config) });
+	const f = fakePi();
+	verify(f.pi);
+	const c = ctx(dir);
+	await f.emit("session_start", { reason: "startup" }, c);
+	const edit = (path: string) => f.emit("tool_result", { toolName: "edit", input: { path }, isError: false }, c);
+	const end = async () => {
+		const before = f.sent.length;
+		await f.emit("agent_end", { messages: [] }, c);
+		return f.sent.slice(before).map((s) => String(s.message.content)).join("\n");
+	};
+	const prompt = () => f.emit("input", { text: "go on", source: "interactive" }, c);
+	const run = (only?: string[]) => f.tools.get("run_verification").execute("id", only ? { only } : {}, undefined, undefined, c);
+	return { ...f, c, edit, end, prompt, run };
+}
+
+test("verify paths: a doc edit owes only the commands that cover it, and the follow-up names them with only (C1, C10)", async () => {
+	const p = await pathsProject();
+	await p.edit("docs/x.md");
+	const followUp = await p.end();
+	assert.match(followUp, /only: \["fmt"\]/);
+	assert.match(followUp, /`fmt`/);
+	assert.doesNotMatch(followUp, /`test`/);
+});
+
+test("verify paths: a passed run of the owed subset clears the gate; one missing an owed command doesn't (C2)", async () => {
+	const subset = await pathsProject();
+	await subset.edit("docs/x.md");
+	await subset.run(["fmt"]);
+	assert.equal(await subset.end(), "");
+
+	const missing = await pathsProject();
+	await missing.edit("docs/x.md");
+	await missing.edit("src/a.ts");
+	await missing.run(["fmt"]);
+	const followUp = await missing.end();
+	assert.match(followUp, /only: \["test"\]/);
+	assert.doesNotMatch(followUp, /`fmt`/);
+});
+
+test("verify paths: owed commands add up (C3)", async () => {
+	const p = await pathsProject();
+	await p.edit("docs/x.md");
+	await p.edit("src/a.ts");
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+	assert.doesNotMatch(followUp, /only:/, "every command is owed: the plain call");
+});
+
+test("verify paths: an edit no command covers leaves the workspace verified (C4)", async () => {
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { fmt: ["src/**"], test: ["src/**"] }, ignore: [] });
+	await p.edit("notes.txt");
+	assert.equal(await p.end(), "");
+});
+
+test("verify paths: an edit of .pi/verify.json owes every command (C5)", async () => {
+	const p = await pathsProject();
+	await p.edit(".pi/verify.json");
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+});
+
+test("run_verification with only runs those commands in config order; an unknown one runs nothing (C7)", async () => {
+	const p = await pathsProject();
+	const unknown = await p.run(["zz"]);
+	assert.equal(unknown.details.ok, false);
+	assert.match(unknown.content[0].text, /--only "zz" is not one of the verification commands/);
+	assert.deepEqual(p.execs, []);
+
+	await p.run(["test", "fmt"]);
+	assert.deepEqual(p.execs, ["fmt", "test"]);
+});
+
+test("verify paths: a bad paths entry is told once per session and noted in the report (C8)", async () => {
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { test: [] }, ignore: [] });
+	await p.edit("docs/x.md");
+	assert.match(await p.end(), /`test`/, "the command with a bad entry checks every file");
+	assert.equal(p.c.notes.filter((n) => /paths: "test" needs a non-empty list of globs/.test(n)).length, 1);
+	await p.prompt();
+	await p.edit("docs/y.md");
+	await p.end();
+	assert.equal(p.c.notes.filter((n) => /paths:/.test(n)).length, 1, "once per session");
+	assert.match((await p.run()).content[0].text, /Note: paths: "test" needs a non-empty list of globs/);
+});
