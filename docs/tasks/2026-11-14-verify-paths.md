@@ -1,6 +1,6 @@
 # Verify gate asks only for the checks that cover the changed files
 
-Status: design approved (2026-11-14)
+Status: plan approved (2026-11-14)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: 26b7cd4
 Links: None
