@@ -129,7 +129,7 @@ Files:
 **Files:** Modify `extensions/verify.ts` · Test `tests/extensions.test.ts`
 **Interfaces:** Consumes Task 1. `run_verification` parameters `Type.Object({ only: Type.Optional(Type.Array(Type.String(), { description: "Run only these verification commands, as the verify gate names them" })) })`.
 
-- [ ] Write failing tests, `.pi/verify.json` `{"commands":["fmt","test"],"paths":{"test":["src/**"]},"ignore":[]}`:
+- [x] Write failing tests, `.pi/verify.json` `{"commands":["fmt","test"],"paths":{"test":["src/**"]},"ignore":[]}`:
   - C1/C10: edit `docs/x.md`, agent_end → follow-up names `only: ["fmt"]` and `` `fmt` `` and not `` `test` ``.
   - C2: `run_verification` `{only:["fmt"]}` passing → next agent_end sends nothing; after an edit of `src/a.ts` too → follow-up names `test`.
   - C3: edits `docs/x.md` then `src/a.ts` → follow-up names both, no `only`.
@@ -137,10 +137,10 @@ Files:
   - C5: edit `.pi/verify.json` → all owed.
   - C7: `{only:["zz"]}` → `details.ok` false, report `--only "zz" is not one of the verification commands`, nothing run; `{only:["test","fmt"]}` runs fmt then test.
   - C8: bad entry → one `ui.notify` warning per session naming it; report has the `Note:` line.
-- [ ] Run `node --test tests/extensions.test.ts` → FAIL at C1 (follow-up names `test`)
-- [ ] Implement: `markEdited(paths)` owes like Claude `oweFor` (nothing owed → no change, `editCount` not bumped); `runChecks(ctx, signal, only?)` filters in config order and calls `markGreen(ran, all)`; follow-up for a subset: `Run the run_verification tool with only: ["fmt"] (or: \`fmt\`) and read the output.`
-- [ ] Run → PASS; full suite, existing tests unchanged
-- [ ] Commit `feat(verify): owe and credit commands by path`
+- [x] Run `node --test tests/extensions.test.ts` → FAIL at C1 (follow-up names `test`)
+- [x] Implement: `markEdited(paths)` owes like Claude `oweFor` (nothing owed → no change, `editCount` not bumped); `runChecks(ctx, signal, only?)` filters in config order and calls `markGreen(ran, all)`; follow-up for a subset: `Run the run_verification tool with only: ["fmt"] (or: \`fmt\`) and read the output.`
+- [x] Run → PASS; full suite, existing tests unchanged
+- [x] Commit `feat(verify): owe and credit commands by path`
 
 ### Task 3: docs and version
 
@@ -152,3 +152,6 @@ Files:
 
 Baseline 2026-11-14: kit verify script from the workspace root → all checks passed (both editions). Drift: none since Base.
 Task 1: complete (5f866e1..e90a02e, `npm test` → all pass, typecheck clean; functions identical to the Claude edition but `VERIFY_FILE`; AGENTS.md and unknown-file tests mutation-checked)
+Ruling: the paths notice goes out at an agent_end with unverified edits and a UI (no UI, no one to tell), once per session — mirrors the Claude edition's first Stop with unverified edits.
+Ruling: the unknown-`only` text says `--only "zz"` like the Claude script, so both editions report the same words.
+Task 2: complete (9514b57..63e7522, `npm test` → 740 pass, existing tests unchanged, typecheck clean; C3 and C5 passed before the change and were mutation-checked)
