@@ -1,6 +1,6 @@
 # Verify gate owes what failed or vanished, and the repo meets GitHub Community Standards
 
-Status: design approved (2026-11-14)
+Status: plan approved (2026-11-14)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 2818091, pi 28ec758
 Links: workspace docs/review-rounds/0.39.0/round4-findings.md (U1–U3, "missed earlier")
