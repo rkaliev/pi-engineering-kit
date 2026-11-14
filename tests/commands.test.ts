@@ -152,6 +152,21 @@ test("commandsUnder: the commands with a glob inside a folder that is gone (roun
 	assert.deepEqual(commandsUnder("vendor/li", ["fmt", "test"], scopes), [], "a prefix of a folder name is another folder");
 });
 
+test("commandsUnder: a glob that can match a path inside a gone label (0.39.1, U1)", () => {
+	const scopes = new Map([
+		["fmt", ["docs/**"]],
+		["tsc", ["**/*.ts"]],
+		["vend", ["vendor/*/src/**"]],
+		["pk", ["packages/**"]],
+		["exact", ["vendor/lib"]],
+		["star", ["vendor/*"]],
+		["deep", ["Vendor/*/**"]],
+	]);
+	assert.deepEqual(commandsUnder("vendor/lib", [...scopes.keys()], scopes), ["tsc", "vend", "deep"]);
+	assert.deepEqual(commandsUnder("vendor/li", ["vend"], scopes), ["vend"], "a * segment matches any folder name");
+	assert.deepEqual(commandsUnder("vendor\\lib", ["tsc", "star"], scopes), ["tsc"], "a glob that ends at the label names the label, not a file in it");
+});
+
 test("resolveVerifyPaths: a glob whose * matches only folders is a problem (round 3, T4)", () => {
 	const dir = temp("paths-");
 	mkdirSync(join(dir, ".pi"));

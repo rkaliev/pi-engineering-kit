@@ -2108,3 +2108,24 @@ test("verify paths: a deleted submodule owes the commands with globs inside it (
 	assert.match(String(sent[0]?.message.content), /only: \["test"\]/);
 });
 
+test("verify paths: a deleted submodule under a wildcard glob owes its command (0.39.1, U1)", async () => {
+	const config = { commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["**/*.ts"] }, ignore: [] };
+	const { dir } = gitProject({ ".pi/verify.json": JSON.stringify(config) });
+	const sub = join(dir, "vendor", "lib");
+	mkdirSync(sub, { recursive: true });
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+	git(sub, "init", "-q", "-b", "main");
+	writeFileSync(join(sub, "x.ts"), "export const x = 1;\n");
+	git(sub, "add", "-A");
+	git(sub, "commit", "-q", "-m", "sub");
+	git(dir, "add", "vendor/lib");
+	git(dir, "commit", "-q", "-m", "add submodule");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "rm -rf vendor/lib", false, () => rmSync(sub, { recursive: true, force: true }));
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /only: \["test"\]/);
+});
+
