@@ -34,22 +34,42 @@ export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths
 		if (!commands.includes(command)) problems.push(`paths: ${JSON.stringify(command)} is not one of the commands`);
 		else if (!Array.isArray(globs) || globs.length === 0 || !globs.every((g) => typeof g === "string" && g !== "")) {
 			problems.push(`paths: ${JSON.stringify(command)} needs a non-empty list of globs`);
-		} else scopes.set(command, globs);
+		} else {
+			const bad = globs.find(unmatchableGlob);
+			if (bad !== undefined) problems.push(`paths: ${JSON.stringify(command)} has a glob that can never match a project path: ${JSON.stringify(bad)} (write it relative to the project, like "src/**")`);
+			else scopes.set(command, globs);
+		}
 	}
 	return { scopes, problems };
 }
 
 /** The commands, in config order, whose files include one of `changed`. */
-export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>): string[] {
-	// An edit of the config may change any command or its paths; an unknown file may be any file.
-	if (changed.some((p) => p === UNKNOWN_FILE || p.replaceAll("\\", "/") === VERIFY_FILE)) return [...commands];
+export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>, options: { foldCase?: boolean } = {}): string[] {
+	const fold = options.foldCase ?? CASE_INSENSITIVE_FS;
+	const norm = (s: string) => (fold ? s.toLowerCase() : s);
+	// An edit of the config may change any command or its paths; a label that may stand for another file (unknown, read
+	// from a command's text, a whole folder, outside the project) may be any file.
+	if (changed.some((p) => p === UNKNOWN_FILE || uncertainLabel(p) || norm(p.replaceAll("\\", "/")) === norm(VERIFY_FILE))) return [...commands];
 	return commands.filter((c) => {
 		const globs = scopes.get(c);
-		return !globs || changed.some((p) => isIgnored(p, globs));
+		return !globs || changed.some((p) => isIgnored(norm(p), globs.map(norm)));
 	});
 }
 
-/** The label of an edit whose file isn't known. */
+/** macOS and Windows file systems ignore letter case by default: a glob then matches a path in any case. */
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+/** A label that names no single project file for sure: shell syntax, home, pi's `@`, a folder, `..` or an absolute path. */
+function uncertainLabel(label: string): boolean {
+	const p = label.replaceAll("\\", "/");
+	return /[$`]/.test(p) || /^[~@/]/.test(p) || /^[A-Za-z]:/.test(p) || p.endsWith("/") || p.split("/").includes("..");
+}
+
+/** A glob that can never match a project-relative path (see `uncertainLabel`), or that a `./` prefix keeps from matching. */
+function unmatchableGlob(glob: string): boolean {
+	return glob.includes("\\") || glob.startsWith("./") || uncertainLabel(glob);
+}
+
 export const UNKNOWN_FILE = "(unknown file)";
 
 /** Docs don't change what the checks verify. A project that lints them sets `"ignore": []`. */

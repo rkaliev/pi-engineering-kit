@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, changedPaths, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -257,6 +257,17 @@ test("callChanges: with a blind part, source, . and eval hide names only as the 
 	assert.deepEqual(changes("if true; then source x; fi; echo x > f.ts"), ["f.ts"]);
 	assert.deepEqual(changes("export $(cat .env); echo x > f.ts"), ["f.ts"], "a declaration of names the text doesn't show");
 	assert.deepEqual(changes("CDPATH=a; cd src && echo x > f.ts"), ["f.ts"], "CDPATH changes where a move lands");
+});
+
+test("callChangesSplit: fingerprint changes are exact; targets read from the command's text are guessed", () => {
+	const ws = "/ws";
+	const tree = { head: "", files: {}, heads: { a: "1", b: "2" }, blind: ["svc"] };
+	assert.deepEqual(callChangesSplit(tree, tree, ws, { command: ". ./env.sh; echo x > f.ts", cwd: ws }), { exact: [], guessed: ["f.ts"] });
+	assert.deepEqual(callChangesSplit(undefined, undefined, ws, { command: "echo x > src/a.ts", cwd: ws }), { exact: [], guessed: ["src/a.ts"] }, "no fingerprint: only the text");
+	const w = workspace();
+	const seen = fingerprint(w);
+	writeFileSync(join(w, "a", "f.ts"), "export const f = 9;\n");
+	assert.deepEqual(callChangesSplit(seen, fingerprint(w), w, { command: "python gen.py", cwd: w }), { exact: ["a/f.ts"], guessed: [] });
 });
 
 test("callChanges: with only symlinks blind, a move the hook can't follow counts only targets under a symlink", () => {

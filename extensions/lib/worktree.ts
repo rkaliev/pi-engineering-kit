@@ -330,10 +330,18 @@ export function changedPaths(before: Tree, after: Tree, projectDir: string, igno
  * Without both fingerprints, only its text.
  */
 export function callChanges(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): string[] {
+	const { exact, guessed } = callChangesSplit(before, now, projectDir, after);
+	if (guessed.length === 0) return exact;
+	if (exact.length === 0) return guessed;
+	return [...new Set([...exact, ...guessed])].sort();
+}
+
+/** `callChanges`, split into what the fingerprints show (`exact`) and the targets read from the command's text (`guessed`). */
+export function callChangesSplit(before: Tree | undefined, now: Tree | undefined, projectDir: string, after?: { command: string; cwd: string; powershell?: boolean }): { exact: string[]; guessed: string[] } {
 	const written = (cwd = after?.cwd ?? projectDir) => (after ? shellWriteTargets(after.command, cwd, projectDir, process.env, after.powershell) : []);
-	if (!before || !now) return written();
+	if (!before || !now) return { exact: [], guessed: written() };
 	const blind = new Set([...(before.blind ?? []), ...(now.blind ?? [])]);
-	if (blind.size === 0) return changedPaths(before, now, projectDir);
+	if (blind.size === 0) return { exact: changedPaths(before, now, projectDir), guessed: [] };
 	const parts = [...new Set([...Object.keys(before.heads ?? {}), ...Object.keys(now.heads ?? {}), ...blind])].filter((r) => r !== "");
 	const unseenBefore = new Set(before.unseen ?? []);
 	const paths = changedPaths(before, now, projectDir).filter((p) => !unseenBefore.has(partOf(p, parts)));
@@ -349,7 +357,7 @@ export function callChanges(before: Tree | undefined, now: Tree | undefined, pro
 				? written().filter((p) => wide || blind.has(partOf(p, parts)))
 				: [...new Set(where.flatMap((cwd) => written(cwd)))].filter((p) => blind.has(partOf(p, parts)));
 	}
-	return [...new Set([...paths, ...targets])].sort();
+	return { exact: paths, guessed: [...new Set(targets)].sort() };
 }
 
 /** The folders a command's writes may start from, or `undefined` when its moves or names can't be followed. */
