@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.0
+
+- **The verify gate asks only for the checks that cover what changed.** `"paths": {"<command>": ["<glob>", …]}` in `.pi/verify.json` says which files a command checks; a command without an entry checks every file. A change owes only the commands whose globs cover it, the follow-up names just those, and `run_verification` with `only` runs them in config order. A one-file docs edit in a monorepo whose formatter reads Markdown no longer runs every suite. An unknown `only` command runs nothing, and a broken `paths` entry is reported once and checks every file. Without `paths` nothing changes.
+
 ## 0.38.4
 
 - **No change in what the guard decides.** The comment scan is split from `blankQuoted` into its own function. The comment scan's code comment states its PowerShell limit, the docs name the review gate's heredoc gap. Tests pin a quoted or escaped `)` before a landing with its reason and several apostrophe comments in a row, and the review-gate tests remove every temp folder they make.
