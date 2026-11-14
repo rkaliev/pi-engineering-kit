@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -152,12 +152,56 @@ test("commandsUnder: the commands with a glob inside a folder that is gone (roun
 	assert.deepEqual(commandsUnder("vendor/li", ["fmt", "test"], scopes), [], "a prefix of a folder name is another folder");
 });
 
+test("commandsUnder: a glob that can match a path inside a gone label (0.39.1, U1)", () => {
+	const scopes = new Map([
+		["fmt", ["docs/**"]],
+		["tsc", ["**/*.ts"]],
+		["vend", ["vendor/*/src/**"]],
+		["pk", ["packages/**"]],
+		["exact", ["vendor/lib"]],
+		["star", ["vendor/*"]],
+		["deep", ["Vendor/*/**"]],
+	]);
+	assert.deepEqual(commandsUnder("vendor/lib", [...scopes.keys()], scopes), ["tsc", "vend", "deep"]);
+	assert.deepEqual(commandsUnder("vendor/li", ["vend"], scopes), ["vend"], "a * segment matches any folder name");
+	assert.deepEqual(commandsUnder("vendor\\lib", ["tsc", "star"], scopes), ["tsc"], "a glob that ends at the label names the label, not a file in it");
+});
+
+test("commandsUnder: a ** inside a segment reaches into a gone label like a bare ** (0.39.1 review, V2)", () => {
+	const scopes = new Map([
+		["any", ["**.ts"]],
+		["under", ["vendor/**.ts"]],
+		["prefix", ["vendor/l**"]],
+		["other", ["src/**.ts"]],
+		["otherPrefix", ["vendor/x**"]],
+	]);
+	assert.deepEqual(commandsUnder("vendor/lib", [...scopes.keys()], scopes), ["any", "under", "prefix"]);
+});
+
 test("resolveVerifyPaths: a glob whose * matches only folders is a problem (round 3, T4)", () => {
 	const dir = temp("paths-");
 	mkdirSync(join(dir, ".pi"));
 	mkdirSync(join(dir, "apps", "web"), { recursive: true });
 	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": ["apps/*"] } }));
 	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]).problems, ['paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")']);
+});
+
+test("resolveVerifyPaths: apps/* is a problem beside dot files, READMEs and folder symlinks (0.39.1, U2)", () => {
+	const problem = 'paths: "npm test" has a glob whose * matches only folders here: "apps/*" (* stays within one folder; write "apps/**")';
+	const withApps = (glob: string, files: Record<string, string>, folders: string[], links: Record<string, string> = {}) => {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		for (const f of folders) mkdirSync(join(dir, f), { recursive: true });
+		for (const [f, text] of Object.entries(files)) writeFileSync(join(dir, f), text);
+		for (const [link, target] of Object.entries(links)) symlinkSync(target, join(dir, link));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands: ["npm test"], paths: { "npm test": [glob] } }));
+		return resolveVerifyPaths(dir, ["npm test"]).problems;
+	};
+	const extras = { "apps/.DS_Store": "", "apps/.gitkeep": "", "apps/README.md": "# apps\n", "apps/notes.txt": "n\n" };
+	assert.deepEqual(withApps("apps/*", extras, ["apps/web", "apps/api"]), [problem], "dot files, a README and notes beside the packages");
+	assert.deepEqual(withApps("apps/*", { "apps/README.md": "# apps\n" }, ["apps", "pkgs/web"], { "apps/web": "../pkgs/web" }), [problem], "a package that is a symlink to a folder");
+	assert.deepEqual(withApps("src/*", { "src/index.ts": "export {};\n" }, ["src/lib"]), [], "a code file beside the folders");
+	assert.deepEqual(withApps("apps/*", { "apps/README.md": "# apps\n" }, ["apps"]), [], "no folder at all");
 });
 
 test("resolveVerifyPaths: a glob that can never match a project path is a problem, and its command checks every file (R7)", () => {

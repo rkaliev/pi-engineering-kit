@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectJson } from "./config.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -45,7 +45,8 @@ export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths
 
 /**
  * Why a `paths` glob can never match a changed file, or undefined. Globs are `isIgnored` globs (`*`, `**`, `?`) matched
- * against project-relative paths: other tools' syntax, a path outside the project or a bare folder name never match.
+ * against project-relative paths: other tools' syntax, a path outside the project, a bare folder name, or `apps/*` over a
+ * folder of package folders (`*` stays within one folder) never match.
  */
 function globProblem(cwd: string, glob: string): string | undefined {
 	const p = glob.replaceAll("\\", "/");
@@ -62,11 +63,15 @@ function globProblem(cwd: string, glob: string): string | undefined {
 	return undefined;
 }
 
-/** A folder that holds at least one folder and no files. */
+/**
+ * A folder that holds at least one folder (or a symlink to one) and no files but what sits beside packages: dot files
+ * (`.DS_Store`, `.gitkeep`), `README*`, `*.md` and `*.txt`.
+ */
 function onlyFolders(path: string): boolean {
 	try {
-		const entries = readdirSync(path, { withFileTypes: true });
-		return entries.some((e) => e.isDirectory()) && entries.every((e) => e.isDirectory());
+		const entries = readdirSync(path, { withFileTypes: true }).filter((e) => !/^\.|^readme|\.(md|txt)$/i.test(e.name));
+		const folder = (e: Dirent) => e.isDirectory() || (e.isSymbolicLink() && isFolder(join(path, e.name)));
+		return entries.length > 0 && entries.every(folder);
 	} catch {
 		return false;
 	}
@@ -97,12 +102,29 @@ export function owedCommands(changed: string[], commands: string[], scopes: Map<
 }
 
 /**
- * The commands with a glob inside `folder` (letter case folded): what a folder that is gone (a deleted submodule, which git
- * lists by its bare path) may have held.
+ * The commands with a glob that can match a path inside `folder` (letter case folded): what a label that is gone (a deleted
+ * submodule, which git lists by its bare path, or a file that may have been one) may have held. A glob led by `**` reaches into any
+ * folder; `vendor/*` names the folder itself, not a file in it.
  */
 export function commandsUnder(folder: string, commands: string[], scopes: Map<string, string[]>): string[] {
-	const prefix = `${folder.replaceAll("\\", "/").toLowerCase()}/`;
-	return commands.filter((c) => scopes.get(c)?.some((g) => g.toLowerCase().startsWith(prefix)));
+	return commands.filter((c) => scopes.get(c)?.some((g) => reachesInto(g, folder)));
+}
+
+/** Whether `glob` can match a path below `folder`: the folder's segments match a start of the glob's, and a segment is left. */
+function reachesInto(glob: string, folder: string): boolean {
+	const split = (s: string) => s.replaceAll("\\", "/").toLowerCase().split("/").filter((p) => p !== "");
+	const g = split(glob);
+	const f = split(folder);
+	const from = (gi: number, fi: number): boolean => {
+		if (fi === f.length) return gi < g.length;
+		if (gi === g.length) return false;
+		if (g[gi] === "**") return from(gi + 1, fi) || from(gi, fi + 1);
+		// `**` inside a segment (`**.ts`, `src/**.ts`) spans folders too: what comes before it only has to start this one.
+		const deep = g[gi]!.indexOf("**");
+		if (deep >= 0) return globToRegExp(`${g[gi]!.slice(0, deep)}*`).test(f[fi]!);
+		return globToRegExp(g[gi]!).test(f[fi]!) && from(gi + 1, fi + 1);
+	};
+	return from(0, 0);
 }
 
 export const UNKNOWN_FILE = "(unknown file)";

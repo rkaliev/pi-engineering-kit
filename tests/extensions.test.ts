@@ -1872,9 +1872,9 @@ test("token ledger: subagent results and the session's usage fill the branch's l
 });
 
 /** A project whose verify.json maps `test` to `src/**`; `fmt` checks every file (docs included: `ignore` is empty). */
-async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }) {
+async function pathsProject(config: object = { commands: ["fmt", "test"], paths: { test: ["src/**"] }, ignore: [] }, codes: Record<string, number> = {}) {
 	const dir = project({ ".pi/verify.json": JSON.stringify(config), "docs/x.md": "x\n", "docs/y.md": "y\n", "src/a.ts": "export const a = 1;\n", "notes.txt": "n\n" });
-	const f = fakePi();
+	const f = fakePi(codes);
 	verify(f.pi);
 	const c = ctx(dir);
 	await f.emit("session_start", { reason: "startup" }, c);
@@ -1888,6 +1888,43 @@ async function pathsProject(config: object = { commands: ["fmt", "test"], paths:
 	const run = (only?: string[]) => f.tools.get("run_verification").execute("id", only ? { only } : {}, undefined, undefined, c);
 	return { ...f, c, edit, end, prompt, run };
 }
+
+test("verify: a failed run_verification takes the checks it didn't pass out of green (0.39.1)", async () => {
+	const codes: Record<string, number> = {};
+	const p = await pathsProject(undefined, codes);
+	await p.edit("src/a.ts");
+	await p.run(["fmt"]);
+	codes.fmt = 1;
+	await p.run();
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/);
+	assert.doesNotMatch(followUp, /only:/, "both are owed again: the plain call");
+
+	const subsetCodes: Record<string, number> = {};
+	const subset = await pathsProject({ commands: ["fmt", "lint", "test"], paths: { lint: ["src/**"], test: ["src/**"] }, ignore: [] }, subsetCodes);
+	await subset.edit("docs/x.md");
+	await subset.edit("src/a.ts");
+	await subset.run(["lint"]);
+	subsetCodes.fmt = 1;
+	await subset.run(["fmt"]);
+	const subsetFollowUp = await subset.end();
+	assert.match(subsetFollowUp, /only: \["fmt","test"\]/, "a run of a subset takes out only what it selected");
+});
+
+test("verify: a failed run_verification also takes the checks it skipped out of green (0.39.1 review, V3)", async () => {
+	const codes: Record<string, number> = {};
+	const p = await pathsProject({ commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["src/**"] }, ignore: [] }, codes);
+	await p.edit("src/a.ts");
+	await p.run(["test"]);
+	await p.edit("docs/x.md");
+	codes.fmt = 1;
+	await p.run();
+	const followUp = await p.end();
+	assert.match(followUp, /`fmt`/);
+	assert.match(followUp, /`test`/, "test was skipped after fmt failed: it is owed again");
+	assert.doesNotMatch(followUp, /only:/);
+});
 
 test("verify paths: a doc edit owes only the commands that cover it, and the follow-up names them with only (C1, C10)", async () => {
 	const p = await pathsProject();
@@ -2089,6 +2126,27 @@ test("verify paths: run_verification with only owes its checks' own changes to t
 
 test("verify paths: a deleted submodule owes the commands with globs inside it (round 3, T1)", async () => {
 	const config = { commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["src/**", "vendor/lib/**"] }, ignore: [] };
+	const { dir } = gitProject({ ".pi/verify.json": JSON.stringify(config) });
+	const sub = join(dir, "vendor", "lib");
+	mkdirSync(sub, { recursive: true });
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+	git(sub, "init", "-q", "-b", "main");
+	writeFileSync(join(sub, "x.ts"), "export const x = 1;\n");
+	git(sub, "add", "-A");
+	git(sub, "commit", "-q", "-m", "sub");
+	git(dir, "add", "vendor/lib");
+	git(dir, "commit", "-q", "-m", "add submodule");
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	await bashCall(emit, c, "rm -rf vendor/lib", false, () => rmSync(sub, { recursive: true, force: true }));
+	await emit("agent_end", { messages: [] }, c);
+	assert.match(String(sent[0]?.message.content), /only: \["test"\]/);
+});
+
+test("verify paths: a deleted submodule under a wildcard glob owes its command (0.39.1, U1)", async () => {
+	const config = { commands: ["fmt", "test"], paths: { fmt: ["docs/**"], test: ["**/*.ts"] }, ignore: [] };
 	const { dir } = gitProject({ ".pi/verify.json": JSON.stringify(config) });
 	const sub = join(dir, "vendor", "lib");
 	mkdirSync(sub, { recursive: true });
