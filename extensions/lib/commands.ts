@@ -8,7 +8,49 @@ export interface VerifyConfig {
 	timeoutSec?: number;
 	/** Globs (relative to the project) whose edits don't make the workspace unverified. */
 	ignore?: string[];
+	/** Per command, the globs of the files it checks; a command without an entry checks every file. */
+	paths?: unknown;
 }
+
+/** The project's verification config file, relative to the project. */
+export const VERIFY_FILE = ".pi/verify.json";
+
+export interface VerifyPaths {
+	/** The globs of each command with a valid entry. */
+	scopes: Map<string, string[]>;
+	/** What is wrong with `paths`, one line each; the commands concerned check every file. */
+	problems: string[];
+}
+
+/** The `paths` map of verify.json for `commands` (configured ones only). */
+export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths {
+	const scopes = new Map<string, string[]>();
+	if (resolveVerifyCommands(cwd).source !== VERIFY_FILE) return { scopes, problems: [] };
+	const paths = readProjectJson<VerifyConfig>(cwd, "verify").paths;
+	if (paths === undefined) return { scopes, problems: [] };
+	if (typeof paths !== "object" || paths === null || Array.isArray(paths)) return { scopes, problems: ["paths must be an object"] };
+	const problems: string[] = [];
+	for (const [command, globs] of Object.entries(paths)) {
+		if (!commands.includes(command)) problems.push(`paths: ${JSON.stringify(command)} is not one of the commands`);
+		else if (!Array.isArray(globs) || globs.length === 0 || !globs.every((g) => typeof g === "string" && g !== "")) {
+			problems.push(`paths: ${JSON.stringify(command)} needs a non-empty list of globs`);
+		} else scopes.set(command, globs);
+	}
+	return { scopes, problems };
+}
+
+/** The commands, in config order, whose files include one of `changed`. */
+export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>): string[] {
+	// An edit of the config may change any command or its paths; an unknown file may be any file.
+	if (changed.some((p) => p === UNKNOWN_FILE || p.replaceAll("\\", "/") === VERIFY_FILE)) return [...commands];
+	return commands.filter((c) => {
+		const globs = scopes.get(c);
+		return !globs || changed.some((p) => isIgnored(p, globs));
+	});
+}
+
+/** The label of an edit whose file isn't known. */
+export const UNKNOWN_FILE = "(unknown file)";
 
 /** Docs don't change what the checks verify. A project that lints them sets `"ignore": []`. */
 export const DEFAULT_IGNORE = ["**/*.md", "**/*.mdx", "**/*.txt", "docs/**"];
