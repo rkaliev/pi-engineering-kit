@@ -5,13 +5,13 @@ Thank you for helping with the pi engineering kit package. Bug reports, ideas an
 ## Issues
 
 - **Bugs and ideas:** open an issue with the bug report or feature request form.
-- **A large change** (a new skill, a hook or gate behavior, a new install mode): open an issue first and agree on the approach before writing code.
+- **A large change** (a new skill, an extension or gate behavior, a new install mode): open an issue first and agree on the approach before writing code.
 - **Security vulnerabilities:** never in a public issue; see [SECURITY.md](SECURITY.md).
 - **Conduct:** everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development
 
-Requirements: Node.js 22.18 or newer (the hooks and scripts run `.ts` files directly) and git.
+Requirements: Node.js 22.18 or newer (the tests and scripts run `.ts` files directly) and git.
 
 ```sh
 npm ci

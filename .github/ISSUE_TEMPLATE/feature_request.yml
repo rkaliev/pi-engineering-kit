@@ -1,5 +1,5 @@
 name: Feature request
-description: A new skill, a change to a gate or hook, or anything else the kit could do
+description: A new skill, a change to a gate or extension, or anything else the kit could do
 labels: [enhancement]
 body:
   - type: textarea
