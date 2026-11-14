@@ -13,8 +13,8 @@
  *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
  *   files must be deleted).
  */
-import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
@@ -86,7 +86,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * Counts edited `paths`: each owes the commands whose verify.json `paths` cover it (every command without an entry),
 	 * and those leave the green ones. Paths no command covers change nothing; without commands every edit counts.
 	 */
-	const markEdited = (exact: string[], ctx: ExtensionContext, guessed: string[] = [], passed: string[] = []) => {
+	const markEdited = (certain: string[], ctx: ExtensionContext, guesses: string[] = [], passed: string[] = []) => {
+		// A folder label (a submodule git lists by its path) stands for any file in it.
+		const exact = certain.filter((p) => !isFolder(join(ctx.cwd, p)));
+		const guessed = [...new Set([...guesses, ...certain.filter((p) => !exact.includes(p))])];
 		const { commands } = resolveVerifyCommands(ctx.cwd);
 		const { scopes } = resolveVerifyPaths(ctx.cwd, commands);
 		// `passed` ran in the call that made these changes: they aren't owed again for them. A guessed path (read from a
@@ -100,7 +103,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		greenSinceEdit = new Set((unverified ? [...greenSinceEdit] : commands).filter((c) => !owed.includes(c)));
 		unverified = verifyState.unverified = true;
 		editCount++;
-		edited = [...edited.filter((e) => !counted.includes(e)), ...counted].slice(-MAX_LISTED);
+		const listed = [...new Set(counted)];
+		edited = [...edited.filter((e) => !listed.includes(e)), ...listed].slice(-MAX_LISTED);
 		setStatus(ctx);
 	};
 
@@ -127,8 +131,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const ignored = ignoreFilter(cwd, ignore);
 		const split = callChangesSplit(before, now, cwd, after && { command: after.command, cwd, powershell: after.powershell });
 		const exact = split.exact.filter((p) => !ignored(p));
-		const guessed = split.guessed.filter((p) => !ignored(p) && !exact.includes(p));
-		const paths = [...exact, ...guessed];
+		// A text target stays a guess even when the fingerprint lists the same label: it may name another file.
+		const guessed = split.guessed.filter((p) => !ignored(p));
+		const paths = [...new Set([...exact, ...guessed])];
 		// Only a call compared with its own snapshot can claim the changes as a verification run's own.
 		const exempted = !!(after?.exempt && own);
 		const counts = after ? !exempted : ctx.hasUI;
@@ -375,6 +380,14 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			pi.sendMessage({ customType: "verify-result", display: true, content: report });
 		},
 	});
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 /** Whether `abs` names the file itself at `label`: it exists, and its real path (symlinks resolved, letter case as stored) is `label`. */

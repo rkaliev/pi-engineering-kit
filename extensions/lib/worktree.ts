@@ -659,7 +659,8 @@ function realPath(path: string): string {
 const SEPARATORS = new Set(["&&", "||", ";", "|", "|&", "&", "\n"]);
 
 /**
- * A command that does nothing but verify, so its own writes (a formatter, `lint --fix`) stay off the count: no writing
+ * A command that does nothing but verify, so its own writes (a formatter, `lint --fix`) stay off the count for the checks it
+ * ran (the gates owe them to the checks that didn't run): no writing
  * redirection, and outside heredoc bodies only checks (`commands` exactly, or a call `isScript` accepts) joined by
  * `&&`, where a call `isScript` accepts may be piped into `tail`, `head` or `grep` (it records its own result; a check
  * piped elsewhere would hide its exit code).

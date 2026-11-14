@@ -132,11 +132,11 @@ test("resolveVerifyPaths: paths apply only to commands from verify.json, not to 
 	assert.deepEqual(resolveVerifyPaths(dir, ["npm test"]), { scopes: new Map(), problems: [] });
 });
 
-test("owedCommands: a label that may stand for another file owes every command (round 1, R1)", () => {
+test("owedCommands: a folder label owes every command; a file name with $, @ or ~ narrows by its globs (round 2, Q10)", () => {
 	const scopes = new Map([["fmt", ["docs/**"]], ["test", ["src/**"]]]);
-	for (const label of ["$OUT/a.ts", "src/`x`.ts", "~/a.ts", "@src/a.ts", "repoA/", "src/../a.ts", "/abs/src/a.ts", "C:/src/a.ts"]) {
-		assert.deepEqual(owedCommands([label], ["fmt", "test"], scopes), ["fmt", "test"], label);
-	}
+	assert.deepEqual(owedCommands(["repoA/"], ["fmt", "test"], scopes), ["fmt", "test"], "a whole repository");
+	assert.deepEqual(owedCommands(["src/routes/posts.$slug.tsx"], ["fmt", "test"], scopes), ["test"], "a Remix route file");
+	assert.deepEqual(owedCommands(["docs/@types.md"], ["fmt", "test"], scopes), ["fmt"]);
 });
 
 test("owedCommands: on a case-insensitive file system globs match in any case, so a change owes more, never less", () => {
@@ -144,6 +144,7 @@ test("owedCommands: on a case-insensitive file system globs match in any case, s
 	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes, { foldCase: true }), ["fmt", "test"]);
 	assert.deepEqual(owedCommands([".PI/Verify.json"], ["fmt", "test"], new Map([["fmt", ["x/**"]], ["test", ["x/**"]]]), { foldCase: true }), ["fmt", "test"]);
 	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes, { foldCase: false }), ["fmt"]);
+	assert.deepEqual(owedCommands(["SRC/a.ts"], ["fmt", "test"], scopes), ["fmt", "test"], "folding is the default on every platform: Linux mounts can ignore case too");
 });
 
 test("resolveVerifyPaths: a glob that can never match a project path is a problem, and its command checks every file (R7)", () => {
@@ -156,4 +157,25 @@ test("resolveVerifyPaths: a glob that can never match a project path is a proble
 		assert.equal(r.scopes.has("npm test"), false, glob);
 		assert.deepEqual(r.problems, [`paths: "npm test" has a glob that can never match a project path: ${JSON.stringify(glob)} (write it relative to the project, like "src/**")`], glob);
 	}
+});
+
+test("resolveVerifyPaths: glob syntax paths doesn't support, and a bare folder name, are problems (round 2, Q1)", () => {
+	const commands = ["npm test"];
+	const check = (glob: string, problem: string) => {
+		const dir = temp("paths-");
+		mkdirSync(join(dir, ".pi"));
+		mkdirSync(join(dir, "src"));
+		writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands, paths: { "npm test": ["lib/**", glob] } }));
+		const r = resolveVerifyPaths(dir, commands);
+		assert.equal(r.scopes.has("npm test"), false, glob);
+		assert.deepEqual(r.problems, [problem], glob);
+	};
+	for (const glob of ["**/*.{ts,tsx}", "src/**/*.[jt]s", "!docs/**", "src/@(a|b)/**"]) {
+		check(glob, `paths: "npm test" has a glob with syntax paths doesn't support: ${JSON.stringify(glob)} (only *, ** and ? work)`);
+	}
+	check("src", `paths: "npm test" has a glob that names a folder, not its files: "src" (write "src/**")`);
+	const dir = temp("paths-");
+	mkdirSync(join(dir, ".pi"));
+	writeFileSync(join(dir, ".pi", "verify.json"), JSON.stringify({ commands, paths: { "npm test": ["routes/posts.$slug.tsx", "Makefile"] } }));
+	assert.deepEqual(resolveVerifyPaths(dir, commands).problems, [], "a literal file name is fine, $ included");
 });

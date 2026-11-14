@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectJson } from "./config.ts";
 import { splitSegments, tokenize } from "./patterns.ts";
@@ -35,39 +35,51 @@ export function resolveVerifyPaths(cwd: string, commands: string[]): VerifyPaths
 		else if (!Array.isArray(globs) || globs.length === 0 || !globs.every((g) => typeof g === "string" && g !== "")) {
 			problems.push(`paths: ${JSON.stringify(command)} needs a non-empty list of globs`);
 		} else {
-			const bad = globs.find(unmatchableGlob);
-			if (bad !== undefined) problems.push(`paths: ${JSON.stringify(command)} has a glob that can never match a project path: ${JSON.stringify(bad)} (write it relative to the project, like "src/**")`);
+			const problem = globs.map((g) => globProblem(cwd, g)).find((m) => m !== undefined);
+			if (problem !== undefined) problems.push(`paths: ${JSON.stringify(command)} ${problem}`);
 			else scopes.set(command, globs);
 		}
 	}
 	return { scopes, problems };
 }
 
-/** The commands, in config order, whose files include one of `changed`. */
+/**
+ * Why a `paths` glob can never match a changed file, or undefined. Globs are `isIgnored` globs (`*`, `**`, `?`) matched
+ * against project-relative paths: other tools' syntax, a path outside the project or a bare folder name never match.
+ */
+function globProblem(cwd: string, glob: string): string | undefined {
+	const p = glob.replaceAll("\\", "/");
+	if (glob.includes("\\") || glob.startsWith("./") || /^[~/]/.test(p) || /^[A-Za-z]:/.test(p) || p.endsWith("/") || p.split("/").includes("..")) {
+		return `has a glob that can never match a project path: ${JSON.stringify(glob)} (write it relative to the project, like "src/**")`;
+	}
+	if (/[{}[\]()]/.test(glob) || glob.startsWith("!")) return `has a glob with syntax paths doesn't support: ${JSON.stringify(glob)} (only *, ** and ? work)`;
+	if (!/[*?]/.test(glob) && isFolder(join(cwd, glob))) return `has a glob that names a folder, not its files: ${JSON.stringify(glob)} (write "${glob}/**")`;
+	return undefined;
+}
+
+function isFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The commands, in config order, whose files include one of `changed` (project-relative files a fingerprint or an edit
+ * confirmed; callers owe every command for paths they only guessed).
+ */
 export function owedCommands(changed: string[], commands: string[], scopes: Map<string, string[]>, options: { foldCase?: boolean } = {}): string[] {
-	const fold = options.foldCase ?? CASE_INSENSITIVE_FS;
+	// Letter case is folded everywhere: a Linux process can work on a case-insensitive mount (a devcontainer, WSL), and
+	// folding only owes more.
+	const fold = options.foldCase ?? true;
 	const norm = (s: string) => (fold ? s.toLowerCase() : s);
-	// An edit of the config may change any command or its paths; a label that may stand for another file (unknown, read
-	// from a command's text, a whole folder, outside the project) may be any file.
-	if (changed.some((p) => p === UNKNOWN_FILE || uncertainLabel(p) || norm(p.replaceAll("\\", "/")) === norm(VERIFY_FILE))) return [...commands];
+	// An edit of the config may change any command or its paths; an unknown file or a whole folder may be any file.
+	if (changed.some((p) => p === UNKNOWN_FILE || p.endsWith("/") || norm(p.replaceAll("\\", "/")) === norm(VERIFY_FILE))) return [...commands];
 	return commands.filter((c) => {
 		const globs = scopes.get(c);
 		return !globs || changed.some((p) => isIgnored(norm(p), globs.map(norm)));
 	});
-}
-
-/** macOS and Windows file systems ignore letter case by default: a glob then matches a path in any case. */
-const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
-
-/** A label that names no single project file for sure: shell syntax, home, pi's `@`, a folder, `..` or an absolute path. */
-function uncertainLabel(label: string): boolean {
-	const p = label.replaceAll("\\", "/");
-	return /[$`]/.test(p) || /^[~@/]/.test(p) || /^[A-Za-z]:/.test(p) || p.endsWith("/") || p.split("/").includes("..");
-}
-
-/** A glob that can never match a project-relative path (see `uncertainLabel`), or that a `./` prefix keeps from matching. */
-function unmatchableGlob(glob: string): boolean {
-	return glob.includes("\\") || glob.startsWith("./") || uncertainLabel(glob);
 }
 
 export const UNKNOWN_FILE = "(unknown file)";
