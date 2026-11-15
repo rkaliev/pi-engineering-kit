@@ -174,24 +174,31 @@ export interface PrState {
 
 const AUTHOR = "author { login __typename }";
 /**
- * One query for everything the gate needs; `{owner}` and `{repo}` are filled in by `gh` (`-F`) from the folder's
- * remote. The branch goes as `-f`, a raw string: `-F` would read a value starting with `@` as a file. Open PRs from
- * any fork with a same-named branch match `headRefName`, so up to 20 are read and `collectPrState` picks one.
+ * The open PRs whose head branch has this name: any fork's same-named branch matches `headRefName`, so up to 100
+ * light nodes are read and `collectPrState` picks the one from the repository the branch is pushed to. `{owner}` and
+ * `{repo}` are filled in by `gh` (`-F`) from the folder's remotes; the branch goes as `-f`, a raw string (`-F` would
+ * read a value starting with `@` as a file).
  */
-export const PR_QUERY = `query($owner: String!, $name: String!, $branch: String!) {
+export const LIST_QUERY = `query($owner: String!, $name: String!, $branch: String!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $branch, states: OPEN, first: 20) {
-      nodes {
-        number url isCrossRepository headRepositoryOwner { login }
-        commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
-          __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } }
-        reviewThreads(last: 100) { totalCount nodes { id isResolved path line
-          comments(last: 1) { totalCount nodes { id body url createdAt ${AUTHOR} } } } }
-        reviews(last: 100) { totalCount nodes { id state body url submittedAt ${AUTHOR} } }
-        latestOpinionatedReviews(first: 100) { totalCount nodes { id state url ${AUTHOR} } }
-        comments(last: 100) { totalCount nodes { id body url createdAt ${AUTHOR} } }
-      }
+    pullRequests(headRefName: $branch, states: OPEN, first: 100) {
+      totalCount nodes { number isCrossRepository headRepositoryOwner { login } headRepository { nameWithOwner } }
+    }
+  }
+}`;
+/** Everything the gate needs about the chosen PR. */
+export const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number url isCrossRepository headRepositoryOwner { login }
+      commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
+        __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } }
+      reviewThreads(last: 100) { totalCount nodes { id isResolved path line
+        comments(last: 1) { totalCount nodes { id body url createdAt ${AUTHOR} } } } }
+      reviews(last: 100) { totalCount nodes { id state body url submittedAt ${AUTHOR} } }
+      latestOpinionatedReviews(first: 100) { totalCount nodes { id state url ${AUTHOR} } }
+      comments(last: 100) { totalCount nodes { id body url createdAt ${AUTHOR} } }
     }
   }
 }`;
@@ -204,9 +211,31 @@ function emptyState(error: string | null, github = true): PrState {
 }
 
 /**
+ * `owner/name` (lowercase) of the repository `branch` is pushed to: its `pushRemote`, else `remote.pushDefault`, else
+ * its `remote`, else `origin`, read from one `git config` call; undefined when there is no such remote URL.
+ */
+function pushRepository(dir: string, branch: string, timeoutMs: number): string | undefined {
+	const git = spawnSync("git", ["-C", dir, "config", "--get-regexp", "^(branch|remote)\\."], { encoding: "utf8", timeout: Math.max(1, timeoutMs) });
+	if (git.status !== 0) return undefined;
+	const config = new Map<string, string>();
+	for (const line of git.stdout.split("\n")) {
+		const space = line.indexOf(" ");
+		if (space > 0 && !config.has(line.slice(0, space))) config.set(line.slice(0, space), line.slice(space + 1));
+	}
+	// git lowercases section and key names, not the branch or remote name between them.
+	const remote = config.get(`branch.${branch}.pushremote`) ?? config.get("remote.pushdefault") ?? config.get(`branch.${branch}.remote`) ?? "origin";
+	const url = config.get(`remote.${remote}.pushurl`) ?? config.get(`remote.${remote}.url`);
+	const path = url?.replace(/\.git\/?$/, "").replace(/\/+$/, "").split(/[/:]/).slice(-2);
+	return path?.length === 2 && path.every(Boolean) ? path.join("/").toLowerCase() : undefined;
+}
+
+type GhJson = { data?: Record<string, unknown> | null; errors?: Array<{ message?: string }> };
+
+/**
  * The PR feedback facts for the open PR of `branch` (default: the folder's current branch) in the GitHub repository
- * of `dir`, from one `gh api graphql` call that must finish within `deadlineMs`. Never throws: whatever stops the
- * collection is the state's `error`.
+ * of `dir`: the PR whose head is in the repository the branch is pushed to (without a push remote: this repository's
+ * own, or the viewer's fork). Two `gh api graphql` calls, which must finish within `deadlineMs`. Never throws:
+ * whatever stops the collection is the state's `error`.
  */
 export function collectPrState(opts: { dir: string; branch?: string; deadlineMs: number; gh?: string; config?: FeedbackConfig }): PrState {
 	const started = Date.now();
@@ -219,39 +248,56 @@ export function collectPrState(opts: { dir: string; branch?: string; deadlineMs:
 		branch = git.status === 0 ? git.stdout.trim() : "";
 		if (!branch) return emptyState("no current branch");
 	}
-	if (left() <= 0) return timedOut();
-	const r = spawnSync(opts.gh ?? "gh", ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", `branch=${branch}`, "-f", `query=${PR_QUERY}`], {
-		cwd: opts.dir,
-		encoding: "utf8",
-		timeout: Math.max(1, left()),
-		maxBuffer: 16 * 1024 * 1024,
-	});
-	const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
-	if (code === "ENOENT") {
-		// Without gh, only a repository with a remote on GitHub has feedback that went unchecked.
-		const remotes = spawnSync("git", ["-C", opts.dir, "remote", "-v"], { encoding: "utf8", timeout: Math.max(1, left()) });
-		return emptyState("gh not found", /github/i.test(remotes.stdout ?? ""));
-	}
-	if (code === "ETIMEDOUT" || (r.error === undefined && r.signal)) return timedOut();
-	if (r.error) return emptyState(`gh failed: ${r.error.message}`);
-	const stderr = (r.stderr ?? "").trim();
-	if (r.status !== 0) {
-		if (/none of the git remotes configured for this repository point to a known GitHub host/.test(stderr)) return emptyState("not a GitHub repository", false);
-		if (r.status === 4 || /gh auth login/.test(stderr)) return emptyState("gh is not authenticated");
-		return emptyState(`gh failed: ${stderr.split("\n")[0] || `exit ${r.status}`}`);
-	}
-	let parsed: { data?: { viewer?: { login?: string }; repository?: { pullRequests?: { nodes?: PrData[] } } }; errors?: Array<{ message?: string }> };
-	try {
-		parsed = JSON.parse(r.stdout);
-	} catch {
-		return emptyState("gh returned unreadable output");
-	}
-	if (parsed.errors?.length) return emptyState(`gh failed: ${parsed.errors[0]?.message ?? "GraphQL error"}`);
-	const login = parsed.data?.viewer?.login;
+	const pushedTo = pushRepository(opts.dir, branch, left());
+	/** One `gh api graphql` call: its JSON, or the state that ends the collection. */
+	const graphql = (fields: string[], query: string): GhJson | PrState => {
+		if (left() <= 0) return timedOut();
+		const r = spawnSync(opts.gh ?? "gh", ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", ...fields, "-f", `query=${query}`], {
+			cwd: opts.dir,
+			encoding: "utf8",
+			timeout: Math.max(1, left()),
+			maxBuffer: 16 * 1024 * 1024,
+		});
+		const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+		if (code === "ENOENT") {
+			// Without gh, only a repository with a remote on GitHub has feedback that went unchecked.
+			const remotes = spawnSync("git", ["-C", opts.dir, "remote", "-v"], { encoding: "utf8", timeout: Math.max(1, left()) });
+			return emptyState("gh not found", /github/i.test(remotes.stdout ?? ""));
+		}
+		if (code === "ETIMEDOUT" || (r.error === undefined && r.signal)) return timedOut();
+		if (r.error) return emptyState(`gh failed: ${r.error.message}`);
+		const stderr = (r.stderr ?? "").trim();
+		if (r.status !== 0) {
+			if (/none of the git remotes configured for this repository point to a known GitHub host/.test(stderr)) return emptyState("not a GitHub repository", false);
+			if (r.status === 4 || /gh auth login/.test(stderr)) return emptyState("gh is not authenticated");
+			return emptyState(`gh failed: ${stderr.split("\n")[0] || `exit ${r.status}`}`);
+		}
+		let parsed: GhJson;
+		try {
+			parsed = JSON.parse(r.stdout) as GhJson;
+		} catch {
+			return emptyState("gh returned unreadable output");
+		}
+		if (parsed.errors?.length) return emptyState(`gh failed: ${parsed.errors[0]?.message ?? "GraphQL error"}`);
+		return parsed;
+	};
+	const isState = (v: GhJson | PrState): v is PrState => "open" in v;
+
+	const list = graphql(["-f", `branch=${branch}`], LIST_QUERY);
+	if (isState(list)) return list;
+	const data = list.data as { viewer?: { login?: string }; repository?: { pullRequests?: { nodes?: Array<Pick<PrData, "number" | "isCrossRepository" | "headRepositoryOwner"> & { headRepository?: { nameWithOwner?: string } | null }> } } } | null | undefined;
+	const login = data?.viewer?.login;
 	if (!login) return emptyState("gh returned no login");
-	// A same-named branch in someone else's fork is their PR, not this one: only this repository's or the viewer's own fork's.
-	const node = parsed.data?.repository?.pullRequests?.nodes?.find((n) => n.isCrossRepository !== true || n.headRepositoryOwner?.login === login);
-	if (!node) return emptyState(`no open PR for branch ${branch}`);
+	// A same-named branch elsewhere (someone else's fork, or upstream itself in a fork checkout) is another PR.
+	const chosen = data?.repository?.pullRequests?.nodes?.find((n) =>
+		pushedTo !== undefined ? n.headRepository?.nameWithOwner?.toLowerCase() === pushedTo : n.isCrossRepository !== true || n.headRepositoryOwner?.login === login,
+	);
+	if (!chosen) return emptyState(`no open PR for branch ${branch}`);
+
+	const detail = graphql(["-F", `number=${chosen.number}`], PR_QUERY);
+	if (isState(detail)) return detail;
+	const node = (detail.data as { repository?: { pullRequest?: PrData | null } } | null | undefined)?.repository?.pullRequest;
+	if (!node) return emptyState(`gh returned no PR #${chosen.number}`);
 	const { open, closed, problems } = classify(node, login, opts.config);
 	const commit = node.commits?.nodes[0]?.commit;
 	const rollup = commit?.statusCheckRollup;

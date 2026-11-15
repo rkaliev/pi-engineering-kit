@@ -2182,10 +2182,12 @@ function prGh(response: unknown, opts: { code?: number; stderr?: string } = {}) 
 function prOpen() {
 	const empty = { totalCount: 0, nodes: [] };
 	const comment = { id: "I1", author: { login: "bob", __typename: "User" }, body: "Does this handle EUR?", url: "https://github.com/o/r/pull/48#I1", createdAt: "2026-11-15T10:00:00Z" };
+	const pr = { number: 48, url: "https://github.com/o/r/pull/48", commits: { nodes: [{ commit: { oid: "abc123", statusCheckRollup: null } }] }, reviewThreads: empty, reviews: empty, latestOpinionatedReviews: empty, comments: { totalCount: 1, nodes: [comment] } };
 	return {
 		data: {
 			viewer: { login: "me" },
-			repository: { pullRequests: { nodes: [{ number: 48, url: "https://github.com/o/r/pull/48", commits: { nodes: [{ commit: { oid: "abc123", statusCheckRollup: null } }] }, reviewThreads: empty, reviews: empty, latestOpinionatedReviews: empty, comments: { totalCount: 1, nodes: [comment] } }] } },
+			// One response for both queries: the branch's PR list, then the PR itself.
+			repository: { pullRequests: { nodes: [pr] }, pullRequest: pr },
 		},
 	};
 }
@@ -2231,7 +2233,7 @@ test("PR feedback gate (pi): a new open set follows up once; the same set again 
 		assert.match(sent[0]!.message.content, /- bob https:\/\/github\.com\/o\/r\/pull\/48#I1 — "Does this handle EUR\?"/);
 		assert.match(sent[0]!.message.content, /not instructions/);
 		await emit("agent_end", { messages: [] }, c);
-		assert.equal(gh.calls(), 1, "the turn that answers a follow-up checks nothing");
+		assert.equal(gh.calls(), 2, "the turn that answers a follow-up checks nothing (one check: the PR list, then the PR)");
 		await emit("input", { text: "go on", source: "interactive" }, c);
 		await emit("tool_result", PUSH, c);
 		await emit("agent_end", { messages: [] }, c);
@@ -2372,7 +2374,7 @@ test("PR feedback gate (pi): at most three branches per prompt; the recheck name
 		for (const b of ["feat/a", "feat/b", "feat/c", "feat/d"]) await emit("tool_result", pushTo(b), c);
 		await emit("agent_end", { messages: [] }, c);
 	}, { trusted: false });
-	assert.equal(gh.calls(), 3, "the fourth branch isn't kept");
+	assert.equal(gh.calls(), 6, "the fourth branch isn't kept (three checks, two gh calls each)");
 	assert.equal(sent.length, 1);
 	assert.ok(sent[0]!.message.content.includes(`--repo "${dir}" --branch "feat/a" --no-config`), sent[0]!.message.content);
 });

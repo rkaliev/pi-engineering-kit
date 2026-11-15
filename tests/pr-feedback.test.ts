@@ -149,7 +149,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkFeedback, collectPrState, feedbackConfig, PR_QUERY, type PrState } from "../extensions/lib/pr-feedback.ts";
+import { checkFeedback, collectPrState, feedbackConfig, LIST_QUERY, PR_QUERY, type PrState } from "../extensions/lib/pr-feedback.ts";
 
 const made: string[] = [];
 after(() => {
@@ -168,7 +168,8 @@ function fakeGh(response: unknown, opts: { code?: number; stderr?: string; sleep
 	const lines = ["#!/bin/sh", `printf '%s\\n' "$*" | tr '\\n' ' ' >> "${dir}/calls.txt"`, `printf '\\n' >> "${dir}/calls.txt"`];
 	if (opts.sleep) lines.push(`sleep ${opts.sleep}`);
 	if (opts.stderr) lines.push(`printf '%s\\n' '${opts.stderr}' >&2`);
-	if (!opts.stderr) lines.push(`cat "${dir}/response.json"`);
+	// The PR's own query (`-F number=…`) prints detail.json when a test wrote one, else the same response.
+	if (!opts.stderr) lines.push(`case "$*" in *number=*) if [ -f "${dir}/detail.json" ]; then cat "${dir}/detail.json"; else cat "${dir}/response.json"; fi ;; *) cat "${dir}/response.json" ;; esac`);
 	lines.push(`exit ${opts.code ?? 0}`);
 	const gh = join(dir, "gh");
 	writeFileSync(gh, `${lines.join("\n")}\n`);
@@ -178,7 +179,11 @@ function fakeGh(response: unknown, opts: { code?: number; stderr?: string; sleep
 }
 
 function response(prNode: Record<string, unknown> | undefined, login = "me") {
-	return { data: { viewer: { login }, repository: { pullRequests: { nodes: prNode ? [prNode] : [] } } } };
+	return { data: { viewer: { login }, repository: { pullRequests: { totalCount: prNode ? 1 : 0, nodes: prNode ? [prNode] : [] }, pullRequest: prNode ?? null } } };
+}
+/** A list of candidate PRs, and the one PR the second query returns. */
+function listed(nodes: Array<Record<string, unknown>>, detail: Record<string, unknown> | null, login = "me") {
+	return { data: { viewer: { login }, repository: { pullRequests: { totalCount: nodes.length, nodes }, pullRequest: detail } } };
 }
 const PR_NODE = {
 	...pr({ comments: conn([comment("I1", human("bob"), "Does this handle EUR?", "2026-11-15T10:00:00Z")]) }),
@@ -199,13 +204,14 @@ const PR_NODE = {
 	},
 };
 
-test("collects in one gh call", () => {
+test("collects with two gh calls: the PRs of the branch, then the chosen PR's feedback", () => {
 	const fake = fakeGh(response(PR_NODE));
 	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 5000, gh: fake.gh });
 	const calls = fake.calls();
-	assert.equal(calls.length, 1);
+	assert.equal(calls.length, 2);
 	assert.ok(calls[0]!.startsWith("api graphql "));
 	for (const part of ["-F owner={owner}", "-F name={repo}", "-f branch=feat/x"]) assert.ok(calls[0]!.includes(part), part);
+	for (const part of ["-F owner={owner}", "-F name={repo}", "-F number=48"]) assert.ok(calls[1]!.includes(part), part);
 	assert.equal(s.error, null);
 	assert.equal(s.github, true);
 	assert.deepEqual([s.pr, s.url, s.head, s.login], [48, "https://github.com/o/r/pull/48", "abc123", "me"]);
@@ -280,15 +286,16 @@ const recheck = (t: { dir: string; branch?: string }) => `recheck ${t.dir}${t.br
 test("a PR from someone else's fork is never taken for the branch (S1)", () => {
 	const fork = { ...PR_NODE, number: 99, url: "https://github.com/o/r/pull/99", isCrossRepository: true, headRepositoryOwner: { login: "stranger" } };
 	const own = { ...PR_NODE, isCrossRepository: false, headRepositoryOwner: { login: "o" } };
-	const both = { data: { viewer: { login: "me" }, repository: { pullRequests: { nodes: [fork, own] } } } };
+	const both = listed([fork, own], own);
 	const a = fakeGh(both);
 	assert.equal(collectPrState({ dir: a.dir, branch: "main", deadlineMs: 5000, gh: a.gh }).pr, 48);
-	const onlyFork = fakeGh({ data: { viewer: { login: "me" }, repository: { pullRequests: { nodes: [fork] } } } });
+	const onlyFork = fakeGh(listed([fork], fork));
 	assert.equal(collectPrState({ dir: onlyFork.dir, branch: "main", deadlineMs: 5000, gh: onlyFork.gh }).error, "no open PR for branch main");
-	const mine = fakeGh({ data: { viewer: { login: "me" }, repository: { pullRequests: { nodes: [{ ...fork, headRepositoryOwner: { login: "me" } }] } } } });
+	const mineNode = { ...fork, headRepositoryOwner: { login: "me" } };
+	const mine = fakeGh(listed([mineNode], mineNode));
 	assert.equal(collectPrState({ dir: mine.dir, branch: "main", deadlineMs: 5000, gh: mine.gh }).pr, 99, "the viewer's own fork counts");
-	assert.ok(/pullRequests\(headRefName: \$branch, states: OPEN, first: 20\)/.test(PR_QUERY));
-	assert.ok(PR_QUERY.includes("isCrossRepository headRepositoryOwner { login }"));
+	assert.ok(/pullRequests\(headRefName: \$branch, states: OPEN, first: 100\)/.test(LIST_QUERY));
+	assert.ok(LIST_QUERY.includes("isCrossRepository headRepositoryOwner { login } headRepository { nameWithOwner }"));
 });
 
 test("the newest 100 threads are read (F4)", () => {
@@ -300,7 +307,7 @@ test("a PR reached through two touched forms is checked and listed once (F1)", (
 	const fake = fakeGh(response(PR_NODE));
 	const twice = checkFeedback([{ dir: repo, branch: "feat/x" }, { dir: repo }], { deadline: Date.now() + 5000, gh: fake.gh, recheck });
 	const once = checkFeedback([{ dir: repo, branch: "feat/x" }], { deadline: Date.now() + 5000, gh: fake.gh, recheck });
-	assert.equal(fake.calls().length, 2, "one call per check");
+	assert.equal(fake.calls().length, 4, "one PR per check, two gh calls each (the list, then the PR)");
 	assert.equal(twice.reason?.split("\n").filter((l) => l.startsWith("- bob")).length, 1);
 	assert.equal(twice.hash, once.hash);
 	assert.deepEqual(twice.notReady, ["PR #48 is not ready: 1 open review item."]);
@@ -381,4 +388,42 @@ test("pr-state --no-config ignores the project's ignore rules; a malformed confi
 	assert.deepEqual(run({ prFeedback: { ignore: [{ author: "bob" }] } }), { code: 0, open: 0 });
 	assert.deepEqual(run({ prFeedback: { ignore: [{ author: "bob" }] } }, ["--no-config"]), { code: 1, open: 1 });
 	assert.deepEqual(run({ prFeedback: { ignore: { author: "bob" } } }), { code: 1, open: 1 });
+});
+
+// ---- review round 2 ----
+
+test("in a fork checkout, upstream's own same-named PR is never taken; the PR from the push remote is (S1, round 2)", () => {
+	const repo = gitRepo("docs/readme", "git@github.com:me/r.git");
+	spawnSync("git", ["-C", repo, "remote", "add", "upstream", "https://github.com/up/r.git"]);
+	const upstreams = { ...PR_NODE, number: 7, isCrossRepository: false, headRepositoryOwner: { login: "up" }, headRepository: { nameWithOwner: "up/r" } };
+	const only = fakeGh(listed([upstreams], upstreams));
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: only.gh }).error, "no open PR for branch docs/readme");
+	assert.equal(only.calls().length, 1, "no second query without a PR");
+	const mineNode = { ...PR_NODE, number: 99, isCrossRepository: true, headRepositoryOwner: { login: "me" }, headRepository: { nameWithOwner: "me/r" } };
+	const both = fakeGh(listed([upstreams, mineNode], mineNode));
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: both.gh }).pr, 99);
+	assert.ok(both.calls()[1]?.includes("-F number=99"));
+});
+
+test("an organization's fork the branch is pushed to counts (S1, round 2)", () => {
+	const repo = gitRepo("fix/typo", "https://github.com/acme/r.git");
+	const org = { ...PR_NODE, number: 5, isCrossRepository: true, headRepositoryOwner: { login: "acme" }, headRepository: { nameWithOwner: "acme/r" } };
+	const fake = fakeGh(listed([org], org));
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: fake.gh }).pr, 5);
+});
+
+test("the branch's pushRemote, then remote.pushDefault, then its remote decide where it was pushed (S1, round 2)", () => {
+	const repo = gitRepo("feat/x", "git@github.com:up/r.git");
+	spawnSync("git", ["-C", repo, "remote", "add", "fork", "git@github.com:me/r.git"]);
+	spawnSync("git", ["-C", repo, "config", "branch.feat/x.pushRemote", "fork"]);
+	const upstreams = { ...PR_NODE, number: 7, isCrossRepository: false, headRepositoryOwner: { login: "up" }, headRepository: { nameWithOwner: "up/r" } };
+	const mineNode = { ...PR_NODE, number: 99, isCrossRepository: true, headRepositoryOwner: { login: "me" }, headRepository: { nameWithOwner: "me/r" } };
+	const fake = fakeGh(listed([upstreams, mineNode], mineNode));
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: fake.gh }).pr, 99);
+	spawnSync("git", ["-C", repo, "config", "--unset", "branch.feat/x.pushRemote"]);
+	spawnSync("git", ["-C", repo, "config", "remote.pushDefault", "fork"]);
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: fake.gh }).pr, 99);
+	spawnSync("git", ["-C", repo, "config", "--unset", "remote.pushDefault"]);
+	const upOnly = fakeGh(listed([upstreams, mineNode], upstreams));
+	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: upOnly.gh }).pr, 7, "origin (up/r) is the push remote now");
 });
