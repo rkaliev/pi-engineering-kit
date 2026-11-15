@@ -26,8 +26,6 @@ export interface GuardConfig {
 	workDocs?: string[];
 	/** Code reaches the base branch only with a passing reviewer verdict for it. `false` turns the check off. */
 	reviewGate?: boolean;
-	/** The PR feedback gate (lib/pr-feedback.ts): `enabled: false` turns it off; `ignore` drops items by author and/or text pattern. */
-	prFeedback?: { enabled?: boolean; ignore?: Array<{ author?: string; pattern?: string }> };
 	/** The file this config was read from, as the reasons name it (default `.pi/guard.json`). */
 	label?: string;
 	/** For a combined config (lib/scope.ts): the file each `block`/`confirm` rule came from. */

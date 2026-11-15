@@ -23,7 +23,7 @@ import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/appr
 import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, commandsUnder, owedCommands, resolveIgnore, resolveVerifyCommands, resolveVerifyPaths, UNKNOWN_FILE, type VerifyConfig } from "./lib/commands.ts";
 import { guardScope } from "./lib/scope.ts";
-import { checkFeedback, type FeedbackConfig } from "./lib/pr-feedback.ts";
+import { checkFeedback, feedbackConfig, MAX_CHECKED } from "./lib/pr-feedback.ts";
 import { touchedPrs } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { callChangesSplit, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
@@ -248,6 +248,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			approvalRemindedThisPrompt = false;
 			workDocsRemindedThisPrompt = false;
 			prTouched = [];
+			// A follow-up whose turn never ran (an aborted run) must not skip this prompt's check.
+			followedUp = false;
 		}
 		return { action: "continue" as const };
 	});
@@ -281,8 +283,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const shell = String(event.input.command ?? "");
 			if (!event.isError) {
+				// The gate checks at most MAX_CHECKED branches; later ones in the prompt aren't kept.
 				for (const t of touchedPrs(shell, ctx.cwd)) {
-					if (!prTouched.some((k) => k.dir === t.dir && k.branch === t.branch)) prTouched.push(t);
+					if (prTouched.length < MAX_CHECKED && !prTouched.some((k) => k.dir === t.dir && k.branch === t.branch)) prTouched.push(t);
 				}
 			}
 			const { commands } = resolveVerifyCommands(ctx.cwd);
@@ -392,10 +395,13 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * an open PR, is silent. `prFeedback` in `.pi/guard.json` counts only in a trusted project.
 	 */
 	const prFeedbackGate = (ctx: ExtensionContext): string | undefined => {
-		const config = ctx.isProjectTrusted() ? readProjectJson<{ prFeedback: FeedbackConfig & { enabled?: unknown } }>(ctx.cwd, "guard").prFeedback : undefined;
-		if (config?.enabled === false) return undefined;
-		const found = checkFeedback(prTouched, { deadline: Date.now() + PR_FEEDBACK_BUDGET_MS, config, recheck: (dir) => `node "${PR_STATE_SCRIPT}" --repo "${dir}"` });
-		const notes = [...found.errors];
+		const trusted = ctx.isProjectTrusted();
+		const config = feedbackConfig(trusted ? readProjectJson<{ prFeedback: unknown }>(ctx.cwd, "guard").prFeedback : undefined);
+		if (!config.enabled) return undefined;
+		// Untrusted, the recheck skips the project's ignore rules too, so it lists what the gate counted.
+		const recheck = (t: { dir: string; branch: string }) => `node "${PR_STATE_SCRIPT}" --repo "${t.dir}" --branch "${t.branch}"${trusted ? "" : " --no-config"}`;
+		const found = checkFeedback(prTouched, { deadline: Date.now() + PR_FEEDBACK_BUDGET_MS, config, recheck });
+		const notes = [...found.errors, ...found.partial];
 		let reason: string | undefined;
 		if (found.hash !== undefined && found.hash !== prFeedbackSent) {
 			prFeedbackSent = found.hash;
