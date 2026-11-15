@@ -205,7 +205,7 @@ test("collects in one gh call", () => {
 	const calls = fake.calls();
 	assert.equal(calls.length, 1);
 	assert.ok(calls[0]!.startsWith("api graphql "));
-	for (const part of ["-F owner={owner}", "-F name={repo}", "-F branch=feat/x"]) assert.ok(calls[0]!.includes(part), part);
+	for (const part of ["-F owner={owner}", "-F name={repo}", "-f branch=feat/x"]) assert.ok(calls[0]!.includes(part), part);
 	assert.equal(s.error, null);
 	assert.equal(s.github, true);
 	assert.deepEqual([s.pr, s.url, s.head, s.login], [48, "https://github.com/o/r/pull/48", "abc123", "me"]);
@@ -218,7 +218,14 @@ test("branch defaults to the current branch of dir", () => {
 	const repo = temp("pr-state-repo-");
 	spawnSync("git", ["init", "-q", "-b", "feat/x", repo]);
 	collectPrState({ dir: repo, deadlineMs: 5000, gh: fake.gh });
-	assert.ok(fake.calls()[0]?.includes("-F branch=feat/x"));
+	assert.ok(fake.calls()[0]?.includes("-f branch=feat/x"));
+});
+
+test("a branch name goes to gh as a raw string, never as @file", () => {
+	const fake = fakeGh(response(PR_NODE));
+	collectPrState({ dir: fake.dir, branch: "@notes.txt", deadlineMs: 5000, gh: fake.gh });
+	assert.ok(fake.calls()[0]?.includes("-f branch=@notes.txt"));
+	assert.ok(!fake.calls()[0]?.includes("-F branch="));
 });
 
 test("error cases", () => {

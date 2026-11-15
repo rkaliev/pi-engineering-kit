@@ -147,7 +147,10 @@ export interface PrState {
 }
 
 const AUTHOR = "author { login __typename }";
-/** One query for everything the gate needs; `{owner}` and `{repo}` are filled in by `gh` from the folder's remote. */
+/**
+ * One query for everything the gate needs; `{owner}` and `{repo}` are filled in by `gh` (`-F`) from the folder's
+ * remote. The branch goes as `-f`, a raw string: `-F` would read a value starting with `@` as a file.
+ */
 export const PR_QUERY = `query($owner: String!, $name: String!, $branch: String!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
@@ -190,7 +193,7 @@ export function collectPrState(opts: { dir: string; branch?: string; deadlineMs:
 		if (!branch) return emptyState("no current branch");
 	}
 	if (left() <= 0) return timedOut();
-	const r = spawnSync(opts.gh ?? "gh", ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-F", `branch=${branch}`, "-f", `query=${PR_QUERY}`], {
+	const r = spawnSync(opts.gh ?? "gh", ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", `branch=${branch}`, "-f", `query=${PR_QUERY}`], {
 		cwd: opts.dir,
 		encoding: "utf8",
 		timeout: Math.max(1, left()),
