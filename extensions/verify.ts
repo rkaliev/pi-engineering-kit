@@ -10,8 +10,8 @@
  *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
  *   already followed up get one notice to the user instead); with no commands at all the user gets
  *   one notice per session instead. The same follow-up carries the approval
- *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
- *   files must be deleted).
+ *   gate (an approved design or plan must be committed), the working-docs gate (implemented task
+ *   files must be deleted) and the PR feedback gate (unanswered review items on a GitHub PR this prompt touched).
  */
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
