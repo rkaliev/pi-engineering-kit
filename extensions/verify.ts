@@ -379,7 +379,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const skipped = taskFileWarning(due.skipped);
 		if (skipped && skipped !== skippedNoted && ctx.hasUI) ctx.ui.notify(skipped, "warning");
 		skippedNoted = skipped;
-		// Last, after the cheap gates. The turn that answers a follow-up checks nothing (Claude Code's stop_hook_active).
+		// Last, after the cheap gates. The turn that answers a follow-up checks nothing, so a follow-up can't loop.
 		if (!afterFollowUp && prTouched.length > 0) {
 			const pr = prFeedbackGate(ctx);
 			if (pr) parts.push(pr);

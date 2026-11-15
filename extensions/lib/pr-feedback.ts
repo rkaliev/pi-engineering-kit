@@ -1,6 +1,6 @@
 /**
  * PR review feedback: which items on a GitHub pull request are still unanswered (the PR feedback gate).
- * Shared byte-for-byte by the Claude Code and pi editions; it imports only Node built-ins.
+ * It imports only Node built-ins.
  */
 
 import { createHash } from "node:crypto";
