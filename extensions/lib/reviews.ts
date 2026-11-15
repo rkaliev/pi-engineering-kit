@@ -1115,7 +1115,7 @@ function gitRaw(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): string |
 	return r.status === 0 ? r.stdout : undefined;
 }
 
-/** At most this many PRs are checked after one call, so the Stop budget isn't spread too thin. */
+/** At most this many PRs are checked after one call, so the end-of-turn budget isn't spread too thin. */
 const MAX_TOUCHED = 3;
 
 /**

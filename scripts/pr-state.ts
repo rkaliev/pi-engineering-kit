@@ -4,7 +4,7 @@
  * Usage: node pr-state.ts [--repo <dir>] [--branch <name>] [--no-config]
  * Exit: 0 no open items, 1 open items, 2 the facts couldn't be collected (the reason is in `error`).
  * `prFeedback.ignore` is read from the repository's `.claude/guard.json`, else `.pi/guard.json`; `--no-config` skips
- * it (the pi gate passes it in a project it doesn't trust, so both see the same items).
+ * it (a gate that doesn't apply the project's rules passes it, so both list the same items).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

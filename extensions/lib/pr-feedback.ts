@@ -307,7 +307,7 @@ export function collectPrState(opts: { dir: string; branch?: string; deadlineMs:
 	return { pr: node.number, url: node.url, head: commit?.oid ?? null, login, open, closed, checks: { state: rollup?.state ?? null, failed }, problems, error: null, github: true };
 }
 
-/** What one end-of-turn check of the PR branches a prompt touched found, before each edition decides what to do with it. */
+/** What one end-of-turn check of the PR branches a prompt touched found, before the gate decides what to do with it. */
 export interface FeedbackCheck {
 	/** The send-back text for every PR with open items, or undefined when none has any. */
 	reason?: string;
