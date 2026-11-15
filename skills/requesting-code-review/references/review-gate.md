@@ -13,3 +13,4 @@ Before opening a PR/MR, merging into the base branch, pushing to it or pushing t
 - Only the user can waive the gate: by confirming, or with `"reviewGate": false` in `.pi/guard.json` (trusted projects only; the guard asks before that file is edited). A self-review in a separate pass does not satisfy the gate, so without a `subagent` tool the user decides at the prompt.
 - The reviewer's read-only rule is an instruction here: pi doesn't tell the guard which agent runs a call, so its shell isn't restricted.
 - If a guard check throws, pi blocks the call with the error ("Extension failed, blocking execution").
+- Separate from this gate, the PR feedback gate (end of turn) follows up once per new set of unanswered review items on a GitHub PR this prompt pushed to, opened or answered on; `node <kit root>/scripts/pr-state.ts` prints them.

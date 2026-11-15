@@ -845,7 +845,7 @@ function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 /** `$` or a backtick in a `query=` value that is unquoted or double-quoted: the shell fills it in. Single quotes keep GraphQL variables literal. */
 const SHELL_EXPANDS_QUERY = /query=(?:"[^"]*[$`]|[^'"\s]*[$`])/;
 
-function apiWrite(words: string[], at: number, command: string): boolean {
+export function apiWrite(words: string[], at: number, command: string): boolean {
 	let i = at + 1;
 	while (i < words.length && words[i]!.startsWith("-")) i += /^(-R|--repo|--hostname)$/.test(words[i]!) ? 2 : 1;
 	if (words[i] !== "api") return false;

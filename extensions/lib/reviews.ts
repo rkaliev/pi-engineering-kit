@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
-import { commandName, foldPath, judgeReadings, otherReadings, withoutComments, splitSegments, tokenize, type GuardDecision } from "./patterns.ts";
+import { apiWrite, commandName, foldPath, judgeReadings, otherReadings, withoutComments, splitSegments, tokenize, unwrapToken, type GuardDecision } from "./patterns.ts";
 import { bare, blankQuoted, follow, heredocs, MOVES, moveSegments, parseMove, plainShell, quotedSubstitutions, reachable, safeRealpath, segmentFolders, segmentsOf, stripRedirects, Subshells, writes } from "./shell.ts";
 import { canonical, projectRepos } from "./repos.ts";
 import { allLandings, baseBranch, currentBranch, pushedToBase, type Landing } from "./workdocs.ts";
@@ -1113,4 +1113,55 @@ function git(cwd: string, args: string[], timeout?: number): string | undefined 
 function gitRaw(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): string | undefined {
 	const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
 	return r.status === 0 ? r.stdout : undefined;
+}
+
+/** At most this many PRs are checked after one call, so the end-of-turn budget isn't spread too thin. */
+const MAX_TOUCHED = 3;
+
+/**
+ * The PR branches a shell call may have touched, for the PR feedback gate: a push, opening a PR, or answering on one
+ * (`gh pr comment|review`, a writing `gh api` call on a PR or issue). `branch` is the branch pushed or named; absent
+ * means the folder's current branch. Tags and branch deletions touch nothing. Not a security check: a folder the
+ * guard can't follow falls back to `cwd`, where at worst no PR is found.
+ */
+export function touchedPrs(command: string, cwd: string): Array<{ dir: string; branch?: string }> {
+	const found = new Map<string, { dir: string; branch?: string }>();
+	const add = (dir: string, branch?: string) => {
+		const key = `${dir}\0${branch ?? ""}`;
+		if (!found.has(key) && found.size < MAX_TOUCHED) found.set(key, branch === undefined ? { dir } : { dir, branch });
+	};
+	const shell = new Subshells(cwd, command);
+	for (const { raw, alone, before } of segmentsOf(tokenize(stripRedirects(command)))) {
+		shell.enter(raw, before);
+		const dir = shell.dir ?? cwd;
+		if (shell.move(raw, alone, before) !== undefined) continue;
+		const tokens = raw.map((t) => t.replace(/^\(+|\)+$/g, "")).filter(Boolean);
+		for (const l of allLandings(tokens)) {
+			if (l.kind === "pr" && !l.merge && !l.repo) add(dir, l.target?.replace(/^[^:]+:/, ""));
+			if (l.kind !== "push") continue;
+			const where = l.dir ? resolve(dir, l.dir) : dir;
+			if (l.refspecs.length === 0) {
+				if (!l.tags) add(where);
+				continue;
+			}
+			for (const spec of l.refspecs) {
+				const [src, dst = src] = spec.replace(/^\+/, "").split(":") as [string, string?];
+				if (src === "" || dst.startsWith("refs/tags/")) continue;
+				const branch = dst.replace(/^refs\/heads\//, "");
+				if (branch === "HEAD" || branch === "") add(where);
+				else if (!branch.startsWith("refs/")) add(where, branch);
+			}
+		}
+		if (answersPr(tokens.map(unwrapToken), command)) add(dir);
+	}
+	return [...found.values()];
+}
+
+/** `gh pr comment|review`, or a writing `gh api` call on a PR's or issue's path. */
+function answersPr(words: string[], command: string): boolean {
+	const at = words.findIndex((w) => commandName(w) === "gh");
+	if (at === -1) return false;
+	const args = words.slice(at + 1).map(bare).filter((w) => !w.startsWith("-"));
+	if (args[0] === "pr") return args[1] === "comment" || args[1] === "review";
+	return args.includes("api") && words.slice(at + 1).some((w) => /(^|\/)(pulls|issues)\/\d+/.test(w)) && apiWrite(words, at, command);
 }

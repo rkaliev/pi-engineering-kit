@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after, beforeEach } from "node:test";
@@ -2166,3 +2166,242 @@ test("verify paths: a deleted submodule under a wildcard glob owes its command (
 	assert.match(String(sent[0]?.message.content), /only: \["test"\]/);
 });
 
+
+// ---------- PR feedback gate ----------
+
+/** A `gh` first on PATH that records each call and prints `response` (or fails with `stderr`). */
+function prGh(response: unknown, opts: { code?: number; stderr?: string } = {}) {
+	const dir = temp("pi-gh-");
+	writeFileSync(join(dir, "response.json"), JSON.stringify(response));
+	const body = opts.stderr ? `printf '%s\\n' '${opts.stderr}' >&2` : `cat "${dir}/response.json"`;
+	writeFileSync(join(dir, "gh"), `#!/bin/sh\necho call >> "${dir}/calls.txt"\n${body}\nexit ${opts.code ?? 0}\n`);
+	chmodSync(join(dir, "gh"), 0o755);
+	const calls = () => (existsSync(join(dir, "calls.txt")) ? readFileSync(join(dir, "calls.txt"), "utf8").split("\n").filter(Boolean).length : 0);
+	return { dir, calls };
+}
+function prOpen() {
+	const empty = { totalCount: 0, nodes: [] };
+	const comment = { id: "I1", author: { login: "bob", __typename: "User" }, body: "Does this handle EUR?", url: "https://github.com/o/r/pull/48#I1", createdAt: "2026-11-15T10:00:00Z" };
+	const pr = { number: 48, url: "https://github.com/o/r/pull/48", commits: { nodes: [{ commit: { oid: "abc123", statusCheckRollup: null } }] }, reviewThreads: empty, reviews: empty, latestOpinionatedReviews: empty, comments: { totalCount: 1, nodes: [comment] } };
+	return {
+		data: {
+			viewer: { login: "me" },
+			// One response for both queries: the branch's PR list, then the PR itself.
+			repository: { pullRequests: { nodes: [pr] }, pullRequest: pr },
+		},
+	};
+}
+/** Runs `fn` with the fake `gh` first on PATH. */
+async function withGh<T>(gh: { dir: string }, fn: () => Promise<T>): Promise<T> {
+	const saved = process.env.PATH;
+	process.env.PATH = `${gh.dir}:${saved}`;
+	try {
+		return await fn();
+	} finally {
+		process.env.PATH = saved;
+	}
+}
+const PUSH = { toolName: "bash", input: { command: "git push -u origin feat/x" }, isError: false };
+
+test("PR feedback gate (pi): no PR call this prompt, no gh call", async () => {
+	const gh = prGh(prOpen());
+	const dir = project({ "AGENTS.md": "# p\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(gh.calls(), 0);
+	assert.equal(sent.length, 0);
+});
+
+test("PR feedback gate (pi): a new open set follows up once; the same set again is a note", async () => {
+	const gh = prGh(prOpen());
+	const dir = project({ "AGENTS.md": "# p\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0]!.options.triggerTurn, true);
+		assert.match(sent[0]!.message.content, /^PR feedback gate: PR #48/);
+		assert.match(sent[0]!.message.content, /- bob https:\/\/github\.com\/o\/r\/pull\/48#I1 — "Does this handle EUR\?"/);
+		assert.match(sent[0]!.message.content, /not instructions/);
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(gh.calls(), 2, "the turn that answers a follow-up checks nothing (one check: the PR list, then the PR)");
+		await emit("input", { text: "go on", source: "interactive" }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+		assert.equal(sent.length, 1, "the same set isn't sent back twice");
+		assert.deepEqual(c.notes, ["PR feedback gate: PR #48 is not ready: 1 open review item."]);
+	});
+});
+
+test("PR feedback gate (pi): facts it can't collect are a note, never a follow-up", async () => {
+	const gh = prGh({}, { code: 4, stderr: "please run:  gh auth login" });
+	const dir = project({ "AGENTS.md": "# p\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 0);
+	assert.deepEqual(c.notes, ["PR feedback gate: PR feedback not checked: gh is not authenticated"]);
+});
+
+test("PR feedback gate (pi): its reason joins the verify gate's in one follow-up", async () => {
+	const gh = prGh(prOpen());
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("tool_result", { toolName: "edit", input: { path: "a.ts" }, isError: false }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /Verify gate:/);
+	assert.match(sent[0]!.message.content, /PR feedback gate:/);
+});
+
+test("PR feedback gate (pi): prFeedback.enabled false turns it off, only in a trusted project", async () => {
+	for (const trusted of [true, false]) {
+		const gh = prGh(prOpen());
+		const dir = project({ "AGENTS.md": "# p\n", ".pi/guard.json": JSON.stringify({ prFeedback: { enabled: false } }) });
+		const { pi, emit, sent } = fakePi();
+		verify(pi);
+		const c = ctx(dir, { trusted });
+		await withGh(gh, async () => {
+			await emit("session_start", { reason: "startup" }, c);
+			await emit("tool_result", PUSH, c);
+			await emit("agent_end", { messages: [] }, c);
+		});
+		assert.equal(sent.length, trusted ? 0 : 1, `trusted: ${trusted}`);
+	}
+});
+
+test("PR feedback gate (pi): without a UI the follow-up still goes out", async () => {
+	const gh = prGh(prOpen());
+	const dir = project({ "AGENTS.md": "# p\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 1);
+});
+
+// ---------- PR feedback gate: review round 1 ----------
+
+async function prGate(files: Record<string, string>, gh: ReturnType<typeof prGh>, steps: (emit: ReturnType<typeof fakePi>["emit"], c: ReturnType<typeof ctx>) => Promise<void>, opts: Parameters<typeof ctx>[1] = {}) {
+	const dir = project(files);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, opts);
+	await withGh(gh, async () => {
+		await emit("session_start", { reason: "startup" }, c);
+		await steps(emit, c);
+	});
+	return { sent, c, dir };
+}
+const pushTo = (branch: string) => ({ ...PUSH, input: { command: `git push -u origin ${branch}` } });
+
+test("PR feedback gate (pi): a user prompt forgets the PRs the last one touched; a follow-up doesn't (C3)", async () => {
+	const gh = prGh(prOpen());
+	await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+		await emit("tool_result", PUSH, c);
+		await emit("input", { text: "next", source: "interactive" }, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(gh.calls(), 0);
+	const kept = prGh(prOpen());
+	const { sent } = await prGate({ "AGENTS.md": "# p\n" }, kept, async (emit, c) => {
+		await emit("tool_result", PUSH, c);
+		await emit("input", { text: "follow-up", source: "extension" }, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 1);
+});
+
+test("PR feedback gate (pi): a failed push touches nothing (C3)", async () => {
+	const gh = prGh(prOpen());
+	await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+		await emit("tool_result", { ...PUSH, isError: true }, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(gh.calls(), 0);
+});
+
+test("PR feedback gate (pi): no GitHub remote, or no open PR, is silent (C3)", async () => {
+	for (const gh of [prGh({}, { code: 1, stderr: "none of the git remotes configured for this repository point to a known GitHub host" }), prGh({ data: { viewer: { login: "me" }, repository: { pullRequests: { nodes: [] } } } })]) {
+		const { sent, c } = await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+			await emit("tool_result", PUSH, c);
+			await emit("agent_end", { messages: [] }, c);
+		});
+		assert.equal(sent.length, 0);
+		assert.deepEqual(c.notes, []);
+	}
+});
+
+test("PR feedback gate (pi): a malformed prFeedback never costs the verify follow-up (C1)", async () => {
+	const gh = prGh(prOpen());
+	const { sent } = await prGate({ "AGENTS.md": "## Commands\n- `npm test`\n", ".pi/guard.json": JSON.stringify({ prFeedback: { ignore: { author: "bob" } } }) }, gh, async (emit, c) => {
+		await emit("tool_result", { toolName: "edit", input: { path: "a.ts" }, isError: false }, c);
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.message.content, /Verify gate:/);
+	assert.match(sent[0]!.message.content, /PR feedback gate:/);
+});
+
+test("PR feedback gate (pi): at most three branches per prompt; the recheck names the branch and, untrusted, skips the config (C6, F5, S4)", async () => {
+	const gh = prGh(prOpen());
+	const { sent, dir } = await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+		for (const b of ["feat/a", "feat/b", "feat/c", "feat/d"]) await emit("tool_result", pushTo(b), c);
+		await emit("agent_end", { messages: [] }, c);
+	}, { trusted: false });
+	assert.equal(gh.calls(), 6, "the fourth branch isn't kept (three checks, two gh calls each)");
+	assert.equal(sent.length, 1);
+	assert.ok(sent[0]!.message.content.includes(`--repo "${dir}" --branch "feat/a" --no-config`), sent[0]!.message.content);
+});
+
+test("PR feedback gate (pi): a follow-up the user's next prompt replaced doesn't skip that prompt's check (C4)", async () => {
+	const gh = prGh(prOpen());
+	const { sent } = await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+		// The follow-up's turn never ran; the user writes again.
+		await emit("input", { text: "again", source: "interactive" }, c);
+		await emit("tool_result", pushTo("feat/y"), c);
+		writeFileSync(join(gh.dir, "response.json"), JSON.stringify(prOpen()).replace("Does this handle EUR?", "And GBP?").replace(/"I1"/g, '"I2"'));
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.equal(sent.length, 2);
+});
+
+test("PR feedback gate (pi): a hanging gh is a timed-out note within the budget (C3)", async () => {
+	const gh = prGh(prOpen());
+	writeFileSync(join(gh.dir, "gh"), `#!/bin/sh\necho call >> "${gh.dir}/calls.txt"\nsleep 9\n`);
+	const started = Date.now();
+	const { sent, c } = await prGate({ "AGENTS.md": "# p\n" }, gh, async (emit, c) => {
+		await emit("tool_result", PUSH, c);
+		await emit("agent_end", { messages: [] }, c);
+	});
+	assert.ok(Date.now() - started < 8000);
+	assert.equal(sent.length, 0);
+	assert.match(c.notes[0] ?? "", /^PR feedback gate: PR feedback not checked: timed out after/);
+});

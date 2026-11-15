@@ -10,11 +10,12 @@
  *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
  *   already followed up get one notice to the user instead); with no commands at all the user gets
  *   one notice per session instead. The same follow-up carries the approval
- *   gate (an approved design or plan must be committed) and the working-docs gate (implemented task
- *   files must be deleted).
+ *   gate (an approved design or plan must be committed), the working-docs gate (implemented task
+ *   files must be deleted) and the PR feedback gate (unanswered review items on a GitHub PR this prompt touched).
  */
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readProjectJson } from "./lib/config.ts";
@@ -22,6 +23,8 @@ import { approvalReminder, taskFileReminders, taskFileWarning } from "./lib/appr
 import { WORK_DOC_DIRS, workDocsReminder } from "./lib/workdocs.ts";
 import { commandMatches, commandsUnder, owedCommands, resolveIgnore, resolveVerifyCommands, resolveVerifyPaths, UNKNOWN_FILE, type VerifyConfig } from "./lib/commands.ts";
 import { guardScope } from "./lib/scope.ts";
+import { checkFeedback, feedbackConfig, MAX_CHECKED } from "./lib/pr-feedback.ts";
+import { touchedPrs } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
 import { callChangesSplit, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
@@ -40,6 +43,10 @@ interface CheckResult {
 	truncated: boolean;
 	tail: string;
 }
+
+/** The PR feedback gate's time for collecting facts at the end of a turn. */
+const PR_FEEDBACK_BUDGET_MS = 6000;
+const PR_STATE_SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "pr-state.ts");
 
 export default function verifyExtension(pi: ExtensionAPI) {
 	let unverified = false;
@@ -68,6 +75,13 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	let noted = -1;
 	/** The verify gate's follow-up went out at the last agent_end: the next agent_end ends its turn. */
 	let answering = false;
+	/** Any follow-up went out at the last agent_end: the PR feedback gate skips the turn that answers it. */
+	let followedUp = false;
+	/** The PR branches this prompt's shell calls touched (lib/reviews.ts `touchedPrs`). */
+	let prTouched: Array<{ dir: string; branch?: string }> = [];
+	/** The hash of the open PR feedback items the agent was last sent back for, and the last PR note shown. */
+	let prFeedbackSent: string | undefined;
+	let prFeedbackNoted: string | undefined;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
@@ -233,6 +247,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			remindedThisPrompt = false;
 			approvalRemindedThisPrompt = false;
 			workDocsRemindedThisPrompt = false;
+			prTouched = [];
+			// A follow-up whose turn never ran (an aborted run) must not skip this prompt's check.
+			followedUp = false;
 		}
 		return { action: "continue" as const };
 	});
@@ -265,6 +282,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		}
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const shell = String(event.input.command ?? "");
+			if (!event.isError) {
+				// The gate checks at most MAX_CHECKED branches; later ones in the prompt aren't kept.
+				for (const t of touchedPrs(shell, ctx.cwd)) {
+					if (prTouched.length < MAX_CHECKED && !prTouched.some((k) => k.dir === t.dir && k.branch === t.branch)) prTouched.push(t);
+				}
+			}
 			const { commands } = resolveVerifyCommands(ctx.cwd);
 			const ran = commands.filter((c) => commandMatches(shell, c));
 			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
@@ -284,6 +307,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		const parts: string[] = [];
+		const afterFollowUp = followedUp;
 		// A change no command reported (the user's editor, a background process) is found here.
 		track(ctx);
 		// A follow-up goes out once per set of edits: edits an earlier agent_end judged (the agent ran no check, or
@@ -355,9 +379,41 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const skipped = taskFileWarning(due.skipped);
 		if (skipped && skipped !== skippedNoted && ctx.hasUI) ctx.ui.notify(skipped, "warning");
 		skippedNoted = skipped;
+		// Last, after the cheap gates. The turn that answers a follow-up checks nothing, so a follow-up can't loop.
+		if (!afterFollowUp && prTouched.length > 0) {
+			const pr = prFeedbackGate(ctx);
+			if (pr) parts.push(pr);
+		}
+		followedUp = parts.length > 0;
 		if (parts.length === 0) return;
 		pi.sendMessage({ customType: "verify-gate", display: true, content: parts.join("\n\n") }, { triggerTurn: true, deliverAs: "followUp" });
 	});
+
+	/**
+	 * The PR feedback gate: the send-back for open review items on the PR branches this prompt touched, once per new
+	 * set; the same set again, or facts it can't collect, are a note. A repository not on GitHub, or a branch without
+	 * an open PR, is silent. `prFeedback` in `.pi/guard.json` counts only in a trusted project.
+	 */
+	const prFeedbackGate = (ctx: ExtensionContext): string | undefined => {
+		const trusted = ctx.isProjectTrusted();
+		const config = feedbackConfig(trusted ? readProjectJson<{ prFeedback: unknown }>(ctx.cwd, "guard").prFeedback : undefined);
+		if (!config.enabled) return undefined;
+		// Untrusted, the recheck skips the project's ignore rules too, so it lists what the gate counted.
+		const recheck = (t: { dir: string; branch: string }) => `node "${PR_STATE_SCRIPT}" --repo "${t.dir}" --branch "${t.branch}"${trusted ? "" : " --no-config"}`;
+		const found = checkFeedback(prTouched, { deadline: Date.now() + PR_FEEDBACK_BUDGET_MS, config, recheck });
+		const notes = [...found.errors, ...found.partial];
+		let reason: string | undefined;
+		if (found.hash !== undefined && found.hash !== prFeedbackSent) {
+			prFeedbackSent = found.hash;
+			reason = found.reason;
+		} else if (found.hash !== undefined) notes.push(...found.notReady);
+		const text = notes.join("\n");
+		if (text && text !== prFeedbackNoted) {
+			prFeedbackNoted = text;
+			if (ctx.hasUI) for (const n of notes) ctx.ui.notify(`PR feedback gate: ${n}`, "warning");
+		}
+		return reason;
+	};
 
 	pi.registerTool({
 		name: "run_verification",
