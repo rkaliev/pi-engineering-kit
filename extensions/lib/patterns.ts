@@ -26,6 +26,8 @@ export interface GuardConfig {
 	workDocs?: string[];
 	/** Code reaches the base branch only with a passing reviewer verdict for it. `false` turns the check off. */
 	reviewGate?: boolean;
+	/** The PR feedback gate (lib/pr-feedback.ts): `enabled: false` turns it off; `ignore` drops items by author and/or text pattern. */
+	prFeedback?: { enabled?: boolean; ignore?: Array<{ author?: string; pattern?: string }> };
 	/** The file this config was read from, as the reasons name it (default `.pi/guard.json`). */
 	label?: string;
 	/** For a combined config (lib/scope.ts): the file each `block`/`confirm` rule came from. */
@@ -845,7 +847,7 @@ function parseGit(raw: string[], tokens: string[], at: number): GitCall {
 /** `$` or a backtick in a `query=` value that is unquoted or double-quoted: the shell fills it in. Single quotes keep GraphQL variables literal. */
 const SHELL_EXPANDS_QUERY = /query=(?:"[^"]*[$`]|[^'"\s]*[$`])/;
 
-function apiWrite(words: string[], at: number, command: string): boolean {
+export function apiWrite(words: string[], at: number, command: string): boolean {
 	let i = at + 1;
 	while (i < words.length && words[i]!.startsWith("-")) i += /^(-R|--repo|--hostname)$/.test(words[i]!) ? 2 : 1;
 	if (words[i] !== "api") return false;

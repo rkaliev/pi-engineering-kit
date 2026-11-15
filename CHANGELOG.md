@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.40.0
+
+- **The PR feedback gate: the agent can't end a turn with unanswered review feedback on a PR it touched without one follow-up.** When a successful bash call in the prompt pushed a branch, opened a GitHub PR or answered on one, `agent_end` collects the PR's feedback with one `gh api graphql` call (within 6 s) and adds a send-back to the follow-up once per new set of open items, listing each one's author, `file:line`, URL and a one-line excerpt marked as untrusted data. An item is open when it is an unresolved inline thread whose last comment isn't from your `gh` login, a review body or a person's top-level comment with no later reply from that login, or a reviewer whose changes-requested review still stands. Bots' top-level comments (summaries, coverage, previews) aren't items; `prFeedback.ignore` in `.pi/guard.json` drops others by author or text pattern, and `prFeedback.enabled: false` turns the gate off (trusted projects only). The same set again is a notice that the PR is not ready; facts it can't collect (no `gh`, not logged in, an API error, the time limit) are a notice, never a follow-up; repositories not on GitHub and branches without an open PR are skipped; the turn that answers a follow-up checks nothing.
+- **`scripts/pr-state.ts`** prints those facts as JSON (open items, closed count, head SHA, failed checks), exiting 0, 1 or 2 for nothing open, open items, or not collected. receiving-code-review takes its coverage lines from it.
+
 ## 0.39.1
 
 - **A deleted folder owes every check whose globs reach inside it.** A submodule (or a file that may have been a folder) that is gone owed only the commands whose `paths` globs started with its path, so one covered by `**/*.ts` or `vendor/*/src/**` was never checked. Now any glob that can match a path inside it counts.

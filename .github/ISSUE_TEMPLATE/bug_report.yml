@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: Kit version
-      placeholder: "0.39.1"
+      placeholder: "0.40.0"
     validations:
       required: true
   - type: input

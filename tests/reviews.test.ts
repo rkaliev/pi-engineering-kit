@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import test, { after } from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
+import { checkGateFiles, checkReview, checkReviewerCommand, parseReview, readReviews, recordReview, reviewChain, roundNumber, highestFindingIds, holdBack, notePr, openPrBranches, recordVerdict, reviewsDir, settlePr, touchedPrs, type ReviewGateOptions } from "../extensions/lib/reviews.ts";
 import { blankQuoted, quotedComments, segmentFolders, stripRedirects } from "../extensions/lib/shell.ts";
 
 /** Temp folders this file makes, removed when its tests end. */
@@ -1634,4 +1634,40 @@ test("the PR record reads PowerShell's split", () => {
 	settlePr(dir, "t1", true, root);
 	commit({ "src/a.ts": "export const a = 3;\n" });
 	assert.match(String(check("git push")?.reason), /no reviewer verdict recorded/);
+});
+
+test("touchedPrs: pushes, opening a PR and answering on one touch a PR; reads and tags don't", () => {
+	const cwd = "/repo";
+	const cases: Array<[string, Array<{ dir: string; branch?: string }>]> = [
+		["git push", [{ dir: cwd }]],
+		["git push origin HEAD:feat/y", [{ dir: cwd, branch: "feat/y" }]],
+		["git push -u origin feat/z", [{ dir: cwd, branch: "feat/z" }]],
+		["git push origin +refs/heads/feat/v", [{ dir: cwd, branch: "feat/v" }]],
+		["gh pr create --head feat/w --fill", [{ dir: cwd, branch: "feat/w" }]],
+		["gh pr create --fill", [{ dir: cwd }]],
+		["gh pr comment 12 -b x", [{ dir: cwd }]],
+		["gh pr review 12 --comment -b x", [{ dir: cwd }]],
+		["gh api -X POST repos/o/r/pulls/12/comments/3/replies -f body=x", [{ dir: cwd }]],
+		["gh api repos/o/r/issues/12/comments -f body=x", [{ dir: cwd }]],
+		["git push origin v1.0:refs/tags/v1.0", []],
+		["git push --tags", []],
+		["git push origin :feat/old", []],
+		["git status", []],
+		["gh pr view 12", []],
+		["gh api repos/o/r/pulls/12", []],
+		["gh pr merge 12", []],
+	];
+	for (const [command, expected] of cases) assert.deepEqual(touchedPrs(command, cwd), expected, command);
+});
+
+test("touchedPrs: a push after a plain cd is in that folder", () => {
+	const repo = realpathSync(mkdtempSync(join(tmpdir(), "touched-")));
+	made.push(repo);
+	mkdirSync(join(repo, "sub"));
+	assert.deepEqual(touchedPrs("cd sub && git push", repo), [{ dir: join(repo, "sub") }]);
+});
+
+test("touchedPrs: at most three, without repeats", () => {
+	assert.deepEqual(touchedPrs("git push && git push", "/repo"), [{ dir: "/repo" }]);
+	assert.equal(touchedPrs("git push origin a && git push origin b && git push origin c && git push origin d", "/repo").length, 3);
 });
