@@ -3,7 +3,8 @@
  * working tree before and after a shell command, and falls back to the command's text outside git.
  */
 import { execFileSync } from "node:child_process";
-import { type Dirent, existsSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
@@ -283,6 +284,59 @@ function isFolder(path: string): boolean {
 		return statSync(path).isDirectory();
 	} catch {
 		return false;
+	}
+}
+
+/** How long one content key may take, git and hashing together. */
+export const KEY_BUDGET_MS = 2000;
+/** Past this much listed file content, a tree gets no content key. */
+export const KEY_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * What a fingerprinted tree holds, by content: the verification `commands`, each repository's `HEAD^{tree}` (the
+ * fingerprint's own HEAD, so a squash of the same tree matches) and the git blob hash of each listed file (`deleted`
+ * for a deletion, a symlink by its text), hashed in Node so nothing is written into `.git`. Two trees with the same key
+ * hold the same files whatever their times, so checks that passed on one passed on the other. `undefined` when it can't
+ * be proven: a blind part, a folder label (a submodule or nested repository), a listed file whose size or time no longer
+ * match the fingerprint (written since), past `maxBytes` of file content or `deadline`, or any error.
+ */
+export function contentKey(projectDir: string, tree: Tree, commands: string[], limits: { deadline?: number; maxBytes?: number } = {}): string | undefined {
+	if ((tree.blind ?? []).length > 0) return undefined;
+	const deadline = limits.deadline ?? Date.now() + KEY_BUDGET_MS;
+	const maxBytes = limits.maxBytes ?? KEY_MAX_BYTES;
+	try {
+		const lines = [`commands\0${JSON.stringify(commands)}`];
+		const heads = tree.heads ?? { "": tree.head };
+		for (const repo of Object.keys(heads).sort()) {
+			const head = heads[repo]!;
+			const treeHash = head === "" ? "" : git(join(projectDir, repo), ["rev-parse", "--verify", "-q", `${head}^{tree}`], timeLeft(deadline)).trim();
+			lines.push(`repo\0${repo}\0${treeHash}`);
+		}
+		let bytes = 0;
+		for (const path of Object.keys(tree.files).sort()) {
+			if (Date.now() > deadline) return undefined;
+			const file = join(projectDir, path);
+			if (identity(file) !== tree.files[path]) return undefined;
+			let stat: ReturnType<typeof lstatSync>;
+			try {
+				stat = lstatSync(file);
+			} catch {
+				lines.push(`path\0${path}\0deleted`);
+				continue;
+			}
+			if (stat.isDirectory()) return undefined;
+			if (stat.isSymbolicLink()) {
+				lines.push(`path\0${path}\0link\0${readlinkSync(file)}`);
+				continue;
+			}
+			bytes += stat.size;
+			if (bytes > maxBytes) return undefined;
+			const content = readFileSync(file);
+			lines.push(`path\0${path}\0${createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex")}`);
+		}
+		return createHash("sha256").update(lines.join("\n")).digest("hex");
+	} catch {
+		return undefined;
 	}
 }
 

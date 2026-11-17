@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, contentKey } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -668,4 +668,104 @@ test("shellWriteTargets counts TEE and SED -i targets: the programs run in any l
 	t.after(() => rmSync(project, { recursive: true, force: true }));
 	assert.deepEqual(shellWriteTargets("echo x | TEE src/c.ts", project, project), ["src/c.ts"]);
 	assert.deepEqual(shellWriteTargets("SED -i '' 's/a/b/' src/d.ts", project, project), ["src/d.ts"]);
+});
+
+const key = (dir: string, commands = ["npm test"], limits: { deadline?: number; maxBytes?: number } = {}) => contentKey(dir, fingerprint(dir), commands, limits);
+/** Rewrites a file with the same bytes and a later modification time, as a checkout or pull does. */
+const touchSame = (file: string) => {
+	writeFileSync(file, readFileSync(file));
+	const later = Date.now() / 1000 + 120;
+	utimesSync(file, later, later);
+};
+
+test("contentKey: equal content gives an equal key, whatever the file times", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const first = key(dir);
+	assert.equal(typeof first, "string");
+	touchSame(join(dir, "src/a.ts"));
+	assert.equal(key(dir), first);
+});
+
+test("contentKey: any difference changes the key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const first = key(dir);
+	assert.equal(typeof first, "string");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 3;\n");
+	assert.notEqual(key(dir), first, "one byte");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir), first, "restored");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	assert.notEqual(key(dir), first, "an extra untracked file");
+	rmSync(join(dir, "src/b.ts"));
+	assert.notEqual(key(dir, ["npm test", "npm run lint"]), first, "other verification commands");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.notEqual(key(dir), first, "the same bytes committed: another HEAD tree");
+});
+
+test("contentKey: a squash merge of the verified tree keeps the key", () => {
+	const dir = repo();
+	git(dir, "checkout", "-q", "-b", "feat");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	const onBranch = key(dir);
+	assert.equal(typeof onBranch, "string");
+	git(dir, "checkout", "-q", "main");
+	git(dir, "merge", "-q", "--squash", "feat");
+	git(dir, "commit", "-q", "-m", "squashed");
+	assert.equal(key(dir), onBranch);
+});
+
+test("contentKey: files outside a workspace's repositories count by content", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "notes", "x.js"), "2;\n");
+	const first = key(ws);
+	assert.equal(typeof first, "string");
+	touchSame(join(ws, "notes", "x.js"));
+	assert.equal(key(ws), first);
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 1;\n");
+	assert.notEqual(key(ws), first, "a repository's file");
+});
+
+test("contentKey: no key for what it can't prove", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir, ["npm test"], { maxBytes: 1 }), undefined, "past the size cap");
+	assert.equal(key(dir, ["npm test"], { deadline: Date.now() - 1 }), undefined, "past the deadline");
+	const tree = fingerprint(dir);
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 22;\n");
+	assert.equal(contentKey(dir, tree, ["npm test"]), undefined, "a listed file changed after its fingerprint");
+	const nested = join(dir, "sub");
+	mkdirSync(nested);
+	git(nested, "init", "-q", "-b", "main");
+	writeFileSync(join(nested, "x"), "x\n");
+	git(nested, "add", "-A");
+	git(nested, "commit", "-q", "-m", "nested");
+	assert.equal(key(dir), undefined, "a folder label (a nested repository)");
+	const ws = workspace();
+	const blind = treeFingerprint(ws, [], {}, { deadline: Date.now() - 1 });
+	assert.ok(blind);
+	assert.equal(contentKey(ws, blind, ["npm test"]), undefined, "a blind workspace part");
+});
+
+test("contentKey: computing a key writes nothing into .git", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	const objects = () => execFileSync("git", ["count-objects", "-v"], { cwd: dir, encoding: "utf8" });
+	const before = objects();
+	assert.equal(typeof key(dir), "string");
+	assert.equal(objects(), before);
+});
+
+test("contentKey: a deleted file counts by its deletion", () => {
+	const dir = repo();
+	rmSync(join(dir, "src/a.ts"));
+	const gone = key(dir);
+	assert.equal(typeof gone, "string");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.notEqual(key(dir), gone);
+	rmSync(join(dir, "src/a.ts"));
+	assert.equal(key(dir), gone);
 });
