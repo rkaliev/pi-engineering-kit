@@ -1,6 +1,6 @@
 # Verify gate waits for working subagents and credits verified content
 
-Status: design approved (2026-11-17)
+Status: in progress (plan approved 2026-11-17)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit cc02841f0fca30ad7901285ec9127a3f9227df05 · pi de2724c7f77bfb0dd291a00d2e4b357445025b31
 Links: None (workspace analysis of six verify-gate send-backs from life-bpms and agentic-coding, 2026-11-15)
@@ -24,11 +24,9 @@ Of six send-backs in the paste (kit 0.39.1), four came when the main agent dispa
 | # | Criterion (observable, testable) | How it is verified |
 |---|---|---|
 | 1 | Live: an async Agent launch's PostToolUse input carries `tool_response.status === "async_launched"` and `tool_response.agentId`, and the agent's SubagentStop carries the same `agent_id`; what SendMessage (resume) and TaskStop inputs carry is recorded | live check with `claude -p --plugin-dir src_claude`, findings in Progress |
-| 2 | PostToolUse of an async Agent launch whose `subagent_type` is not the kit reviewer records its `agentId` with the launch time in the session state; a foreground Agent call or a reviewer launch records nothing | hook tests |
-| 3 | SubagentStop with a recorded `agent_id` removes it | hook test |
-| 4 | Stop while a recorded agent younger than 2 hours runs: the verify gate neither sends back nor notes, and `judged` stays unchanged, so the next Stop judges those edits; the approval, working-docs and PR feedback gates behave as before | hook tests |
-| 5 | A recorded agent older than 2 hours is dropped at Stop and no longer holds the gate | hook test with an old timestamp |
-| 6 | If criterion 1 shows the fields: SendMessage to a known `agentId` records it again, TaskStop of a recorded one removes it; otherwise both go to Follow-ups | hook tests, or a Follow-ups line |
+| 2 | Stop whose input `background_tasks` lists a running `type: "subagent"` entry whose `agent_type` isn't the kit reviewer: the verify gate neither sends back nor notes, and `judged` stays unchanged, so the next Stop judges those edits; the approval, working-docs and PR feedback gates behave as before | hook tests |
+| 3 | A running kit reviewer, a `type: "shell"` task, a finished entry, an empty list, or no `background_tasks` field at all (an older Claude Code) leave the verify gate as before | hook tests |
+| 4–6 | Replaced by 2–3 (decision 2): no agent state to add, remove or expire | — |
 | 7 | Whenever the state becomes verified (every configured command green), the session stores a content key of the tree: each repository's `HEAD^{tree}` plus the git blob hash of every listed changed path (`deleted` for a deletion), ignore globs applied; no key when the tree has a blind or unseen part, in a folder outside git, with `gitOff`, for a folder label (submodule), past the size cap or the time budget | unit tests of the key function; hook tests |
 | 8 | Stop with unverified edits whose current content key equals the stored one: the state becomes verified (`edited` cleared, every command green) and there is no send-back | hook test: edit, verify, change a file, restore its content with a new mtime, Stop |
 | 9 | Squash-merge flow: verified on a branch, `git checkout main && git merge --squash` of the same tree committed → no send-back; a different tree → send-back as before | hook test in a temp repository |
@@ -41,7 +39,7 @@ Of six send-backs in the paste (kit 0.39.1), four came when the main agent dispa
 ## Scope
 
 **In scope:**
-- eng-kit: background-agent tracking (PostToolUse Agent, SubagentStop, Stop), content key and its use at Stop and reviewer SubagentStop.
+- eng-kit: the wait for background agents (Stop input `background_tasks`), content key and its use at Stop and reviewer SubagentStop.
 - pi: content key at `agent_end` and in the review gate.
 - Docs, CHANGELOG, release 0.41.0 in both editions.
 
@@ -54,15 +52,15 @@ Of six send-backs in the paste (kit 0.39.1), four came when the main agent dispa
 ## Decisions
 
 1. While the main agent waits for the kit reviewer, the gate sends back as before (user, 2026-11-15, "a"): verification then runs beside a read-only agent, and the review counts if it finishes first. Only agents that may edit hold the gate.
-2. Agents are tracked by hook events (PostToolUse Agent, SubagentStop), not by reading the transcript, whose format is internal.
-3. A recorded agent expires after 2 hours (**assumed**): the longest implementer task in the transcripts ran about 37 minutes; a killed agent must not hold the gate for the session.
+2. Running agents are read from the Stop input's `background_tasks` (user, 2026-11-18, after the live check in Progress), not tracked in the session state and not read from the transcript, whose format is internal. Claude Code keeps that list itself, so a stopped, killed or resumed agent needs no handling of its own and nothing can be left holding the gate.
+3. Without the field (an older Claude Code) the gate behaves as before: it fails closed into a send-back, never into silence.
 4. The content key uses blob hashes of the content, not size and mtime: a pull or checkout rewrites mtimes. It is computed in Node (`sha1("blob <len>\0" + content)`), so nothing is written into `.git`; `HEAD^{tree}` comes from one `git rev-parse` per repository.
 5. Fail closed: anything the key can't prove (blind parts, submodules, no git, cap, timeout) means no key, and the gate behaves as before.
 6. Release 0.41.0, not a patch: a fail-closed gate gains two ways to stay silent, so it gets full review rounds (F+S per edition).
 
 ## Design
 
-**Agent tracking (eng-kit, lib/hooks.ts, lib/state.ts).** `SessionState.agents?: Record<string, number>` (agentId → launch ms). PostToolUse for tool `Agent` with `tool_response.status === "async_launched"` and a string `agentId`, unless `tool_input.subagent_type` matches `REVIEWER`, adds it. SubagentStop deletes `input.agent_id`. `stopGates` drops entries older than `AGENT_MAX_AGE_MS` (2 h) and treats a remaining one like a running verify: the verify branch is skipped and `judged` is left alone. `HookInput` gains `tool_response?: Record<string, unknown>`.
+**Waiting for agents (eng-kit, lib/hooks.ts).** `HookInput.background_tasks?: unknown`. `agentsAtWork(input)` is true when it is an array with an entry `{ type: "subagent", status: "running" }` whose `agent_type` doesn't match `REVIEWER` (a missing `agent_type` holds). `stopGates` treats that like a running verify: the verify branch is skipped and `judged` is left alone.
 
 **Content key (both editions, lib/worktree.ts, shared byte-identical).** `contentKey(projectDir, tree, ignore, deadline): string | undefined` → a sha256 over sorted `repo\0headTree` lines and `path\0blobHash` lines. Called at the point a state turns verified (`credited`, `settleLaunch` in eng-kit; the green paths in pi's verify.ts), stored as `verifiedKey`; cleared state stays as is. At Stop, when unverified and a key is stored, the current key is computed from the fresh fingerprint; equal → the state becomes verified (`unverified: false`, `edited: []`, `green` = all commands). The reviewer's SubagentStop (eng-kit) and the guard's review check (pi) use the same comparison before calling a review Inconclusive. Caps: 2 s and 64 MB of file content per key.
 
@@ -72,7 +70,7 @@ None: hooks only, no config. The session state gains optional fields; a state wi
 
 ## Risks and open questions
 
-- An agent launch the hook never sees end (killed, crashed) silences the gate for up to 2 hours → the final Stop after it expires still gates; TaskStop handled if criterion 1 allows.
+- Claude Code renames or drops `background_tasks` → the gate sends back as in 0.40.0 (decision 3); the hook tests pin the field as observed.
 - Equal content with a different environment (dependencies installed since, env vars) gets credited → same as today: the gate never tracked ignored files such as `node_modules`.
 - Hashing large changed files at Stop costs time → the cap and budget; past them there's no key.
 
@@ -86,19 +84,19 @@ None: hooks only, no config. The session state gains optional fields; a state wi
 > Execute with the executing-plans skill. Only this section uses `- [ ]` checkboxes.
 
 **Goal:** the verify gate stays silent while an agent that may edit is still working, and credits a tree whose content equals the content the checks last passed on.
-**Architecture:** eng-kit tracks async agent launches in the session state (PostToolUse `Agent` adds, SubagentStop removes, Stop expires after 2 h) and skips the verify branch while one is live. Both editions get `contentKey` in the shared `lib/worktree.ts`; the key is stored when the state turns verified and compared at Stop / `agent_end` and before a review is called Inconclusive.
+**Architecture:** eng-kit's Stop reads `background_tasks` from its input and skips the verify branch while a subagent other than the kit reviewer runs. Both editions get `contentKey` in the shared `lib/worktree.ts`; the key is stored when the state turns verified and compared at Stop / `agent_end` and before a review is called Inconclusive.
 **Stack / constraints:** Node ≥ 22.18, TypeScript 5.9.3, no new dependencies; `lib/worktree.ts` byte-identical between editions (`cmp`). Files written in English. Commits without Claude trailers (public-release rule). Versions: both `package.json` and `src_claude/.claude-plugin/plugin.json` → 0.41.0, README/docs pins → `@v0.41.0`.
 **Verification:** `node "<kit root>/scripts/verify.ts"` from the workspace root, i.e. `npm run typecheck --prefix src`, `npm test --prefix src`, `npm run typecheck --prefix src_claude`, `npm test --prefix src_claude`.
 
 ### Review focus
-1. SubagentStop arrives before the async launch's PostToolUse (a very short agent): the entry must not be added afterwards and hold the gate for 2 h → `agentsEnded` (Task 2).
+1. `background_tasks` in an unexpected shape (not an array, entries without `type` or `status`, a non-string `agent_type`) must never silence the gate except for a well-formed running subagent → Task 2.
 2. A listed file changes between its fingerprint and its hashing (a background writer): the key must not cover content nobody verified → identity re-check, no key (Task 4).
 3. A stale fingerprint (`gitOff`, a fingerprint that failed this call) must never yield a key → only the fingerprint taken in the same hook call is used (Tasks 5, 6).
 4. Workspace edge parts: a blind part, a submodule folder label, a symlinked file, files outside the repositories (Task 4).
 5. The verification commands changed while the files stayed the same: the old key must not credit the new commands (Task 4).
 
 ### Post-implementation
-- `README.md` (both editions), section "verify gate": the wait for background agents (eng-kit only) and the content credit, with their limits (2 h expiry, reviewer still sends back, fail-closed cases).
+- `README.md` (both editions), section "verify gate": the wait for background agents (eng-kit only) and the content credit, with their limits (Claude Code's `background_tasks`, reviewer still sends back, fail-closed cases).
 - `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE.ru.md` (both editions), §3 Hooks: the new events (PostToolUse `Agent`/`SendMessage`/`TaskStop`), the session-state fields and why transcripts aren't read.
 - `CHANGELOG.md` 0.41.0 (both editions); versions and pins as in Stack.
 - Topic chapter: the README "verify gate" section is the chapter for this behavior; lasting rulings (decisions 1–6) go to the workspace record `docs/FRAMEWORK-SOURCES.ru.md` §11.56, outside both repos. This task file is then deleted.
@@ -107,9 +105,8 @@ None: hooks only, no config. The session state gains optional fields; a state wi
 
 | File | Responsibility |
 |---|---|
-| `src_claude/hooks/hooks.json` | PostToolUse matcher gains `Agent\|SendMessage\|TaskStop` |
-| `src_claude/lib/state.ts` | `agents`, `agentsEnded`, `verifiedKey` fields, loaded defensively |
-| `src_claude/lib/hooks.ts` | agent tracking, Stop wait, key stored on turning verified, content credit at Stop and reviewer SubagentStop |
+| `src_claude/lib/state.ts` | `verifiedKey`, loaded defensively |
+| `src_claude/lib/hooks.ts` | Stop wait, key stored on turning verified, content credit at Stop and reviewer SubagentStop |
 | `src*/lib/worktree.ts` (shared) | `contentKey` |
 | `src/extensions/verify.ts` | pi: key on turning verified, credit at `agent_end`, `creditByContent` for the guard |
 | `src/extensions/lib/verify-state.ts` | pi: shares `creditByContent` with the guard |
@@ -120,32 +117,22 @@ None: hooks only, no config. The session state gains optional fields; a state wi
 
 No code. A scratch project in the session scratchpad with `.claude/settings.json` hooks (PostToolUse matcher `Agent|SendMessage|TaskStop`, SubagentStop) that append their stdin to a log file.
 
-- [ ] `claude -p` there, asking it to launch a `general-purpose` agent in the background that runs `sleep 30`, then SendMessage to it, then stop it with TaskStop; a second run with a foreground agent
-- [ ] Read the log → record in Progress: the tool name (`Agent`), `tool_response.status`, `tool_response.agentId`, `tool_input.subagent_type`, the SubagentStop `agent_id`, and what SendMessage (`to`?) and TaskStop (`task_id`?) inputs and responses carry, and whether a foreground call's response differs
-- [ ] If a field named in criteria 2–3 is missing or named differently: stop and bring the findings to the user before Task 2
+- [x] `claude -p` there, asking it to launch a `general-purpose` agent in the background that runs `sleep 30`, then SendMessage to it, then stop it with TaskStop; a second run with a foreground agent
+- [x] Read the log → record in Progress: the tool name (`Agent`), `tool_response.status`, `tool_response.agentId`, `tool_input.subagent_type`, the SubagentStop `agent_id`, and what SendMessage (`to`?) and TaskStop (`task_id`?) inputs and responses carry, and whether a foreground call's response differs
+- [x] If a field named in criteria 2–3 is missing or named differently: stop and bring the findings to the user before Task 2
 
-### Task 2: eng-kit records background agents (criteria 2, 3, 6)
-
-**Files:** Modify `src_claude/hooks/hooks.json`, `src_claude/lib/state.ts`, `src_claude/lib/hooks.ts` · Test `src_claude/tests/hooks.test.ts`
-**Interfaces:** Produces `SessionState.agents?: Record<string, number>` (agentId → launch ms), `SessionState.agentsEnded?: string[]` (newest last, at most 16), `HookInput.tool_response?: Record<string, unknown>`
-
-- [ ] Write failing tests (with `setup()` and `call`): `an async agent launch is recorded` (PostToolUse `Agent`, `tool_input.subagent_type: "eng-kit:implementer"`, `tool_response: { status: "async_launched", agentId: "a1" }` → state `agents` has key `a1`); `a foreground agent or a reviewer launch records nothing` (status `completed`; and `subagent_type: "eng-kit:reviewer"` async → `agents` absent); `SubagentStop removes the agent` (`agent_id: "a1"` → `agents` empty, `agentsEnded` `["a1"]`); `an agent that ended before its launch was reported isn't recorded` (SubagentStop `a2`, then the launch of `a2` → no `a2`); state round-trip test: a malformed `agents` value (`{a: "x"}`) loads as `undefined`
-- [ ] Run `npm test --prefix src_claude -- --test-name-pattern="agent"` → expect FAIL on the `agents` assertions (received `undefined`)
-- [ ] Implement: `loadState` reads both fields (numbers only / strings only); in `postToolUse`, before the shell branch, `if (tool === "Agent") return trackAgent(input, env)`; `trackAgent` adds when `tool_response.status === "async_launched"`, `typeof agentId === "string"`, `!REVIEWER.test(subagent_type)` and the id isn't in `agentsEnded`; `subagentStop` first calls `endAgent(input, env)` (deletes `agent_id`, appends it to `agentsEnded`, keeps the last 16), then the reviewer logic as now; hooks.json PostToolUse matcher `Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Agent|SendMessage|TaskStop`
-- [ ] Per Task 1: if SendMessage carries the agent id, test `resuming a known agent records it again` (id in `agentsEnded` → back in `agents` with a new time, out of `agentsEnded`) and if TaskStop carries it, `TaskStop removes the agent`; implement both in `trackAgent`. Otherwise add the Follow-ups line `SendMessage resume / TaskStop don't name the agent in hook input` and no code
-- [ ] Run `npm test --prefix src_claude` → PASS
-- [ ] Commit `feat(verify-gate): record background agents that may edit`
-
-### Task 3: eng-kit Stop waits for them (criteria 4, 5)
+### Task 2: eng-kit Stop waits for background agents (criteria 2, 3)
 
 **Files:** Modify `src_claude/lib/hooks.ts` · Test `src_claude/tests/hooks.test.ts`
-**Interfaces:** Consumes `agents` from Task 2 · Produces `const AGENT_MAX_AGE_MS = 2 * 60 * 60 * 1000`
+**Interfaces:** Produces `HookInput.background_tasks?: unknown`, `agentsAtWork(tasks: unknown): boolean`
 
-- [ ] Write failing tests (with `setupGit()`): `Stop waits while a background agent may edit` (edit a file, launch `a1` async, Stop → output `undefined`, state `judged` unchanged; SubagentStop `a1`, Stop → `decision: "block"` naming the file); `an agent older than two hours no longer holds the gate` (state `agents: { a1: Date.now() - AGENT_MAX_AGE_MS - 1 }` → Stop blocks, `agents` empty after); `the other gates don't wait` (an approved task file uncommitted while `a1` runs → the approval reason is still there, without the verify reason)
-- [ ] Run `npm test --prefix src_claude -- --test-name-pattern="background agent|two hours|don't wait"` → expect FAIL: `decision: "block"` where `undefined` was expected
-- [ ] Implement in `stopGates`, after the settled state: drop entries older than `AGENT_MAX_AGE_MS` (save when any dropped); `waiting = Object.keys(agents).length > 0`; both verify branches require `!running && !waiting`
+- [ ] Write failing tests (with `setupGit()`), the input shaped as observed in Progress: `Stop waits while a background agent may edit` (edit a file, Stop with `background_tasks: [{ id: "a1", type: "subagent", status: "running", agent_type: "eng-kit:implementer" }]` → output `undefined`, state `judged` unchanged; then Stop with `[]` → `decision: "block"` naming the file); `the other gates don't wait` (an uncommitted approved task file under the same running agent → the approval reason is there, the verify reason isn't); parametrized `these background tasks don't hold the gate`: a running `eng-kit:reviewer` and `reviewer`, a `shell` task, a `status: "completed"` subagent, `[]`, no field, `"x"`, `[null]`, `[{ type: "subagent" }]` → each `decision: "block"`; a subagent without `agent_type` holds
+- [ ] Run `npm test --prefix src_claude -- --test-name-pattern="background agent|don't wait|don't hold"` → expect FAIL: `decision: "block"` where `undefined` was expected (the holding cases); the non-holding cases pass already, which pins today's behavior
+- [ ] Implement `agentsAtWork` and, in `stopGates`, `const waiting = agentsAtWork(input.background_tasks)`; both verify branches require `!running && !waiting`
 - [ ] Run `npm test --prefix src_claude` → PASS
 - [ ] Commit `feat(verify-gate): wait for background agents that may edit`
+
+### Task 3: merged into Task 2 (decision 2)
 
 ### Task 4: `contentKey` (criteria 7 unit, 12; both editions)
 
@@ -184,10 +171,17 @@ No code. A scratch project in the session scratchpad with `.claude/settings.json
 
 **Files:** Modify both editions' `README.md`, `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE.ru.md`, `CHANGELOG.md`, `package.json`; `src_claude/.claude-plugin/plugin.json`
 
-- [ ] Write the Post-implementation items; CHANGELOG 0.41.0 leads with the two rules and lists the limits (2 h, reviewer still sends back, fail-closed cases, pi without background agents)
+- [ ] Write the Post-implementation items; CHANGELOG 0.41.0 leads with the two rules and lists the limits (Claude Code's `background_tasks`, reviewer still sends back, fail-closed cases, pi without background agents)
 - [ ] Run the full verification → all four PASS (the release test checks the pins)
 - [ ] Commit `docs: verify gate waits and content credit (0.41.0)`
 
 ## Progress
 
-None yet
+- Baseline (2026-11-17): verify script from the workspace root → all four checks PASS.
+- Task 1 findings (Claude Code 2.1.326, `claude -p` in a scratch project with logging hooks):
+  - Async launch: PostToolUse `tool_name: "Agent"`, `tool_input.subagent_type`, `tool_input.run_in_background: true`, `tool_response.status: "async_launched"`, `tool_response.agentId`, `isAsync: true`. Foreground: `status: "completed"`, same `agentId` field.
+  - A background agent that finishes fires SubagentStop with `agent_id` equal to that `agentId`.
+  - SendMessage: `tool_input.to` (and `recipient`) is the agentId. TaskStop: `tool_input.task_id` is the agentId, `tool_response.task_type: "local_agent"`; a stopped agent fires **no** SubagentStop.
+  - **Stop and SubagentStop inputs carry `background_tasks`**: `[{id, type: "subagent" | "shell", status: "running", description, agent_type}]` for each background task still running (the agent's own entry is still listed in its own SubagentStop), and `[]` when none.
+- Task 1: complete (no code; findings above).
+- Ruling (user, 2026-11-18): wait by `background_tasks` instead of agent state. Criteria 2–6, decisions 2–3, the Design paragraph and Tasks 2–3 rewritten; no hooks.json change.
