@@ -1,7 +1,10 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Item, PrState } from "../extensions/lib/pr-feedback.ts";
-import { decide, eventId } from "../extensions/lib/pr-watch.ts";
+import { decide, eventId, watch } from "../extensions/lib/pr-watch.ts";
 
 const QUIET = 120_000;
 const item = (id: string): Item => ({ id, kind: "thread", author: "bob", url: `https://x/${id}`, excerpt: "rename this" });
@@ -95,4 +98,121 @@ test("decide: an event's ack joins the earlier acks and its own id, at most 20",
 	const last = at(snap({ open: [item("T1")] }), QUIET, many);
 	assert.deepEqual(last?.ack.split(","), [...many.slice(6), last?.eventId]);
 	assert.match(last?.eventId ?? "", /^[0-9a-f]{12}$/);
+});
+
+// ---- the loop, on a fake gh ----
+
+const made: string[] = [];
+after(() => {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+
+type Reply = { json: unknown } | { code: number; stderr: string };
+/** A `gh` that answers its N-th call with `replies[N]`; the last reply repeats. */
+function fakeGhSequence(replies: Reply[]): { gh: string; dir: string } {
+	const dir = mkdtempSync(join(tmpdir(), "fake-gh-seq-"));
+	made.push(dir);
+	const cases = replies.map((r, i) => {
+		const file = join(dir, `reply-${i}`);
+		writeFileSync(file, "json" in r ? JSON.stringify(r.json) : r.stderr);
+		return "json" in r ? `${i}) cat "${file}"; exit 0 ;;` : `${i}) cat "${file}" >&2; exit ${r.code} ;;`;
+	});
+	const last = replies.length - 1;
+	const script = [
+		"#!/bin/sh",
+		`n=$(cat "${dir}/count" 2>/dev/null || echo 0)`,
+		`echo $((n + 1)) > "${dir}/count"`,
+		`[ "$n" -gt ${last} ] && n=${last}`,
+		'case "$n" in',
+		...cases,
+		"esac",
+	].join("\n");
+	const gh = join(dir, "gh");
+	writeFileSync(gh, `${script}\n`);
+	chmodSync(gh, 0o755);
+	return { gh, dir };
+}
+
+/** One gh reply that serves both the branch lookup and the PR's own query. */
+function pull(parts: { head?: string; state?: string; mergeable?: string; contexts?: Array<Record<string, unknown>> } = {}): Reply {
+	const node = {
+		number: 48,
+		url: "https://github.com/o/r/pull/48",
+		state: parts.state ?? "OPEN",
+		mergeable: parts.mergeable ?? "MERGEABLE",
+		isCrossRepository: false,
+		headRepositoryOwner: { login: "o" },
+		commits: { nodes: [{ commit: { oid: parts.head ?? "aaa111", statusCheckRollup: { state: "X", contexts: { nodes: parts.contexts ?? [{ __typename: "CheckRun", name: "test", conclusion: "SUCCESS" }] } } } }] },
+		reviewThreads: { totalCount: 0, nodes: [] },
+		reviews: { totalCount: 0, nodes: [] },
+		latestOpinionatedReviews: { totalCount: 0, nodes: [] },
+		comments: { totalCount: 0, nodes: [] },
+	};
+	return { json: { data: { viewer: { login: "me" }, repository: { pullRequests: { totalCount: 1, nodes: [node] }, pullRequest: node } } } };
+}
+const running = [{ __typename: "CheckRun", name: "test", conclusion: null }, { __typename: "CheckRun", name: "lint", conclusion: null }];
+const oneFailed = [{ __typename: "CheckRun", name: "test", conclusion: "FAILURE" }, { __typename: "CheckRun", name: "lint", conclusion: null }];
+const transient: Reply = { code: 1, stderr: "HTTP 502: Bad Gateway" };
+
+/**
+ * Runs `watch` on `replies` with a fake clock; returns the event, the sleeps and the clock at the end. Started by
+ * branch, the first reply also answers the branch lookup (one more gh call), so it is given twice.
+ */
+async function run(replies: Reply[], opts: { number?: number; timeoutMs?: number; intervalMs?: number } = {}) {
+	const fake = fakeGhSequence(opts.number === undefined ? [replies[0]!, ...replies] : replies);
+	let clock = 0;
+	const sleeps: number[] = [];
+	const event = await watch({
+		dir: fake.dir,
+		branch: "feat/x",
+		number: opts.number,
+		timeoutMs: opts.timeoutMs ?? 3_600_000,
+		intervalMs: opts.intervalMs ?? 30_000,
+		quietMs: QUIET,
+		gh: fake.gh,
+		config: {},
+		now: () => clock,
+		sleep: async (ms) => {
+			sleeps.push(ms);
+			clock += ms;
+		},
+	});
+	return { event, sleeps, clock };
+}
+
+test("watch: pending then one failed → checks_failed after one sleep of intervalMs", async () => {
+	const r = await run([pull({ contexts: running }), pull({ contexts: oneFailed })]);
+	assert.deepEqual([r.event.event, r.event.checks.failed, r.event.checks.pending, r.sleeps], ["checks_failed", ["test"], 1, [30_000]]);
+});
+
+test("watch: OPEN then MERGED → merged", async () => {
+	const r = await run([pull({ contexts: running }), pull({ state: "MERGED", contexts: running })], { number: 48 });
+	assert.equal(r.event.event, "merged");
+});
+
+test("watch: a new head resets the quiet period (review focus 2)", async () => {
+	const r = await run([...Array.from({ length: 11 }, () => pull({ head: "aaa111" })), pull({ head: "bbb222" })], { intervalMs: 10_000 });
+	assert.deepEqual([r.event.event, r.event.head, r.clock], ["ready", "bbb222", 230_000]);
+});
+
+test("watch: two transient errors then success keep watching; three in a row → blocked transient (review focus 4)", async () => {
+	const r = await run([pull({ contexts: running }), transient, transient, pull({ contexts: running }), transient, transient, transient]);
+	assert.deepEqual([r.event.event, r.event.reason], ["blocked", "transient: gh failed: HTTP 502: Bad Gateway"]);
+	assert.deepEqual(r.sleeps, [30_000, 30_000, 60_000, 30_000, 30_000, 60_000]);
+});
+
+test("watch: gh not authenticated mid-watch → blocked at once", async () => {
+	const r = await run([pull({ contexts: running }), { code: 4, stderr: "To get started with GitHub CLI, please run:  gh auth login" }]);
+	assert.deepEqual([r.event.event, r.event.reason, r.sleeps.length], ["blocked", "gh is not authenticated", 1]);
+	assert.equal(r.event.pr, 48, "the event still names the PR");
+});
+
+test("watch: no open PR at start → blocked", async () => {
+	const r = await run([{ json: { data: { viewer: { login: "me" }, repository: { pullRequests: { totalCount: 0, nodes: [] } } } } }]);
+	assert.deepEqual([r.event.event, r.event.reason], ["blocked", "no open PR for branch feat/x"]);
+});
+
+test("watch: timeout → blocked timeout", async () => {
+	const r = await run([pull({ contexts: running })], { timeoutMs: 100_000 });
+	assert.deepEqual([r.event.event, r.event.reason, r.clock, r.sleeps], ["blocked", "timeout", 100_000, [30_000, 30_000, 30_000, 10_000]]);
 });

@@ -4,7 +4,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Item, PrState } from "./pr-feedback.ts";
+import { collectPrState, type FeedbackConfig, type Item, type PrState } from "./pr-feedback.ts";
 
 export type EventName = "merged" | "closed" | "conflict" | "checks_failed" | "feedback" | "ready" | "blocked";
 
@@ -72,4 +72,76 @@ export function decide(state: PrState, ctx: { acked: string[]; headSeenAt: numbe
 	if (!settledGreen || state.mergeable === "UNKNOWN") return null;
 	if (state.problems.length > 0) return event("blocked", state, acked, `partial: ${state.problems.join("; ")}`);
 	return event("ready", state, acked, `${plural(checks.total, "check")} passed on ${state.head?.slice(0, 7) ?? "the head"}, no open review items`);
+}
+
+/** Errors no retry can fix: the watch ends with them at once. */
+const FATAL = new Set(["gh not found", "gh is not authenticated", "not a GitHub repository"]);
+/** Waits after the 1st and 2nd transient error in a row; the 3rd ends the watch. */
+const BACKOFF_MS = [30_000, 60_000, 120_000];
+const TRANSIENT_MAX = 3;
+/** Each read of the PR must finish within this. */
+const READ_DEADLINE_MS = 30_000;
+
+/** A `blocked` event about the last PR seen (or none yet). */
+function blocked(last: PrState | null, acked: string[], reason: string): WatchEvent {
+	const base: PrState = last ?? { pr: null, url: null, head: null, login: null, open: [], closed: 0, checks: { state: null, failed: [], pending: 0, total: 0 }, state: null, mergeable: null, problems: [], error: null, github: true };
+	return event("blocked", base, acked, reason);
+}
+
+/**
+ * Polls the PR until `decide` returns an event, and returns it. Without `number` the PR of `branch` (default: the
+ * folder's current branch) is looked up once, and any error there ends the watch; after that the PR is read by
+ * number every `intervalMs`. gh missing, unauthenticated or not on GitHub ends the watch at once; other errors are
+ * retried after 30 s and 60 s, and the 3rd in a row ends it (`transient: …`); `timeoutMs` ends it with `timeout`.
+ * Only reads. `now` and `sleep` are for tests.
+ */
+export async function watch(opts: {
+	dir: string;
+	branch?: string;
+	number?: number;
+	acked?: string[];
+	timeoutMs: number;
+	intervalMs: number;
+	quietMs: number;
+	gh?: string;
+	config?: FeedbackConfig;
+	now?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+}): Promise<WatchEvent> {
+	const now = opts.now ?? Date.now;
+	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+	const acked = opts.acked ?? [];
+	const started = now();
+	const read = (number?: number) => collectPrState({ dir: opts.dir, branch: opts.branch, number, deadlineMs: READ_DEADLINE_MS, gh: opts.gh, config: opts.config });
+
+	let state = read(opts.number);
+	if (state.error) return blocked(null, acked, state.error);
+	const number = state.pr ?? opts.number;
+	let last: PrState = state;
+	let head: string | null = null;
+	let headSeenAt = started;
+	let errors = 0;
+	for (;;) {
+		let wait = opts.intervalMs;
+		if (state.error) {
+			if (FATAL.has(state.error)) return blocked(last, acked, state.error);
+			errors++;
+			if (errors >= TRANSIENT_MAX) return blocked(last, acked, `transient: ${state.error}`);
+			wait = BACKOFF_MS[errors - 1]!;
+		} else {
+			errors = 0;
+			last = state;
+			if (state.head !== head) {
+				head = state.head;
+				headSeenAt = now();
+			}
+			const found = decide(state, { acked, headSeenAt, now: now(), quietMs: opts.quietMs });
+			if (found) return found;
+		}
+		const left = opts.timeoutMs - (now() - started);
+		if (left <= 0) return blocked(last, acked, "timeout");
+		await sleep(Math.min(wait, left));
+		if (now() - started >= opts.timeoutMs) return blocked(last, acked, "timeout");
+		state = read(number);
+	}
 }
