@@ -9,7 +9,7 @@
  */
 import { resolve } from "node:path";
 import { projectFeedbackConfig } from "../extensions/lib/pr-feedback.ts";
-import { watch, type WatchEvent } from "../extensions/lib/pr-watch.ts";
+import { NOTE, watch, type WatchEvent } from "../extensions/lib/pr-watch.ts";
 
 function arg(name: string): string | undefined {
 	const i = process.argv.indexOf(name);
@@ -36,6 +36,6 @@ try {
 	});
 } catch (error) {
 	const message = error instanceof Error ? error.message : String(error);
-	event = { schemaVersion: 1, event: "blocked", eventId: "", ack: arg("--ack") ?? "", reason: `watcher error: ${message}`, pr: null, url: null, head: null, checks: { state: null, failed: [], pending: 0, total: 0 }, open: [], problems: [] };
+	event = { schemaVersion: 1, event: "blocked", eventId: "", ack: arg("--ack") ?? "", reason: `watcher error: ${message}`, pr: null, url: null, head: null, checks: { state: null, failed: [], pending: 0, total: 0 }, open: [], problems: [], note: NOTE };
 }
 console.log(JSON.stringify(event, null, 2));

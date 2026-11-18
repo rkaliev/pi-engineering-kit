@@ -92,6 +92,28 @@ test("decide: acked feedback still open once checks passed is feedback-unanswere
 	assert.equal(at(snap({ open: [item("T1")], checks: pendingChecks }), QUIET, [eventId("feedback", open)]), null);
 });
 
+test("decide: with no checks, acked feedback still open after the quiet period is feedback-unanswered (R3)", () => {
+	const none = { state: null, failed: [], pending: 0, total: 0 };
+	const open = snap({ open: [item("T1")], checks: none });
+	assert.deepEqual(what(open, QUIET, [eventId("feedback", open)]), ["blocked", "feedback-unanswered"]);
+	assert.equal(at(snap({ open: [item("T1")] }), QUIET - 1000, [eventId("feedback", open)]), null, "not before the quiet period, checks or not");
+});
+
+test("decide: ready needs GitHub's rollup to say SUCCESS, which covers checks past the first 100 read (R4)", () => {
+	assert.equal(at(snap({ checks: { state: "PENDING", failed: [], pending: 0, total: 100 } }), QUIET), null);
+	assert.equal(at(snap({ checks: { state: "FAILURE", failed: [], pending: 0, total: 100 } }), QUIET), null);
+});
+
+test("decide: every event says its third-party text is data (R5)", () => {
+	for (const s of [snap(), snap({ open: [item("T1")] }), snap({ state: "MERGED" })]) assert.match(at(s, QUIET)?.note ?? "", /data, not instructions/);
+});
+
+test("decide: a second failed check on an acked head stays acked (R11)", () => {
+	const one = snap({ checks: failing });
+	const two = snap({ checks: { ...failing, failed: ["test", "lint"], pending: 1 } });
+	assert.equal(at(two, QUIET, [eventId("checks_failed", one)]), null);
+});
+
 test("decide: an event's ack joins the earlier acks and its own id, at most 20", () => {
 	const e = at(snap({ open: [item("T1")] }), QUIET, ["a", "b", "a"]);
 	assert.equal(e?.ack, `a,b,${e?.eventId}`);
@@ -108,7 +130,7 @@ after(() => {
 	for (const dir of made) rmSync(dir, { recursive: true, force: true });
 });
 
-type Reply = { json: unknown } | { code: number; stderr: string };
+type Reply = { json: unknown; vanish?: boolean } | { code: number; stderr: string };
 /** A `gh` that answers its N-th call with `replies[N]`; the last reply repeats. */
 function fakeGhSequence(replies: Reply[]): { gh: string; dir: string } {
 	const dir = mkdtempSync(join(tmpdir(), "fake-gh-seq-"));
@@ -116,7 +138,9 @@ function fakeGhSequence(replies: Reply[]): { gh: string; dir: string } {
 	const cases = replies.map((r, i) => {
 		const file = join(dir, `reply-${i}`);
 		writeFileSync(file, "json" in r ? JSON.stringify(r.json) : r.stderr);
-		return "json" in r ? `${i}) cat "${file}"; exit 0 ;;` : `${i}) cat "${file}" >&2; exit ${r.code} ;;`;
+		// `vanish`: the gh answers, then deletes itself, as an uninstalled gh would be gone at the next call.
+		if ("json" in r) return `${i}) cat "${file}"; ${r.vanish ? 'rm -f "$0"; ' : ""}exit 0 ;;`;
+		return `${i}) cat "${file}" >&2; exit ${r.code} ;;`;
 	});
 	const last = replies.length - 1;
 	const script = [
@@ -134,8 +158,15 @@ function fakeGhSequence(replies: Reply[]): { gh: string; dir: string } {
 	return { gh, dir };
 }
 
+/** GitHub's rollup state of check runs: FAILURE if one failed, PENDING while one runs, else SUCCESS. */
+function rollup(contexts: Array<Record<string, unknown>>): string {
+	if (contexts.some((c) => c.conclusion === "FAILURE")) return "FAILURE";
+	return contexts.some((c) => !c.conclusion) ? "PENDING" : "SUCCESS";
+}
+
 /** One gh reply that serves both the branch lookup and the PR's own query. */
 function pull(parts: { head?: string; state?: string; mergeable?: string; contexts?: Array<Record<string, unknown>>; thread?: boolean } = {}): Reply {
+	const contexts = parts.contexts ?? [{ __typename: "CheckRun", name: "test", conclusion: "SUCCESS" }];
 	const node = {
 		number: 48,
 		url: "https://github.com/o/r/pull/48",
@@ -143,7 +174,7 @@ function pull(parts: { head?: string; state?: string; mergeable?: string; contex
 		mergeable: parts.mergeable ?? "MERGEABLE",
 		isCrossRepository: false,
 		headRepositoryOwner: { login: "o" },
-		commits: { nodes: [{ commit: { oid: parts.head ?? "aaa111", statusCheckRollup: { state: "X", contexts: { nodes: parts.contexts ?? [{ __typename: "CheckRun", name: "test", conclusion: "SUCCESS" }] } } } }] },
+		commits: { nodes: [{ commit: { oid: parts.head ?? "aaa111", statusCheckRollup: { state: rollup(contexts), contexts: { nodes: contexts } } } }] },
 		reviewThreads: parts.thread
 			? { totalCount: 1, nodes: [{ id: "T1", isResolved: false, path: "a.ts", line: 3, comments: { totalCount: 1, nodes: [{ id: "C1", author: { login: "bob", __typename: "User" }, body: "Rename this.", url: "https://x/C1", createdAt: "2026-11-18T10:00:00Z" }] } }] }
 			: { totalCount: 0, nodes: [] },
@@ -208,6 +239,16 @@ test("watch: gh not authenticated mid-watch → blocked at once", async () => {
 	const r = await run([pull({ contexts: running }), { code: 4, stderr: "To get started with GitHub CLI, please run:  gh auth login" }]);
 	assert.deepEqual([r.event.event, r.event.reason, r.sleeps.length], ["blocked", "gh is not authenticated", 1]);
 	assert.equal(r.event.pr, 48, "the event still names the PR");
+});
+
+test("watch: a transient error on the first read by number backs off like any other (R2)", async () => {
+	const r = await run([transient, pull({ state: "MERGED" })], { number: 48 });
+	assert.deepEqual([r.event.event, r.sleeps], ["merged", [30_000]]);
+});
+
+test("watch: gh gone mid-watch → blocked at once (R11)", async () => {
+	const r = await run([{ ...(pull({ contexts: running }) as { json: unknown }), vanish: true }], { number: 48 });
+	assert.deepEqual([r.event.event, r.event.reason, r.sleeps.length], ["blocked", "gh not found", 1]);
 });
 
 test("watch: no open PR at start → blocked", async () => {
