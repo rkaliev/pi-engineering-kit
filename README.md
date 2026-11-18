@@ -16,11 +16,12 @@ It contains:
   - **platforms:** web frontend, backend services, mobile, desktop, and UI motion across them;
   - **high-risk domains:** payments and money, POS and fiscal, security review, observability, database changes.
 - **9 prompt templates** that act as entry points: `/brainstorm`, `/plan`, `/implement`, `/review`, `/debug`, `/onboard`, `/finish`, `/new-task`, `/docs`.
-- **5 extensions:**
+- **6 extensions:**
   - **bootstrap** loads the skill rules into every request.
   - **guard** blocks irreversible or secret-leaking tool calls and PRs or merges that would carry a task file to the base branch, and asks you before outward-facing ones and before landing a commit without a passing review.
   - **verify** runs the project's checks and won't let the agent finish with unverified edits, while an approved task file is uncommitted, or while an implemented one is still in the tree.
   - **init** adds `/kit-init`, which creates the project's `.pi/` config in one step.
+  - **pr-watch** adds the `watch_pr` tool, which follows a GitHub PR in the background and wakes the agent only when the PR needs a decision.
   - **models** routes each command to its own model and thinking level (`/review` and `/implement` on the strongest model, `/onboard` and `/finish` on a mid-tier one), and adds `/mode` for manual switching.
 - **A test-hygiene script** for the project's CI on any stack (`scripts/test-hygiene.ts`, Node only, no dependencies): focused tests, skips without a linked issue, fixed sleeps, retries in runner configs and test code, JUnit test counts. In an existing project it checks only the lines a change adds, so old debt doesn't block.
 
