@@ -42,7 +42,8 @@
       "./extensions/guard.ts",
       "./extensions/verify.ts",
       "./extensions/models.ts",
-      "./extensions/init.ts"
+      "./extensions/init.ts",
+      "./extensions/pr-watch.ts"
     ],
     "skills": [
       "./skills"
