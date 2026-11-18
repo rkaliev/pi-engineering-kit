@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, cleanAt, contentKey, keyCovers, keyCoversAll } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -668,4 +668,217 @@ test("shellWriteTargets counts TEE and SED -i targets: the programs run in any l
 	t.after(() => rmSync(project, { recursive: true, force: true }));
 	assert.deepEqual(shellWriteTargets("echo x | TEE src/c.ts", project, project), ["src/c.ts"]);
 	assert.deepEqual(shellWriteTargets("SED -i '' 's/a/b/' src/d.ts", project, project), ["src/d.ts"]);
+});
+
+const key = (dir: string, commands = ["npm test"], limits: { deadline?: number; maxBytes?: number } = {}) => contentKey(dir, fingerprint(dir), commands, limits);
+/** Rewrites a file with the same bytes and a later modification time, as a checkout or pull does. */
+const touchSame = (file: string) => {
+	writeFileSync(file, readFileSync(file));
+	const later = Date.now() / 1000 + 120;
+	utimesSync(file, later, later);
+};
+
+test("contentKey: equal content gives an equal key, whatever the file times", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const first = key(dir);
+	assert.equal(typeof first, "string");
+	touchSame(join(dir, "src/a.ts"));
+	assert.equal(key(dir), first);
+});
+
+test("contentKey: any difference changes the key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const first = key(dir);
+	assert.equal(typeof first, "string");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 3;\n");
+	assert.notEqual(key(dir), first, "one byte");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir), first, "restored");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	assert.notEqual(key(dir), first, "an extra untracked file");
+	rmSync(join(dir, "src/b.ts"));
+	assert.notEqual(key(dir, ["npm test", "npm run lint"]), first, "other verification commands");
+	writeFileSync(join(dir, "src/c.ts"), "export const c = 1;\n");
+	git(dir, "add", "src/c.ts");
+	git(dir, "commit", "-q", "-m", "c");
+	assert.notEqual(key(dir), first, "another committed file");
+});
+
+test("contentKey: committing the content keeps the key (user ruling 2026-11-18: the key is of content only)", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const verified = key(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	assert.equal(key(dir), verified, "the checks ran before the commit");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 3;\n");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir), verified, "restored after the commit");
+});
+
+test("contentKey: a squash merge of a branch verified before its commit keeps the key", () => {
+	const dir = repo();
+	git(dir, "checkout", "-q", "-b", "feat");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const verified = key(dir);
+	git(dir, "commit", "-q", "-am", "a = 2");
+	git(dir, "checkout", "-q", "main");
+	git(dir, "merge", "-q", "--squash", "feat");
+	git(dir, "commit", "-q", "-m", "squashed");
+	assert.equal(key(dir), verified);
+});
+
+test("contentKey: no key for a listed symlink, whatever it points to", () => {
+	const dir = repo();
+	symlinkSync("a.ts", join(dir, "src/link.ts"));
+	assert.equal(key(dir), undefined);
+});
+
+test("contentKey: no key, and no hang, for a listed path that is not a regular file", { skip: process.platform === "win32" ? "platform: POSIX FIFOs only" : false }, () => {
+	const dir = repo();
+	rmSync(join(dir, "src/a.ts"));
+	execFileSync("mkfifo", [join(dir, "src/a.ts")]);
+	assert.equal(key(dir), undefined);
+});
+
+test("keyCovers: a path is covered when the key reads its content", () => {
+	const dir = repo();
+	writeFileSync(join(dir, ".gitignore"), "dist/\n.env.test\n");
+	git(dir, "commit", "-q", "-am", "ignore");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	writeFileSync(join(dir, ".env.test"), "X=1\n");
+	const tree = fingerprint(dir);
+	assert.equal(keyCovers(dir, tree, "src/b.ts"), true, "listed");
+	assert.equal(keyCovers(dir, tree, "src/a.ts"), true, "tracked and clean: its HEAD blob is in the key");
+	assert.equal(keyCovers(dir, tree, ".env.test"), false, "gitignored");
+	assert.equal(keyCovers(dir, tree, "src/none.ts"), false, "unknown");
+	git(dir, "update-index", "--skip-worktree", "src/a.ts");
+	assert.equal(keyCovers(dir, fingerprint(dir), "src/a.ts"), false, "skip-worktree: its edits are invisible to git");
+	const ws = workspace();
+	assert.equal(keyCovers(ws, fingerprint(ws), "a/f.ts"), true, "a workspace repository's clean file");
+});
+
+test("contentKey: a squash merge of the verified tree keeps the key", () => {
+	const dir = repo();
+	git(dir, "checkout", "-q", "-b", "feat");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	const onBranch = key(dir);
+	assert.equal(typeof onBranch, "string");
+	git(dir, "checkout", "-q", "main");
+	git(dir, "merge", "-q", "--squash", "feat");
+	git(dir, "commit", "-q", "-m", "squashed");
+	assert.equal(key(dir), onBranch);
+});
+
+test("contentKey: files outside a workspace's repositories count by content", () => {
+	const ws = workspace();
+	writeFileSync(join(ws, "notes", "x.js"), "2;\n");
+	const first = key(ws);
+	assert.equal(typeof first, "string");
+	touchSame(join(ws, "notes", "x.js"));
+	assert.equal(key(ws), first);
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 1;\n");
+	assert.notEqual(key(ws), first, "a repository's file");
+});
+
+test("contentKey: no key for what it can't prove", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir, ["npm test"], { maxBytes: 1 }), undefined, "past the size cap");
+	assert.equal(key(dir, ["npm test"], { deadline: Date.now() - 1 }), undefined, "past the deadline");
+	const tree = fingerprint(dir);
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 22;\n");
+	assert.equal(contentKey(dir, tree, ["npm test"]), undefined, "a listed file changed after its fingerprint");
+	const nested = join(dir, "sub");
+	mkdirSync(nested);
+	git(nested, "init", "-q", "-b", "main");
+	writeFileSync(join(nested, "x"), "x\n");
+	git(nested, "add", "-A");
+	git(nested, "commit", "-q", "-m", "nested");
+	assert.equal(key(dir), undefined, "a folder label (a nested repository)");
+	const ws = workspace();
+	const blind = treeFingerprint(ws, [], {}, { deadline: Date.now() - 1 });
+	assert.ok(blind);
+	assert.equal(contentKey(ws, blind, ["npm test"]), undefined, "a blind workspace part");
+});
+
+test("contentKey: computing a key writes nothing into .git", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	const objects = () => execFileSync("git", ["count-objects", "-v"], { cwd: dir, encoding: "utf8" });
+	const before = objects();
+	assert.equal(typeof key(dir), "string");
+	assert.equal(objects(), before);
+});
+
+test("contentKey: a deleted file counts by its deletion", () => {
+	const dir = repo();
+	rmSync(join(dir, "src/a.ts"));
+	const gone = key(dir);
+	assert.equal(typeof gone, "string");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.notEqual(key(dir), gone);
+	rmSync(join(dir, "src/a.ts"));
+	assert.equal(key(dir), gone);
+});
+
+test("contentKey: files the fingerprint ignores are left out of HEAD too, so a branch that also changed them keeps its key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n");
+	git(dir, "add", "CHANGELOG.md");
+	git(dir, "commit", "-q", "-m", "changelog");
+	const ignore = ["**/*.md"];
+	const ignored = (d: string) => contentKey(d, fingerprint(d, ignore), ["npm test"], { ignore });
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n- a = 2\n");
+	const verified = ignored(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2 and its changelog");
+	assert.equal(ignored(dir), verified);
+	assert.notEqual(contentKey(dir, fingerprint(dir, ignore), ["npm test"], { ignore: [] }), verified, "the ignore globs are part of the key");
+});
+
+test("keyCoversAll: every path must be read by the key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, ".gitignore"), "dist/\n.env.test\n");
+	git(dir, "commit", "-q", "-am", "ignore");
+	writeFileSync(join(dir, ".env.test"), "X=1\n");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	const tree = fingerprint(dir);
+	assert.equal(keyCoversAll(dir, tree, ["src/a.ts", "src/b.ts"]), true);
+	assert.equal(keyCoversAll(dir, tree, ["src/a.ts", ".env.test"]), false);
+	assert.equal(keyCoversAll(dir, tree, ["constructor"]), false, "not an inherited property name");
+	assert.equal(keyCoversAll(dir, tree, ["src"]), false, "a folder is not a file the key reads");
+	git(dir, "update-index", "--assume-unchanged", "src/a.ts");
+	assert.equal(keyCoversAll(dir, fingerprint(dir), ["src/a.ts"]), false, "assume-unchanged");
+});
+
+test("cleanAt: the reviewed commit is a HEAD with nothing listed in its repository", () => {
+	const dir = repo();
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+	assert.equal(cleanAt(fingerprint(dir), head), true);
+	assert.equal(cleanAt(fingerprint(dir), head.slice(0, 7)), true, "an abbreviated SHA");
+	assert.equal(cleanAt(fingerprint(dir), "0".repeat(40)), false, "another commit");
+	assert.equal(cleanAt(fingerprint(dir), head.slice(0, 3)), false, "too short to name a commit");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(cleanAt(fingerprint(dir), head), false, "the working tree differs from it");
+	const ws = workspace();
+	const wsHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(ws, "a"), encoding: "utf8" }).trim();
+	assert.equal(cleanAt(fingerprint(ws), wsHead), true, "a workspace repository");
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	assert.equal(cleanAt(fingerprint(ws), wsHead), false, "with a change listed in that repository");
+});
+
+test("contentKey: with core.fileMode=false the executable bit comes from HEAD, as git takes it", { skip: process.platform === "win32" ? "platform: POSIX permission bits only" : false }, () => {
+	const dir = repo();
+	git(dir, "config", "core.fileMode", "false");
+	chmodSync(join(dir, "src/a.ts"), 0o755);
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const verified = key(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	assert.equal(key(dir), verified, "git committed it as 100644 although the disk says executable");
 });

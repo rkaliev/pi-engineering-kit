@@ -21,6 +21,7 @@ import { checkGateFiles, checkReview, parseReview, recordReview, notePr, recordV
 import { canonical } from "./lib/repos.ts";
 import { guardBaseline, guardScope, hooksPaths, isGuardBaseline, repoIn, scopedConfig, scopedPath, strictest, type GuardBaseline } from "./lib/scope.ts";
 import { verifyState } from "./lib/verify-state.ts";
+import { cleanAt } from "./lib/worktree.ts";
 import { appendSessionSnapshot, appendUsage, branchSummary, formatTokens, summaryLine, type Tokens } from "./lib/usage.ts";
 import { checkWorkDocs, currentBranch, WORK_DOC_DIRS } from "./lib/workdocs.ts";
 
@@ -149,6 +150,10 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		runs.forEach((run, index) => {
 			if (run.usage) recordUsage(ctx, { kind: "subagent", id: `${event.toolCallId}-${index}`, agent: run.agent ?? "subagent", model: run.model ?? "unknown", tokens: tokensOf(run.usage) });
 		});
+		// Unverified edits that brought the tree back to content the checks passed on don't make a review Inconclusive, but only a
+		// review of a HEAD with nothing listed in its repository reviewed that content (a commit can hold other content).
+		// Checked once, before any verdict's lookups start their deadline.
+		const credit = verifyState.unverified && runs.some((run) => run.agent === "reviewer") ? verifyState.creditByContent?.(ctx) : undefined;
 		runs.forEach((run, index) => {
 			if (run.agent !== "reviewer") return;
 			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
@@ -157,12 +162,19 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
 			// Every lookup for this run shares one deadline, so pi isn't held up for long by a repository that hangs.
 			const deadline = Date.now() + LOOKUP_DEADLINE_MS;
-			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
+			const otherContent = !verifyState.unverified && credit !== undefined && parsed !== undefined && !cleanAt(credit, parsed.sha);
+			if (parsed && (verifyState.unverified || otherContent) && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
 				const held = recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput, deadline });
 				// Not recorded as written (its BASE or HEAD is no commit, or couldn't be searched in time): the named commit, else
 				// each HEAD, so it is never lost; the failed lookup is passed on, not repeated.
 				const still = typeof held === "string" ? holdBack(ctx.cwd, parsed.sha, ids, options.reviewsRoot, deadline, held) : held.missed === undefined ? undefined : holdBack(ctx.cwd, parsed.sha, heldIds(ids), options.reviewsRoot, deadline);
-				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
+				if (ctx.hasUI)
+					ctx.ui.notify(
+						otherContent
+							? "Review gate: the edits are back to verified content, but the review named a commit with other content than the working tree, so it counts as Inconclusive. Review the HEAD that holds the verified content, with nothing changed in its repository."
+							: "Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.",
+						"warning",
+					);
 				notifyMissed(ctx, typeof held === "string" ? undefined : held.missed, still);
 				return;
 			}
