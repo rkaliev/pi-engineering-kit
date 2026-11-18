@@ -26,7 +26,7 @@ import { guardScope } from "./lib/scope.ts";
 import { checkFeedback, feedbackConfig, MAX_CHECKED } from "./lib/pr-feedback.ts";
 import { touchedPrs } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChangesSplit, contentKey, ignoredPath, keyCovers, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChangesSplit, contentKey, ignoredPath, keyCovers, keyCoversAll, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -96,7 +96,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	const markGreen = (commands: string[], all: string[], ctx: ExtensionContext, keyTree?: Tree) => {
 		for (const c of commands) greenSinceEdit.add(c);
 		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) {
-			if (unverified) verifiedKey = keyTree && !gitOff ? contentKey(ctx.cwd, keyTree, all) : undefined;
+			if (unverified) verifiedKey = keyTree && !gitOff ? contentKey(ctx.cwd, keyTree, all, { ignore: resolveIgnore(ctx.cwd) }) : undefined;
 			unverified = verifyState.unverified = false;
 			edited = [];
 		}
@@ -106,18 +106,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	/**
 	 * Unverified edits that brought the tree back to content the checks already passed on (a restored file, a pull of a
 	 * squash-merged branch verified before) are verified: the content key of `fresh`, or of a fingerprint taken now,
-	 * equals the stored one.
+	 * equals the stored one. Returns that fingerprint when it credited them.
 	 */
-	const creditByContent = (ctx: ExtensionContext, fresh?: Tree) => {
-		if (!unverified || verifiedKey === undefined || gitOff) return;
+	const creditByContent = (ctx: ExtensionContext, fresh?: Tree): Tree | undefined => {
+		if (!unverified || verifiedKey === undefined || gitOff) return undefined;
 		const { commands, error } = resolveVerifyCommands(ctx.cwd);
-		if (error || commands.length === 0) return;
+		if (error || commands.length === 0) return undefined;
 		const now = fresh ?? treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), {}, { skip: [...slowParts], previous: tree });
-		if (!now || contentKey(ctx.cwd, now, commands) !== verifiedKey) return;
+		if (!now || contentKey(ctx.cwd, now, commands, { ignore: resolveIgnore(ctx.cwd) }) !== verifiedKey) return undefined;
 		for (const c of commands) greenSinceEdit.add(c);
 		unverified = verifyState.unverified = false;
 		edited = [];
 		setStatus(ctx);
+		return now;
 	};
 	verifyState.creditByContent = (ctx) => creditByContent(ctx);
 
@@ -179,6 +180,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const counts = after ? !exempted : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];
 		if (marked.length > 0) markEdited(exact, ctx, guessed);
+		// A file that left git's listing with its content unchanged was committed (now a clean tracked file the key reads) or
+		// hidden (assume-unchanged, skip-worktree, an exclude): a hidden one may hold edits the key no longer sees.
+		if (verifiedKey !== undefined && before !== undefined) {
+			const left = now === undefined ? undefined : Object.keys(before.files).filter((p) => !Object.hasOwn(now.files, p) && existsSync(join(cwd, p)));
+			if (left === undefined || (left.length > 0 && !keyCoversAll(cwd, now!, left))) verifiedKey = undefined;
+		}
 		if (callId !== undefined) {
 			pending.delete(callId);
 			if (!after && now) pending.set(callId, now);

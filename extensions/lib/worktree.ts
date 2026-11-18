@@ -294,19 +294,45 @@ export const KEY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * Whether `contentKey` reads the content of `label` (a project-relative path): git lists it, or it is a tracked file git
- * shows as clean, whose HEAD blob is in the key. Not a gitignored or unknown path, nor one marked assume-unchanged or
- * skip-worktree (git doesn't see its edits); `false` on any error or past `deadline`.
+ * shows as clean, whose HEAD blob is in the key. Not a gitignored or unknown path, a folder, nor one marked
+ * assume-unchanged or skip-worktree (git doesn't see its edits); `false` on any error or past `deadline`.
  */
-export function keyCovers(projectDir: string, tree: Tree, label: string, deadline = Date.now() + KEY_BUDGET_MS): boolean {
-	if (label in tree.files) return true;
-	const repo = tree.heads === undefined ? "" : Object.keys(tree.heads).find((r) => label.startsWith(`${r}/`));
-	if (repo === undefined) return false;
-	const path = repo === "" ? label : label.slice(repo.length + 1);
+export function keyCovers(projectDir: string, tree: Tree, label: string, deadline?: number): boolean {
+	return keyCoversAll(projectDir, tree, [label], deadline);
+}
+
+/** `keyCovers` for every one of `labels`, with one `git ls-files` per repository. */
+export function keyCoversAll(projectDir: string, tree: Tree, labels: string[], deadline = Date.now() + KEY_BUDGET_MS): boolean {
+	const byRepo = new Map<string, string[]>();
+	for (const label of labels) {
+		if (Object.hasOwn(tree.files, label)) continue;
+		const repo = tree.heads === undefined ? "" : Object.keys(tree.heads).find((r) => label.startsWith(`${r}/`));
+		if (repo === undefined) return false;
+		byRepo.set(repo, [...(byRepo.get(repo) ?? []), repo === "" ? label : label.slice(repo.length + 1)]);
+	}
 	try {
-		return git(join(projectDir, repo), ["--literal-pathspecs", "ls-files", "-v", "-z", "--", path], timeLeft(deadline)) === `H ${path}\0`;
+		for (const [repo, paths] of byRepo) {
+			const tags = new Map<string, string>();
+			for (const record of git(join(projectDir, repo), ["--literal-pathspecs", "ls-files", "-v", "-z", "--", ...paths], timeLeft(deadline)).split("\0")) {
+				if (record.length > 2) tags.set(record.slice(2), record.slice(0, 2));
+			}
+			if (!paths.every((path) => tags.get(path) === "H ")) return false;
+		}
+		return true;
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Whether `sha` (at least 7 hex digits) is the HEAD of the fingerprinted tree, or of one of its workspace repositories, with
+ * nothing listed in that repository: the commit then holds exactly the content the working tree does there.
+ */
+export function cleanAt(tree: Tree, sha: string): boolean {
+	if (!/^[0-9a-f]{7,64}$/i.test(sha)) return false;
+	const named = (head: string) => head !== "" && head.toLowerCase().startsWith(sha.toLowerCase());
+	if (tree.heads === undefined) return named(tree.head) && Object.keys(tree.files).length === 0;
+	return Object.entries(tree.heads).some(([repo, head]) => named(head) && !Object.keys(tree.files).some((path) => path.startsWith(`${repo}/`)));
 }
 
 /**
@@ -316,13 +342,17 @@ export function keyCovers(projectDir: string, tree: Tree, label: string, deadlin
  * it is executable are all that count. Listed files are hashed as git blobs in Node, so nothing is written into `.git`.
  * `undefined` when it can't be proven: a blind part, a listed folder (a submodule or nested repository), symlink or
  * other non-regular file, a listed file whose size or time differ from the fingerprint before or after its read (written
- * since), past `maxBytes` of listed content or `deadline`, or any error.
+ * since), past `maxBytes` of listed content or `deadline`, or any error. HEAD's files that `ignore` matches (as the
+ * fingerprint applies it) are left out, and the globs are part of the key.
  */
-export function contentKey(projectDir: string, tree: Tree, commands: string[], limits: { deadline?: number; maxBytes?: number } = {}): string | undefined {
+export function contentKey(projectDir: string, tree: Tree, commands: string[], limits: { deadline?: number; maxBytes?: number; ignore?: string[] } = {}): string | undefined {
 	if ((tree.blind ?? []).length > 0) return undefined;
 	const deadline = limits.deadline ?? Date.now() + KEY_BUDGET_MS;
 	const maxBytes = limits.maxBytes ?? KEY_MAX_BYTES;
+	const ignore = limits.ignore ?? [];
 	try {
+		// HEAD's files are left out as the fingerprint leaves them out: by `ignore`, and in a workspace by each repository's own globs.
+		const ignored = ignoreFilter(projectDir, ignore);
 		const content = new Map<string, string>();
 		for (const [repo, head] of Object.entries(tree.heads ?? { "": tree.head })) {
 			if (head === "") continue;
@@ -331,6 +361,7 @@ export function contentKey(projectDir: string, tree: Tree, commands: string[], l
 				const tab = entry.indexOf("\t");
 				if (tab < 0) continue;
 				const [mode, type, sha] = entry.slice(0, tab).split(" ");
+				if (ignored(label + entry.slice(tab + 1))) continue;
 				content.set(label + entry.slice(tab + 1), type === "blob" && (mode === "100644" || mode === "100755") ? `${mode === "100755" ? "x" : "f"} ${sha}` : `${type} ${mode} ${sha}`);
 			}
 		}
@@ -346,7 +377,7 @@ export function contentKey(projectDir: string, tree: Tree, commands: string[], l
 			bytes += read.size;
 			content.set(path, read.value);
 		}
-		return createHash("sha256").update(JSON.stringify([commands, [...content].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])).digest("hex");
+		return createHash("sha256").update(JSON.stringify([commands, ignore, [...content].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])).digest("hex");
 	} catch {
 		return undefined;
 	}
@@ -373,7 +404,8 @@ function readListed(file: string, id: string, room: number): { value: string; si
 		const data = readFileSync(fd);
 		if (!same(fstatSync(fd)) || data.length !== before.size) return undefined;
 		const sha = createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
-		return { value: `${before.mode & 0o111 ? "x" : "f"} ${sha}`, size: data.length };
+		// git records a file as executable by its owner bit alone.
+		return { value: `${before.mode & 0o100 ? "x" : "f"} ${sha}`, size: data.length };
 	} finally {
 		closeSync(fd);
 	}

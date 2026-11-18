@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, contentKey, keyCovers } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, cleanAt, contentKey, keyCovers, keyCoversAll } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -823,4 +823,51 @@ test("contentKey: a deleted file counts by its deletion", () => {
 	assert.notEqual(key(dir), gone);
 	rmSync(join(dir, "src/a.ts"));
 	assert.equal(key(dir), gone);
+});
+
+test("contentKey: files the fingerprint ignores are left out of HEAD too, so a branch that also changed them keeps its key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n");
+	git(dir, "add", "CHANGELOG.md");
+	git(dir, "commit", "-q", "-m", "changelog");
+	const ignore = ["**/*.md"];
+	const ignored = (d: string) => contentKey(d, fingerprint(d, ignore), ["npm test"], { ignore });
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n- a = 2\n");
+	const verified = ignored(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2 and its changelog");
+	assert.equal(ignored(dir), verified);
+	assert.notEqual(contentKey(dir, fingerprint(dir, ignore), ["npm test"], { ignore: [] }), verified, "the ignore globs are part of the key");
+});
+
+test("keyCoversAll: every path must be read by the key", () => {
+	const dir = repo();
+	writeFileSync(join(dir, ".gitignore"), "dist/\n.env.test\n");
+	git(dir, "commit", "-q", "-am", "ignore");
+	writeFileSync(join(dir, ".env.test"), "X=1\n");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	const tree = fingerprint(dir);
+	assert.equal(keyCoversAll(dir, tree, ["src/a.ts", "src/b.ts"]), true);
+	assert.equal(keyCoversAll(dir, tree, ["src/a.ts", ".env.test"]), false);
+	assert.equal(keyCoversAll(dir, tree, ["constructor"]), false, "not an inherited property name");
+	assert.equal(keyCoversAll(dir, tree, ["src"]), false, "a folder is not a file the key reads");
+	git(dir, "update-index", "--assume-unchanged", "src/a.ts");
+	assert.equal(keyCoversAll(dir, fingerprint(dir), ["src/a.ts"]), false, "assume-unchanged");
+});
+
+test("cleanAt: the reviewed commit is a HEAD with nothing listed in its repository", () => {
+	const dir = repo();
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+	assert.equal(cleanAt(fingerprint(dir), head), true);
+	assert.equal(cleanAt(fingerprint(dir), head.slice(0, 7)), true, "an abbreviated SHA");
+	assert.equal(cleanAt(fingerprint(dir), "0".repeat(40)), false, "another commit");
+	assert.equal(cleanAt(fingerprint(dir), head.slice(0, 3)), false, "too short to name a commit");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(cleanAt(fingerprint(dir), head), false, "the working tree differs from it");
+	const ws = workspace();
+	const wsHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(ws, "a"), encoding: "utf8" }).trim();
+	assert.equal(cleanAt(fingerprint(ws), wsHead), true, "a workspace repository");
+	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
+	assert.equal(cleanAt(fingerprint(ws), wsHead), false, "with a change listed in that repository");
 });

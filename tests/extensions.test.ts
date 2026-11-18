@@ -2526,3 +2526,59 @@ test("verify: no content credit once git is off for the session", async () => {
 	await s.change("export const a = 2;\n");
 	assert.equal(await s.end(), 1, "git listed past its limit once, so the key can't be trusted for the session");
 });
+
+test("verify: a branch that also changed ignored docs is credited after its squash merge", async () => {
+	const s = await keyedSession();
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, stdio: "pipe" });
+	git("checkout", "-q", "-b", "feat");
+	await s.change("export const a = 2;\n");
+	writeFileSync(join(s.dir, "AGENTS.md"), "## Commands\n- `npm test`\n- `npm run typecheck`\n\nNotes for a = 2.\n");
+	await s.check();
+	await bashCall(s.emit, s.c, "git commit -qam a2", false, () => git("commit", "-qam", "a2"));
+	await bashCall(s.emit, s.c, "git checkout main", false, () => git("checkout", "-q", "main"));
+	await bashCall(s.emit, s.c, "git merge --squash feat", false, () => git("merge", "-q", "--squash", "feat"));
+	await bashCall(s.emit, s.c, "git commit -m squashed", false, () => git("commit", "-q", "-m", "squashed"));
+	assert.equal(await s.end(), 0);
+});
+
+test("verify: an edit later hidden from git, or made through a symlink, gets the follow-up", async () => {
+	const hidden = await keyedSession();
+	await hidden.change("export const a = 2;\n");
+	await hidden.check();
+	// The verified content is committed, so HEAD's blob for the hidden file is the verified one.
+	await bashCall(hidden.emit, hidden.c, "git commit -qam a2", false, () => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qam", "a2"], { cwd: hidden.dir }));
+	await hidden.change("export const a = 9;\n");
+	await bashCall(hidden.emit, hidden.c, "git update-index --assume-unchanged src/a.ts", false, () => execFileSync("git", ["update-index", "--assume-unchanged", "src/a.ts"], { cwd: hidden.dir }));
+	assert.equal(await hidden.end(), 1, "assume-unchanged");
+
+	const linked = await keyedSession();
+	const outside = temp("kit-outside-");
+	writeFileSync(join(outside, "conf.json"), "{}\n");
+	symlinkSync(outside, join(linked.dir, "linked"));
+	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "add", "linked"], { cwd: linked.dir });
+	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "link"], { cwd: linked.dir });
+	await linked.change("export const a = 2;\n");
+	await linked.check();
+	await linked.change("{\"x\": 1}\n", "linked/conf.json");
+	assert.equal(await linked.end(), 1, "through a symlinked folder");
+});
+
+test("review gate: content credit counts only for a review of a clean HEAD", async () => {
+	const s = await keyedSession({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, encoding: "utf8" }).trim();
+	git("switch", "-qc", "feat/a");
+	await s.change("export const a = 2;\n");
+	git("commit", "-qam", "feat: a");
+	await bashCall(s.emit, s.c, "npm test");
+	await s.change("export const a = 9;\n");
+	git("commit", "-qam", "unverified");
+	await s.change("export const a = 2;\n");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const c = ctx(s.dir);
+	await g.emit("input", { text: "review", source: "interactive" }, c);
+	const verdict = `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: Yes`;
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: verdict }] }, isError: false }, c);
+	assert.equal(c.notes.some((n) => /Inconclusive/.test(n)), true);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, c))?.block, true);
+});
