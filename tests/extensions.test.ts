@@ -689,6 +689,12 @@ test("verify: a run the PR watcher's event starts counts as a new prompt (R9)", 
 	await emit("tool_result", { toolName: "edit", input: { path: "src/b.ts" }, isError: false }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 2, "the woken run's edits get their own follow-up");
+	// Other runs keep the prompt's state: the gate's own follow-up run and an extension's user message.
+	await emit("before_agent_start", { messageType: "custom", message: { customType: "verify-gate", content: "follow-up" } }, c);
+	await emit("before_agent_start", { messageType: "user", prompt: "x" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/c.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "no follow-up after a follow-up in the same prompt");
 });
 
 test("verify ignores edits outside the project and doc edits by default", async () => {
