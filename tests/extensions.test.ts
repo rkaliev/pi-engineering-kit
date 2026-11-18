@@ -125,6 +125,7 @@ test("package.json is a pi package exposing skills, prompts and all extensions",
 		"./extensions/verify.ts",
 		"./extensions/models.ts",
 		"./extensions/init.ts",
+		"./extensions/pr-watch.ts",
 	]);
 	for (const dep of Object.keys(pkg.dependencies ?? {})) assert.ok(!dep.startsWith("@earendil-works/"), `${dep} must be a peer dependency`);
 });
@@ -673,6 +674,27 @@ test("verify: without a UI the follow-up still comes once per user message", asy
 	await emit("input", { text: "next", source: "interactive" }, c);
 	await emit("agent_end", { messages: [] }, c);
 	assert.equal(sent.length, 2);
+});
+
+test("verify: a run the PR watcher's event starts counts as a new prompt (R9)", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	await emit("before_agent_start", { messageType: "custom", message: { customType: "pr-watch", content: "PR watcher event" } }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "the woken run's edits get their own follow-up");
+	// Other runs keep the prompt's state: the gate's own follow-up run and an extension's user message.
+	await emit("before_agent_start", { messageType: "custom", message: { customType: "verify-gate", content: "follow-up" } }, c);
+	await emit("before_agent_start", { messageType: "user", prompt: "x" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/c.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "no follow-up after a follow-up in the same prompt");
 });
 
 test("verify ignores edits outside the project and doc edits by default", async () => {

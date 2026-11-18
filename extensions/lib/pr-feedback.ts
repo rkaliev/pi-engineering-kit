@@ -5,6 +5,8 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type ItemKind = "thread" | "review" | "comment" | "changes-requested";
 
@@ -38,10 +40,33 @@ interface Comment {
 	createdAt: string;
 }
 
+/**
+ * `prFeedback` of the repository holding `dir`, from its `.claude/guard.json`, else `.pi/guard.json`; `{}` when
+ * neither exists or the file can't be read.
+ */
+export function projectFeedbackConfig(dir: string): FeedbackConfig {
+	const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+	const root = top.status === 0 ? top.stdout.trim() : dir;
+	for (const file of [join(root, ".claude", "guard.json"), join(root, ".pi", "guard.json")]) {
+		if (!existsSync(file)) continue;
+		try {
+			const config = JSON.parse(readFileSync(file, "utf8")) as { prFeedback?: unknown } | null;
+			return feedbackConfig(config?.prFeedback);
+		} catch {
+			return {};
+		}
+	}
+	return {};
+}
+
 /** The pull request as the collector's GraphQL query returns it. */
 export interface PrData {
 	number: number;
 	url: string;
+	/** OPEN, CLOSED or MERGED. */
+	state?: string;
+	/** MERGEABLE, CONFLICTING or UNKNOWN (GitHub hasn't computed it yet). */
+	mergeable?: string;
 	/** The head branch is in a fork; `headRepositoryOwner` says whose. */
 	isCrossRepository?: boolean;
 	headRepositoryOwner?: { login: string } | null;
@@ -165,7 +190,11 @@ export interface PrState {
 	login: string | null;
 	open: Item[];
 	closed: number;
-	checks: { state: string | null; failed: string[] };
+	/** `pending`: checks on the head not finished yet; `total`: every check read on the head. */
+	checks: { state: string | null; failed: string[]; pending: number; total: number };
+	/** The PR's state (OPEN, CLOSED, MERGED) and mergeability (MERGEABLE, CONFLICTING, UNKNOWN). */
+	state: string | null;
+	mergeable: string | null;
 	problems: string[];
 	error: string | null;
 	/** False when the repository's remotes aren't on a GitHub host: the gate stays silent there. */
@@ -187,11 +216,12 @@ export const LIST_QUERY = `query($owner: String!, $name: String!, $branch: Strin
     }
   }
 }`;
-/** Everything the gate needs about the chosen PR. */
+/** Everything the gate and the PR watcher need about the chosen PR. */
 export const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number url isCrossRepository headRepositoryOwner { login }
+      number url state mergeable isCrossRepository headRepositoryOwner { login }
       commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
         __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } }
       reviewThreads(last: 100) { totalCount nodes { id isResolved path line
@@ -205,9 +235,10 @@ export const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
 
 const FAILED_RUNS = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
 const FAILED_STATUSES = new Set(["FAILURE", "ERROR"]);
+const PENDING_STATUSES = new Set(["PENDING", "EXPECTED"]);
 
 function emptyState(error: string | null, github = true): PrState {
-	return { pr: null, url: null, head: null, login: null, open: [], closed: 0, checks: { state: null, failed: [] }, problems: [], error, github };
+	return { pr: null, url: null, head: null, login: null, open: [], closed: 0, checks: { state: null, failed: [], pending: 0, total: 0 }, state: null, mergeable: null, problems: [], error, github };
 }
 
 /**
@@ -234,21 +265,21 @@ type GhJson = { data?: Record<string, unknown> | null; errors?: Array<{ message?
 /**
  * The PR feedback facts for the open PR of `branch` (default: the folder's current branch) in the GitHub repository
  * of `dir`: the PR whose head is in the repository the branch is pushed to (without a push remote: this repository's
- * own, or the viewer's fork). Two `gh api graphql` calls, which must finish within `deadlineMs`. Never throws:
- * whatever stops the collection is the state's `error`.
+ * own, or the viewer's fork). Two `gh api graphql` calls, which must finish within `deadlineMs`; with `number`, one
+ * call reads that PR in whatever state it is. Never throws: whatever stops the collection is the state's `error`.
  */
-export function collectPrState(opts: { dir: string; branch?: string; deadlineMs: number; gh?: string; config?: FeedbackConfig }): PrState {
+export function collectPrState(opts: { dir: string; branch?: string; number?: number; deadlineMs: number; gh?: string; config?: FeedbackConfig }): PrState {
 	const started = Date.now();
 	const left = () => opts.deadlineMs - (Date.now() - started);
 	const timedOut = () => emptyState(`timed out after ${opts.deadlineMs} ms`);
 	let branch = opts.branch;
-	if (!branch) {
+	if (!branch && opts.number === undefined) {
 		const git = spawnSync("git", ["-C", opts.dir, "branch", "--show-current"], { encoding: "utf8", timeout: Math.max(1, left()) });
 		if (git.error && (git.error as NodeJS.ErrnoException).code === "ETIMEDOUT") return timedOut();
 		branch = git.status === 0 ? git.stdout.trim() : "";
 		if (!branch) return emptyState("no current branch");
 	}
-	const pushedTo = pushRepository(opts.dir, branch, left());
+	const pushedTo = branch ? pushRepository(opts.dir, branch, left()) : undefined;
 	/** One `gh api graphql` call: its JSON, or the state that ends the collection. */
 	const graphql = (fields: string[], query: string): GhJson | PrState => {
 		if (left() <= 0) return timedOut();
@@ -283,28 +314,53 @@ export function collectPrState(opts: { dir: string; branch?: string; deadlineMs:
 	};
 	const isState = (v: GhJson | PrState): v is PrState => "open" in v;
 
-	const list = graphql(["-f", `branch=${branch}`], LIST_QUERY);
-	if (isState(list)) return list;
-	const data = list.data as { viewer?: { login?: string }; repository?: { pullRequests?: { nodes?: Array<Pick<PrData, "number" | "isCrossRepository" | "headRepositoryOwner"> & { headRepository?: { nameWithOwner?: string } | null }> } } } | null | undefined;
-	const login = data?.viewer?.login;
-	if (!login) return emptyState("gh returned no login");
-	// A same-named branch elsewhere (someone else's fork, or upstream itself in a fork checkout) is another PR.
-	const chosen = data?.repository?.pullRequests?.nodes?.find((n) =>
-		pushedTo !== undefined ? n.headRepository?.nameWithOwner?.toLowerCase() === pushedTo : n.isCrossRepository !== true || n.headRepositoryOwner?.login === login,
-	);
-	if (!chosen) return emptyState(`no open PR for branch ${branch}`);
+	let number = opts.number;
+	let login: string | undefined;
+	if (number === undefined) {
+		const list = graphql(["-f", `branch=${branch}`], LIST_QUERY);
+		if (isState(list)) return list;
+		const data = list.data as { viewer?: { login?: string }; repository?: { pullRequests?: { nodes?: Array<Pick<PrData, "number" | "isCrossRepository" | "headRepositoryOwner"> & { headRepository?: { nameWithOwner?: string } | null }> } } } | null | undefined;
+		login = data?.viewer?.login;
+		if (!login) return emptyState("gh returned no login");
+		const viewer = login;
+		// A same-named branch elsewhere (someone else's fork, or upstream itself in a fork checkout) is another PR.
+		const chosen = data?.repository?.pullRequests?.nodes?.find((n) =>
+			pushedTo !== undefined ? n.headRepository?.nameWithOwner?.toLowerCase() === pushedTo : n.isCrossRepository !== true || n.headRepositoryOwner?.login === viewer,
+		);
+		if (!chosen) return emptyState(`no open PR for branch ${branch}`);
+		number = chosen.number;
+	}
 
-	const detail = graphql(["-F", `number=${chosen.number}`], PR_QUERY);
+	const detail = graphql(["-F", `number=${number}`], PR_QUERY);
 	if (isState(detail)) return detail;
-	const node = (detail.data as { repository?: { pullRequest?: PrData | null } } | null | undefined)?.repository?.pullRequest;
-	if (!node) return emptyState(`gh returned no PR #${chosen.number}`);
+	const detailData = detail.data as { viewer?: { login?: string }; repository?: { pullRequest?: PrData | null } } | null | undefined;
+	login ??= detailData?.viewer?.login;
+	if (!login) return emptyState("gh returned no login");
+	const node = detailData?.repository?.pullRequest;
+	if (!node) return emptyState(`gh returned no PR #${number}`);
 	const { open, closed, problems } = classify(node, login, opts.config);
 	const commit = node.commits?.nodes[0]?.commit;
 	const rollup = commit?.statusCheckRollup;
-	const failed = (rollup?.contexts?.nodes ?? [])
+	const contexts = rollup?.contexts?.nodes ?? [];
+	const failed = contexts
 		.filter((c) => (c.conclusion && FAILED_RUNS.has(c.conclusion)) || (c.state && FAILED_STATUSES.has(c.state)))
 		.map((c) => c.name ?? c.context ?? "unnamed check");
-	return { pr: node.number, url: node.url, head: commit?.oid ?? null, login, open, closed, checks: { state: rollup?.state ?? null, failed }, problems, error: null, github: true };
+	// A check run without a conclusion is queued or running; a status is pending, or expected and not reported yet.
+	const pending = contexts.filter((c) => ((c.__typename ?? (c.name !== undefined ? "CheckRun" : "StatusContext")) === "CheckRun" ? !c.conclusion : PENDING_STATUSES.has(c.state ?? ""))).length;
+	return {
+		pr: node.number,
+		url: node.url,
+		head: commit?.oid ?? null,
+		login,
+		open,
+		closed,
+		checks: { state: rollup?.state ?? null, failed, pending, total: contexts.length },
+		state: node.state ?? null,
+		mergeable: node.mergeable ?? null,
+		problems,
+		error: null,
+		github: true,
+	};
 }
 
 /** What one end-of-turn check of the PR branches a prompt touched found, before the gate decides what to do with it. */

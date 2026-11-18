@@ -285,17 +285,26 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		setStatus(ctx);
 	});
 
+	/** What holds per prompt starts over. */
+	const newPrompt = () => {
+		answering = false;
+		remindedThisPrompt = false;
+		approvalRemindedThisPrompt = false;
+		workDocsRemindedThisPrompt = false;
+		prTouched = [];
+		// A follow-up whose turn never ran (an aborted run) must not skip this prompt's check.
+		followedUp = false;
+	};
+
 	pi.on("input", async (event) => {
-		if (event.source !== "extension") {
-			answering = false;
-			remindedThisPrompt = false;
-			approvalRemindedThisPrompt = false;
-			workDocsRemindedThisPrompt = false;
-			prTouched = [];
-			// A follow-up whose turn never ran (an aborted run) must not skip this prompt's check.
-			followedUp = false;
-		}
+		if (event.source !== "extension") newPrompt();
 		return { action: "continue" as const };
+	});
+
+	// The PR watcher's event starts a run of its own without an input event (extensions/pr-watch.ts): it is a new
+	// prompt, so the edits it leads to get their own follow-up.
+	pi.on("before_agent_start", async (event) => {
+		if (event.messageType === "custom" && (event.message as { customType?: string } | undefined)?.customType === "pr-watch") newPrompt();
 	});
 
 	// The working tree before a shell call, so its result can name what that call changed.

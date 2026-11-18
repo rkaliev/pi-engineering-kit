@@ -1,6 +1,6 @@
 {
   "name": "pi-engineering-kit",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "pi package. Disciplined coding agent for any project (web, mobile or desktop; any domain; new or existing code): process, platform and domain skills plus guard and verify extensions.",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,8 @@
       "./extensions/guard.ts",
       "./extensions/verify.ts",
       "./extensions/models.ts",
-      "./extensions/init.ts"
+      "./extensions/init.ts",
+      "./extensions/pr-watch.ts"
     ],
     "skills": [
       "./skills"

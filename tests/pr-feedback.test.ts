@@ -149,7 +149,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkFeedback, collectPrState, feedbackConfig, LIST_QUERY, PR_QUERY, type PrState } from "../extensions/lib/pr-feedback.ts";
+import { checkFeedback, collectPrState, feedbackConfig, LIST_QUERY, PR_QUERY, projectFeedbackConfig, type PrState } from "../extensions/lib/pr-feedback.ts";
 
 const made: string[] = [];
 after(() => {
@@ -216,7 +216,7 @@ test("collects with two gh calls: the PRs of the branch, then the chosen PR's fe
 	assert.equal(s.github, true);
 	assert.deepEqual([s.pr, s.url, s.head, s.login], [48, "https://github.com/o/r/pull/48", "abc123", "me"]);
 	assert.deepEqual(s.open.map((i) => i.id), ["I1"]);
-	assert.deepEqual(s.checks, { state: "FAILURE", failed: ["test", "ci/legacy"] });
+	assert.deepEqual(s.checks, { state: "FAILURE", failed: ["test", "ci/legacy"], pending: 0, total: 3 });
 });
 
 test("branch defaults to the current branch of dir", () => {
@@ -254,7 +254,7 @@ test("error cases", () => {
 
 test("not GitHub", () => {
 	const fake = fakeGh({}, { code: 1, stderr: "none of the git remotes configured for this repository point to a known GitHub host" });
-	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 5000, gh: fake.gh });
+	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 30_000, gh: fake.gh });
 	assert.equal(s.github, false);
 	assert.equal(s.error, "not a GitHub repository");
 });
@@ -426,4 +426,49 @@ test("the branch's pushRemote, then remote.pushDefault, then its remote decide w
 	spawnSync("git", ["-C", repo, "config", "--unset", "remote.pushDefault"]);
 	const upOnly = fakeGh(listed([upstreams, mineNode], upstreams));
 	assert.equal(collectPrState({ dir: repo, deadlineMs: 5000, gh: upOnly.gh }).pr, 7, "origin (up/r) is the push remote now");
+});
+
+// ---- PR watcher: a PR read by number ----
+
+test("PR_QUERY asks for state, mergeable and the viewer", () => {
+	assert.ok(/^query\(\$owner: String!, \$name: String!, \$number: Int!\) \{\s+viewer \{ login \}/.test(PR_QUERY), "viewer at the query root");
+	assert.ok(/pullRequest\(number: \$number\) \{\s+number url state mergeable /.test(PR_QUERY));
+});
+
+test("by number: one query, with state and mergeability", () => {
+	const node = { ...PR_NODE, state: "MERGED", mergeable: "UNKNOWN" };
+	const fake = fakeGh({ data: { viewer: { login: "me" }, repository: { pullRequest: node } } });
+	const s = collectPrState({ dir: fake.dir, number: 48, deadlineMs: 30_000, gh: fake.gh });
+	assert.equal(fake.calls().length, 1);
+	assert.ok(fake.calls()[0]!.includes("number=48"));
+	assert.deepEqual([s.error, s.pr, s.state, s.mergeable, s.login], [null, 48, "MERGED", "UNKNOWN", "me"]);
+});
+
+test("pending and total checks", () => {
+	const contexts = [
+		{ __typename: "CheckRun", name: "test", conclusion: null },
+		{ __typename: "CheckRun", name: "lint", conclusion: "SUCCESS" },
+		{ __typename: "StatusContext", context: "ci/x", state: "PENDING" },
+		{ __typename: "StatusContext", context: "ci/y", state: "EXPECTED" },
+	];
+	const node = { ...PR_NODE, commits: { nodes: [{ commit: { oid: "abc123", statusCheckRollup: { state: "PENDING", contexts: { nodes: contexts } } } }] } };
+	const fake = fakeGh(response(node));
+	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 30_000, gh: fake.gh });
+	assert.deepEqual(s.checks, { state: "PENDING", failed: [], pending: 3, total: 4 });
+});
+
+test("projectFeedbackConfig reads .claude/guard.json, else .pi/guard.json", () => {
+	const rule = { author: "bot", pattern: "^nit" };
+	const claude = gitRepo("main");
+	mkdirSync(join(claude, ".claude"));
+	writeFileSync(join(claude, ".claude", "guard.json"), JSON.stringify({ prFeedback: { ignore: [rule] } }));
+	assert.deepEqual(projectFeedbackConfig(claude).ignore, [rule]);
+	const pi = gitRepo("main");
+	mkdirSync(join(pi, ".pi"));
+	writeFileSync(join(pi, ".pi", "guard.json"), JSON.stringify({ prFeedback: { ignore: [rule] } }));
+	assert.deepEqual(projectFeedbackConfig(pi).ignore, [rule]);
+	const broken = gitRepo("main");
+	mkdirSync(join(broken, ".claude"));
+	writeFileSync(join(broken, ".claude", "guard.json"), "{ not json");
+	assert.deepEqual(projectFeedbackConfig(broken), {});
 });
