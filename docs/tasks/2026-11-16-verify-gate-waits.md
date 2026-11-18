@@ -171,9 +171,9 @@ No code. A scratch project in the session scratchpad with `.claude/settings.json
 
 **Files:** Modify both editions' `README.md`, `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE.ru.md`, `CHANGELOG.md`, `package.json`; `src_claude/.claude-plugin/plugin.json`
 
-- [ ] Write the Post-implementation items; CHANGELOG 0.41.0 leads with the two rules and lists the limits (Claude Code's `background_tasks`, reviewer still sends back, fail-closed cases, pi without background agents)
-- [ ] Run the full verification → all four PASS (the release test checks the pins)
-- [ ] Commit `docs: verify gate waits and content credit (0.41.0)`
+- [x] Write the Post-implementation items; CHANGELOG 0.41.0 leads with the two rules and lists the limits (Claude Code's `background_tasks`, reviewer still sends back, fail-closed cases, pi without background agents)
+- [x] Run the full verification → all four PASS (the release test checks the pins)
+- [x] Commit `docs: verify gate waits and content credit (0.41.0)`
 
 ## Progress
 
@@ -193,3 +193,4 @@ No code. A scratch project in the session scratchpad with `.claude/settings.json
 - Ruling: the Stop key's deadline ends 3.5 s after Stop started (`STOP_KEY_END_MS`) and the reviewer's leaves 3 s of its lookup deadline (`REVIEW_LOOKUP_RESERVE_MS`), as the plan said, named as constants.
 - Task 6: complete (4d92f81..HEAD in pi, `npm test --prefix src` → 825 pass, typecheck clean; three tests failed first with a follow-up / Inconclusive where none was expected). `a check's own changes leave no content key behind` passed before the code (pins the formatter rule from Task 5's ruling) and was seen failing with the guard removed from the bash path.
 - Ruling: pi's `no key once git is off` test dropped: once git is off pi takes no fingerprint, so `keyTree` is absent and no key can be stored by construction; forcing it needs a 3-second `slowGit` hang that proves nothing the code path doesn't. The formatter test above covers Review focus 3's other branch. `beforeEach` now also resets `verifyState.unverified`, since the new tests leave it set.
+- Task 7: complete (README, ARCHITECTURE en/ru, CHANGELOG 0.41.0, versions and pins in both editions; verify script from the workspace root → all four PASS). The pi ARCHITECTURE states the rule in its review-gate bullet and points to the README instead of repeating it.
