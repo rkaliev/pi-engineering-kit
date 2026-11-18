@@ -187,13 +187,13 @@ pi install <kit>      # for all your projects (~/.pi/agent/settings.json)
 
 For yourself, for all projects:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 ```
 
 For a team, one line in the project:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 
@@ -270,6 +270,7 @@ On your own project the sequence is the same: `/kit-init` → `/onboard` (if the
 - **Guard refuses `gh pr create` or a merge: "Task files would reach …".** A task file (`docs/tasks/`) lives only on the work branch. Finish it first (`/finish` does it): move what lasts into `docs/` (topic chapter, decision records), look at its Follow-ups, then delete it in one commit.
 - **Guard asks before `gh pr create` or a merge: "Review gate: …".** The branch's code has no reviewer `Yes`. Run `/review` (the reviewer in the foreground, not in the background), fix its findings, and review the new range. Land in a command of its own, not chained after `git commit` or `git switch`. Any change after the review, docs included, needs a new one, so review last. The review's range starts at the merge-base with `origin/<base>`, or at the previous round's HEAD. Skipping it is your call.
 - **"PR feedback gate: …" comes back after a push, or a notice says "PR feedback not checked".** The PR has review items with no reply from your `gh` login. The agent fixes or answers each one (receiving-code-review); `node <kit>/scripts/pr-state.ts` lists them. "Not checked" means `gh` is missing, not logged in (`gh auth login`) or GitHub didn't answer in time; the PR isn't ready until it's checked. Bots or authors you don't want answered go in `prFeedback.ignore` in `.pi/guard.json`; `"prFeedback": {"enabled": false}` turns the gate off (trusted projects).
+- **How do I have the agent follow a PR until it's ready?** Ask it ("follow the PR", "watch CI"). It calls `watch_pr` and is woken only when a check fails, review feedback arrives, the PR conflicts, or it is ready, merged or closed; then it fixes, answers or tells you. Merging stays yours.
 - **The verify gate says there are no verification commands.** It found none in `.pi/verify.json`, AGENTS.md or the project's manifests, so it can't check edits and sends no follow-up. Run `/kit-init`, or fill in `.pi/verify.json` or the `## Commands` section in AGENTS.md.
 - **How to see what is loaded.** `pi list` shows the packages, `pi config` turns individual package resources on and off.
 

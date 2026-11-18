@@ -43,10 +43,10 @@ Then add this kit:
 
 ```bash
 # install for yourself (all projects)
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 
 # or pin it for one project and its team (-l writes .pi/settings.json; commit it)
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 
 # or try a local clone for one session only
 git clone https://github.com/rkaliev/pi-engineering-kit && pi -e ./pi-engineering-kit
@@ -129,6 +129,10 @@ The guard also keeps a token ledger per repository and branch, from the `subagen
 - **The follow-up:** if the agent stops while the workspace is unverified, it gets one follow-up per user message and, with a UI, per set of edits (edits it already got one for, or that were let finish, get you one notice instead; an unreadable `.pi/verify.json` is named once per session) asking for evidence and for its complete final report again. With no commands configured or detected there is no follow-up: you get one notice per session to run `/kit-init` or add `.pi/verify.json` (none without a UI). A `.pi/verify.json` that doesn't parse still gets the follow-up, naming the error. The review gate's "unverified edits" rule and the read-only steps allowed before a landing use configured commands only, never detected ones.
 - **Task files** (`docs/tasks/`) live only on the work branch. The same follow-up asks to commit a task file marked `Status: design approved` or `plan approved` (on a work branch), and, once every `## Plan` checkbox is ticked, to move what lasts into `docs/`, show its Follow-ups and delete it. The ci-quality-gates templates add a `working-docs` CI job that fails on any tracked `docs/tasks/*.md`, for people and other tools alike.
 - **PR feedback gate:** when a successful bash call in the current prompt pushed a branch, opened a GitHub PR or answered on one, the same follow-up sends the agent back once for each new set of unanswered review items on that PR: inline threads that aren't resolved and don't end with your `gh` login's reply, review bodies and people's top-level comments without a later reply from your login, and reviewers whose changes-requested review still stands. Bots' top-level comments (summaries, coverage, previews) aren't items; `prFeedback.ignore` drops others. The same set again is a notice that the PR is not ready; facts it can't collect (no `gh`, not logged in, an API error, a 6 s time limit, during which pi doesn't respond) are a notice too. Only the PR from the repository the branch is pushed to counts, never a same-named branch elsewhere. Repositories not on GitHub and branches without an open PR are skipped. `node <kit>/scripts/pr-state.ts` prints the same facts as JSON; details in docs/ARCHITECTURE.md.
+
+### pr-watch
+
+The `watch_pr` tool follows the GitHub PR of the current branch (or `pr`) in the background: it runs `scripts/pr-watch.ts` as a child process, returns at once, and when the PR needs a decision the script's one JSON event arrives as a message that starts a turn: merged or closed, a conflict, a failed check (the first one on a head), new review feedback, ready (every check passed, nothing open) or blocked (with the reason). The agent handles it and calls `watch_pr` again with the event's `ack`. One watcher runs per session; it only reads. Details in docs/ARCHITECTURE.md.
 
 ### models (routing by command)
 

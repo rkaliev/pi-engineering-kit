@@ -187,13 +187,13 @@ pi install <kit>      # для всех твоих проектов (~/.pi/agent
 
 Себе, для всех проектов:
 ```bash
-pi install git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 ```
 
 Для команды — одна строка в проекте:
 ```bash
 cd ~/projects/my-app
-pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.41.0
+pi install -l git:github.com/rkaliev/pi-engineering-kit@v0.42.0
 git add .pi/settings.json && git commit -m "chore: enable pi-engineering-kit"
 ```
 
@@ -270,6 +270,7 @@ pi
 - **Guard отказывает в `gh pr create` или merge: «Task files would reach …».** Файл задачи (`docs/tasks/`) живёт только в рабочей ветке. Сначала закрой его (это делает `/finish`): перенеси долгоживущее в `docs/` (глава по теме, записи решений), посмотри его Follow-ups, затем удали его одним коммитом.
 - **Guard спрашивает перед `gh pr create` или merge: «Review gate: …».** У кода ветки нет вердикта `Yes` ревьюера. Запусти `/review` (ревьюер не в фоне), исправь находки и отревьюй новый диапазон. Приземляй отдельной командой, а не в цепочке после `git commit` или `git switch`. Любое изменение после ревью, включая документацию, требует нового ревью, поэтому ревью идёт последним. Диапазон ревью начинается с merge-base с `origin/<база>` или с HEAD прошлого раунда. Пропустить ревью — твоё решение.
 - **После push приходит «PR feedback gate: …» или уведомление «PR feedback not checked».** В PR есть замечания без ответа от твоего логина в `gh`. Агент исправляет или отвечает на каждое (receiving-code-review); список печатает `node <kit>/scripts/pr-state.ts`. «Not checked» значит, что `gh` не установлен, не залогинен (`gh auth login`) или GitHub не ответил вовремя; пока проверки не было, PR не готов. Ботов и авторов, которым отвечать не нужно, внеси в `prFeedback.ignore` в `.pi/guard.json`; `"prFeedback": {"enabled": false}` выключает гейт (в доверенных проектах).
+- **Как попросить агента довести PR до готовности?** Попросите («следи за PR», «следи за CI»). Он вызывает `watch_pr` и просыпается, только когда упал check, пришли замечания, появился конфликт или PR готов, смёржен или закрыт; тогда он чинит, отвечает или сообщает вам. Merge остаётся за вами.
 - **Verify-гейт пишет, что команд проверки нет.** Он не нашёл их ни в `.pi/verify.json`, ни в AGENTS.md, ни в манифестах проекта, поэтому не может проверить правки и не присылает follow-up. Запусти `/kit-init` или заполни `.pi/verify.json` или секцию `## Commands` в AGENTS.md.
 - **Как посмотреть, что загружено.** `pi list` показывает пакеты, `pi config` включает и выключает отдельные ресурсы пакета.
 
