@@ -24,14 +24,14 @@ function wake(event: string): string {
 
 /** Registers `watch_pr`, running `script` as the watcher (tests pass a fake one). */
 export function registerPrWatch(pi: ExtensionAPI, script: string): void {
-	let child: ChildProcess | undefined;
-	let stopped = false;
+	/** The running watcher; `stopped` is its own, so a watcher started after a shutdown can't unstop it. */
+	let current: { child: ChildProcess; stopped: boolean } | undefined;
 
 	pi.on("session_shutdown", async () => {
-		if (!child) return;
-		stopped = true;
-		child.kill("SIGTERM");
-		child = undefined;
+		if (!current) return;
+		current.stopped = true;
+		current.child.kill("SIGTERM");
+		current = undefined;
 	});
 
 	pi.registerTool({
@@ -48,28 +48,30 @@ export function registerPrWatch(pi: ExtensionAPI, script: string): void {
 			timeout: Type.Optional(Type.Number({ description: "Seconds to wait before giving up (default 3600)" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (child?.pid !== undefined) {
-				return { content: [{ type: "text" as const, text: `A PR watcher is already running (pid ${child.pid}).` }], details: { pid: child.pid } };
+			if (current?.child.pid !== undefined) {
+				const pid = current.child.pid;
+				return { content: [{ type: "text" as const, text: `A PR watcher is already running (pid ${pid}).` }], details: { pid } };
 			}
 			const args = [script, "--repo", ctx.cwd];
+			// prFeedback, like the rest of .pi/guard.json, applies only in a trusted project.
+			if (!ctx.isProjectTrusted()) args.push("--no-config");
 			if (params.pr !== undefined) args.push("--pr", String(params.pr));
 			if (params.branch) args.push("--branch", params.branch);
 			if (params.ack) args.push("--ack", params.ack);
 			if (params.timeout !== undefined) args.push("--timeout", String(params.timeout));
-			stopped = false;
-			const run = spawn(process.execPath, args, { cwd: ctx.cwd, stdio: ["ignore", "pipe", "ignore"] });
-			child = run;
+			const run = { child: spawn(process.execPath, args, { cwd: ctx.cwd, stdio: ["ignore", "pipe", "ignore"] }), stopped: false };
+			current = run;
 			let out = "";
 			let done = false;
-			run.stdout?.on("data", (chunk: Buffer) => {
+			run.child.stdout?.on("data", (chunk: Buffer) => {
 				out += chunk.toString("utf8");
 			});
 			// "error" (the spawn failed) can be followed by "close": report once.
 			const finish = (code: number | null) => {
 				if (done) return;
 				done = true;
-				if (child === run) child = undefined;
-				if (stopped) return;
+				if (current === run) current = undefined;
+				if (run.stopped) return;
 				let event: string;
 				try {
 					event = JSON.stringify(JSON.parse(out), null, 2);
@@ -78,9 +80,9 @@ export function registerPrWatch(pi: ExtensionAPI, script: string): void {
 				}
 				pi.sendMessage({ customType: "pr-watch", display: true, content: wake(event) }, { triggerTurn: true, deliverAs: "followUp" });
 			};
-			run.on("error", () => finish(null));
-			run.on("close", (code) => finish(code));
-			return { content: [{ type: "text" as const, text: "Watching the PR; you will be woken with one event." }], details: { pid: run.pid ?? 0 } };
+			run.child.on("error", () => finish(null));
+			run.child.on("close", (code) => finish(code));
+			return { content: [{ type: "text" as const, text: "Watching the PR; you will be woken with one event." }], details: { pid: run.child.pid ?? 0 } };
 		},
 	});
 }

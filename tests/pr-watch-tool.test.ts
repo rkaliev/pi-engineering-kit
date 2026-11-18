@@ -34,8 +34,8 @@ function fakePi() {
 	return { pi: pi as any, sent, tools, emit };
 }
 
-const ctx = { cwd: tmpdir(), hasUI: false };
-const call = (f: ReturnType<typeof fakePi>, params: Record<string, unknown> = {}) => f.tools.get("watch_pr").execute("id", params, undefined, undefined, ctx);
+const ctx = { cwd: tmpdir(), hasUI: false, isProjectTrusted: () => true };
+const call = (f: ReturnType<typeof fakePi>, params: Record<string, unknown> = {}, c: object = ctx) => f.tools.get("watch_pr").execute("id", params, undefined, undefined, c);
 const text = (result: any) => result.content.map((c: { text: string }) => c.text).join("");
 async function until(check: () => boolean, ms = 5000): Promise<void> {
 	const end = Date.now() + ms;
@@ -71,10 +71,8 @@ test("watch_pr: a second call while one runs doesn't spawn another", async () =>
 	const first = await call(f);
 	const second = await call(f);
 	assert.match(text(second), new RegExp(`already running \\(pid ${first.details.pid}\\)`));
-	assert.equal(second.details.pid, first.details.pid);
+	assert.equal(second.details.pid, first.details.pid, "no second watcher was started");
 	await until(() => f.sent.length > 0);
-	await new Promise((done) => setTimeout(done, 300));
-	assert.equal(f.sent.length, 1);
 });
 
 test("watch_pr: a watcher that prints no JSON reports blocked watcher failed", async () => {
@@ -86,13 +84,34 @@ test("watch_pr: a watcher that prints no JSON reports blocked watcher failed", a
 	assert.match(f.sent[0]?.message.content, /watcher failed: exit 3/);
 });
 
-test("watch_pr: session_shutdown stops the watcher and nothing is sent (review focus 5)", async () => {
+/** `--pr 1` waits and answers only SIGTERM, with an event; any other PR is ready after 200 ms. */
+const BY_PR = `const pr = process.argv[process.argv.indexOf("--pr") + 1];
+const say = (event) => console.log(JSON.stringify({ schemaVersion: 1, event, pr }));
+if (pr === "1") { process.on("SIGTERM", () => { say("stopped-but-sent"); process.exit(0); }); setInterval(() => {}, 1000); }
+else setTimeout(() => say("ready"), 200);`;
+
+test("watch_pr: session_shutdown stops the watcher and nothing is sent, even after a new watcher starts (review focus 5)", async () => {
 	const f = fakePi();
-	registerPrWatch(f.pi, script(`setTimeout(() => console.log("{}"), 3000);`));
-	const result = await call(f);
+	registerPrWatch(f.pi, script(BY_PR));
+	const first = await call(f, { pr: 1 });
 	await f.emit("session_shutdown", ctx);
-	await until(() => !alive(result.details.pid));
-	assert.equal(alive(result.details.pid), false);
-	await new Promise((done) => setTimeout(done, 300));
-	assert.equal(f.sent.length, 0);
+	// The next watcher starts before the stopped one has exited.
+	await call(f, { pr: 2 });
+	await until(() => f.sent.some((s) => /"pr": "2"/.test(s.message.content)));
+	assert.equal(alive(first.details.pid), false);
+	assert.deepEqual(f.sent.map((s) => /"pr": "(\d)"/.exec(s.message.content)?.[1]), ["2"], "the stopped watcher's output is never sent");
+});
+
+test("watch_pr: an untrusted project's prFeedback rules are not applied (R8)", async () => {
+	const echo = `console.log(JSON.stringify({ schemaVersion: 1, event: "ready", argv: process.argv.slice(2) }));`;
+	const untrusted = fakePi();
+	registerPrWatch(untrusted.pi, script(echo));
+	await call(untrusted, {}, { ...ctx, isProjectTrusted: () => false });
+	await until(() => untrusted.sent.length > 0);
+	assert.match(untrusted.sent[0]?.message.content, /"--no-config"/);
+	const trusted = fakePi();
+	registerPrWatch(trusted.pi, script(echo));
+	await call(trusted);
+	await until(() => trusted.sent.length > 0);
+	assert.doesNotMatch(trusted.sent[0]?.message.content, /--no-config/);
 });
