@@ -676,6 +676,21 @@ test("verify: without a UI the follow-up still comes once per user message", asy
 	assert.equal(sent.length, 2);
 });
 
+test("verify: a run the PR watcher's event starts counts as a new prompt (R9)", async () => {
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	await emit("before_agent_start", { messageType: "custom", message: { customType: "pr-watch", content: "PR watcher event" } }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "the woken run's edits get their own follow-up");
+});
+
 test("verify ignores edits outside the project and doc edits by default", async () => {
 	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
 	const { pi, emit, sent } = fakePi();
