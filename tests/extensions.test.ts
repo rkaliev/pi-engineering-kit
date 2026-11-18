@@ -125,6 +125,7 @@ test("package.json is a pi package exposing skills, prompts and all extensions",
 		"./extensions/verify.ts",
 		"./extensions/models.ts",
 		"./extensions/init.ts",
+		"./extensions/pr-watch.ts",
 	]);
 	for (const dep of Object.keys(pkg.dependencies ?? {})) assert.ok(!dep.startsWith("@earendil-works/"), `${dep} must be a peer dependency`);
 });
