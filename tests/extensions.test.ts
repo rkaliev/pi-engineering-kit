@@ -2492,3 +2492,37 @@ test("review gate: a review of content the checks already passed on keeps its ve
 	assert.equal(c.notes.some((n) => /Inconclusive/.test(n)), false);
 	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, c))?.block, undefined);
 });
+
+test("verify: a branch verified before its commit, squash-merged and pulled, is credited (user ruling 2026-11-18: the key is of content only)", async () => {
+	const s = await keyedSession();
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, stdio: "pipe" });
+	git("checkout", "-q", "-b", "feat");
+	await s.change("export const a = 2;\n");
+	await s.check();
+	await bashCall(s.emit, s.c, "git commit -qam a2", false, () => git("commit", "-qam", "a2"));
+	await bashCall(s.emit, s.c, "git checkout main", false, () => git("checkout", "-q", "main"));
+	await bashCall(s.emit, s.c, "git merge --squash feat", false, () => git("merge", "-q", "--squash", "feat"));
+	await bashCall(s.emit, s.c, "git commit -m squashed", false, () => git("commit", "-q", "-m", "squashed"));
+	assert.equal(verifyState.unverified, true, "the checkout counted as edits");
+	assert.equal(await s.end(), 0);
+});
+
+test("verify: an edit the content key can't see drops the key until the next green run", async () => {
+	const s = await keyedSession({ ...COMMANDS, ".gitignore": ".env.test\n" });
+	await s.change("export const a = 2;\n");
+	await s.check();
+	await s.change("X=2\n", ".env.test");
+	assert.equal(await s.end(), 1, "a gitignored file the checks may read");
+});
+
+test("verify: no content credit once git is off for the session", async () => {
+	const s = await keyedSession();
+	await s.change("export const a = 2;\n");
+	await s.check();
+	mkdirSync(join(s.dir, "many"));
+	for (let i = 0; i <= 5001; i++) writeFileSync(join(s.dir, "many", `f${i}`), "");
+	await s.change("export const a = 3;\n");
+	rmSync(join(s.dir, "many"), { recursive: true });
+	await s.change("export const a = 2;\n");
+	assert.equal(await s.end(), 1, "git listed past its limit once, so the key can't be trusted for the session");
+});

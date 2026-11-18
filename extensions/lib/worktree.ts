@@ -4,7 +4,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { closeSync, constants, type Dirent, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
@@ -293,50 +293,89 @@ export const KEY_BUDGET_MS = 2000;
 export const KEY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
- * What a fingerprinted tree holds, by content: the verification `commands`, each repository's `HEAD^{tree}` (the
- * fingerprint's own HEAD, so a squash of the same tree matches) and the git blob hash of each listed file (`deleted`
- * for a deletion, a symlink by its text), hashed in Node so nothing is written into `.git`. Two trees with the same key
- * hold the same files whatever their times, so checks that passed on one passed on the other. `undefined` when it can't
- * be proven: a blind part, a folder label (a submodule or nested repository), a listed file whose size or time no longer
- * match the fingerprint (written since), past `maxBytes` of file content or `deadline`, or any error.
+ * Whether `contentKey` reads the content of `label` (a project-relative path): git lists it, or it is a tracked file git
+ * shows as clean, whose HEAD blob is in the key. Not a gitignored or unknown path, nor one marked assume-unchanged or
+ * skip-worktree (git doesn't see its edits); `false` on any error or past `deadline`.
+ */
+export function keyCovers(projectDir: string, tree: Tree, label: string, deadline = Date.now() + KEY_BUDGET_MS): boolean {
+	if (label in tree.files) return true;
+	const repo = tree.heads === undefined ? "" : Object.keys(tree.heads).find((r) => label.startsWith(`${r}/`));
+	if (repo === undefined) return false;
+	const path = repo === "" ? label : label.slice(repo.length + 1);
+	try {
+		return git(join(projectDir, repo), ["--literal-pathspecs", "ls-files", "-v", "-z", "--", path], timeLeft(deadline)) === `H ${path}\0`;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * What a fingerprinted tree holds, by content only: every file of each repository's HEAD (`git ls-tree`, under the
+ * project folder) with the listed files laid over it (a deletion removes one), plus the verification `commands`. A
+ * commit, a squash of the same content or a file restored after a commit keep the key; what a file holds and whether
+ * it is executable are all that count. Listed files are hashed as git blobs in Node, so nothing is written into `.git`.
+ * `undefined` when it can't be proven: a blind part, a listed folder (a submodule or nested repository), symlink or
+ * other non-regular file, a listed file whose size or time differ from the fingerprint before or after its read (written
+ * since), past `maxBytes` of listed content or `deadline`, or any error.
  */
 export function contentKey(projectDir: string, tree: Tree, commands: string[], limits: { deadline?: number; maxBytes?: number } = {}): string | undefined {
 	if ((tree.blind ?? []).length > 0) return undefined;
 	const deadline = limits.deadline ?? Date.now() + KEY_BUDGET_MS;
 	const maxBytes = limits.maxBytes ?? KEY_MAX_BYTES;
 	try {
-		const lines = [`commands\0${JSON.stringify(commands)}`];
-		const heads = tree.heads ?? { "": tree.head };
-		for (const repo of Object.keys(heads).sort()) {
-			const head = heads[repo]!;
-			const treeHash = head === "" ? "" : git(join(projectDir, repo), ["rev-parse", "--verify", "-q", `${head}^{tree}`], timeLeft(deadline)).trim();
-			lines.push(`repo\0${repo}\0${treeHash}`);
+		const content = new Map<string, string>();
+		for (const [repo, head] of Object.entries(tree.heads ?? { "": tree.head })) {
+			if (head === "") continue;
+			const label = repo === "" ? "" : `${repo}/`;
+			for (const entry of git(join(projectDir, repo), ["ls-tree", "-r", "-z", head], timeLeft(deadline)).split("\0")) {
+				const tab = entry.indexOf("\t");
+				if (tab < 0) continue;
+				const [mode, type, sha] = entry.slice(0, tab).split(" ");
+				content.set(label + entry.slice(tab + 1), type === "blob" && (mode === "100644" || mode === "100755") ? `${mode === "100755" ? "x" : "f"} ${sha}` : `${type} ${mode} ${sha}`);
+			}
 		}
 		let bytes = 0;
-		for (const path of Object.keys(tree.files).sort()) {
+		for (const [path, id] of Object.entries(tree.files)) {
 			if (Date.now() > deadline) return undefined;
-			const file = join(projectDir, path);
-			if (identity(file) !== tree.files[path]) return undefined;
-			let stat: ReturnType<typeof lstatSync>;
-			try {
-				stat = lstatSync(file);
-			} catch {
-				lines.push(`path\0${path}\0deleted`);
+			const read = readListed(join(projectDir, path), id, maxBytes - bytes);
+			if (read === undefined) return undefined;
+			if (read === "deleted") {
+				content.delete(path);
 				continue;
 			}
-			if (stat.isDirectory()) return undefined;
-			if (stat.isSymbolicLink()) {
-				lines.push(`path\0${path}\0link\0${readlinkSync(file)}`);
-				continue;
-			}
-			bytes += stat.size;
-			if (bytes > maxBytes) return undefined;
-			const content = readFileSync(file);
-			lines.push(`path\0${path}\0${createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex")}`);
+			bytes += read.size;
+			content.set(path, read.value);
 		}
-		return createHash("sha256").update(lines.join("\n")).digest("hex");
+		return createHash("sha256").update(JSON.stringify([commands, [...content].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])).digest("hex");
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * A listed file's key value (`f`/`x` and its git blob hash), `"deleted"` when it is gone as the fingerprint says, or
+ * `undefined` when it isn't a regular file or its size or time differ from `id` before or after the read. Opened
+ * without following a symlink and without blocking, so a FIFO or device in its place never hangs the hook.
+ */
+function readListed(file: string, id: string, room: number): { value: string; size: number } | "deleted" | undefined {
+	let kind: ReturnType<typeof lstatSync>;
+	try {
+		kind = lstatSync(file);
+	} catch {
+		return id === "deleted" ? "deleted" : undefined;
+	}
+	if (!kind.isFile()) return undefined;
+	const fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+	try {
+		const same = (stat: ReturnType<typeof fstatSync>) => stat.isFile() && `${stat.size} ${stat.mtimeMs}` === id;
+		const before = fstatSync(fd);
+		if (!same(before) || before.size > room) return undefined;
+		const data = readFileSync(fd);
+		if (!same(fstatSync(fd)) || data.length !== before.size) return undefined;
+		const sha = createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
+		return { value: `${before.mode & 0o111 ? "x" : "f"} ${sha}`, size: data.length };
+	} finally {
+		closeSync(fd);
 	}
 }
 

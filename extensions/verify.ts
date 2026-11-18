@@ -26,7 +26,7 @@ import { guardScope } from "./lib/scope.ts";
 import { checkFeedback, feedbackConfig, MAX_CHECKED } from "./lib/pr-feedback.ts";
 import { touchedPrs } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChangesSplit, contentKey, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChangesSplit, contentKey, ignoredPath, keyCovers, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -298,10 +298,14 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			// Only a path that is the file itself may narrow the commands owed (verify.json `paths`): pi's own reading of the
 			// path (`@`, `~`), a symlink or another letter case owes them all.
 			// pi strips a leading `@` and expands `~` before it writes, so such a raw path never names the file it looks like.
-			if (path && !/^[@~]/.test(path) && isFileAt(ctx.cwd, abs, label)) markEdited([label], ctx);
+			const certain = !!path && !/^[@~]/.test(path) && isFileAt(ctx.cwd, abs, label);
+			if (certain) markEdited([label], ctx);
 			else markEdited([], ctx, [label]);
 			// The edit is counted; the next comparison starts after it.
-			track(ctx);
+			const { fresh } = track(ctx);
+			// An edit the content key can't read (a gitignored file, one through a symlink, skip-worktree) could be undone
+			// unseen: content counts as verified again only after the next green run.
+			if (!(certain && fresh && keyCovers(ctx.cwd, fresh, label))) verifiedKey = undefined;
 			return undefined;
 		}
 		if (event.toolName === "subagent") {

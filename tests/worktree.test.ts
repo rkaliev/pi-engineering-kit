@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { slowGit } from "./slow-git.ts";
-import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, contentKey } from "../extensions/lib/worktree.ts";
+import { callChanges, callChangesSplit, changedPaths, trackedChanges, ignoreFilter, MAX_ENTRIES, shellWriteTargets, treeFingerprint, contentKey, keyCovers } from "../extensions/lib/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
@@ -700,9 +700,64 @@ test("contentKey: any difference changes the key", () => {
 	assert.notEqual(key(dir), first, "an extra untracked file");
 	rmSync(join(dir, "src/b.ts"));
 	assert.notEqual(key(dir, ["npm test", "npm run lint"]), first, "other verification commands");
-	git(dir, "commit", "-q", "-am", "a = 2");
+	writeFileSync(join(dir, "src/c.ts"), "export const c = 1;\n");
+	git(dir, "add", "src/c.ts");
+	git(dir, "commit", "-q", "-m", "c");
+	assert.notEqual(key(dir), first, "another committed file");
+});
+
+test("contentKey: committing the content keeps the key (user ruling 2026-11-18: the key is of content only)", () => {
+	const dir = repo();
 	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
-	assert.notEqual(key(dir), first, "the same bytes committed: another HEAD tree");
+	const verified = key(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	assert.equal(key(dir), verified, "the checks ran before the commit");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 3;\n");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	assert.equal(key(dir), verified, "restored after the commit");
+});
+
+test("contentKey: a squash merge of a branch verified before its commit keeps the key", () => {
+	const dir = repo();
+	git(dir, "checkout", "-q", "-b", "feat");
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const verified = key(dir);
+	git(dir, "commit", "-q", "-am", "a = 2");
+	git(dir, "checkout", "-q", "main");
+	git(dir, "merge", "-q", "--squash", "feat");
+	git(dir, "commit", "-q", "-m", "squashed");
+	assert.equal(key(dir), verified);
+});
+
+test("contentKey: no key for a listed symlink, whatever it points to", () => {
+	const dir = repo();
+	symlinkSync("a.ts", join(dir, "src/link.ts"));
+	assert.equal(key(dir), undefined);
+});
+
+test("contentKey: no key, and no hang, for a listed path that is not a regular file", { skip: process.platform === "win32" ? "platform: POSIX FIFOs only" : false }, () => {
+	const dir = repo();
+	rmSync(join(dir, "src/a.ts"));
+	execFileSync("mkfifo", [join(dir, "src/a.ts")]);
+	assert.equal(key(dir), undefined);
+});
+
+test("keyCovers: a path is covered when the key reads its content", () => {
+	const dir = repo();
+	writeFileSync(join(dir, ".gitignore"), "dist/\n.env.test\n");
+	git(dir, "commit", "-q", "-am", "ignore");
+	writeFileSync(join(dir, "src/b.ts"), "export const b = 1;\n");
+	writeFileSync(join(dir, ".env.test"), "X=1\n");
+	const tree = fingerprint(dir);
+	assert.equal(keyCovers(dir, tree, "src/b.ts"), true, "listed");
+	assert.equal(keyCovers(dir, tree, "src/a.ts"), true, "tracked and clean: its HEAD blob is in the key");
+	assert.equal(keyCovers(dir, tree, ".env.test"), false, "gitignored");
+	assert.equal(keyCovers(dir, tree, "src/none.ts"), false, "unknown");
+	git(dir, "update-index", "--skip-worktree", "src/a.ts");
+	assert.equal(keyCovers(dir, fingerprint(dir), "src/a.ts"), false, "skip-worktree: its edits are invisible to git");
+	const ws = workspace();
+	assert.equal(keyCovers(ws, fingerprint(ws), "a/f.ts"), true, "a workspace repository's clean file");
 });
 
 test("contentKey: a squash merge of the verified tree keeps the key", () => {

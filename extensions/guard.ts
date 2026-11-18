@@ -149,6 +149,9 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 		runs.forEach((run, index) => {
 			if (run.usage) recordUsage(ctx, { kind: "subagent", id: `${event.toolCallId}-${index}`, agent: run.agent ?? "subagent", model: run.model ?? "unknown", tokens: tokensOf(run.usage) });
 		});
+		// Unverified edits that brought the tree back to content the checks passed on don't make a review Inconclusive.
+		// Checked once, before any verdict's lookups start their deadline.
+		if (verifyState.unverified && runs.some((run) => run.agent === "reviewer")) verifyState.creditByContent?.(ctx);
 		runs.forEach((run, index) => {
 			if (run.agent !== "reviewer") return;
 			const ids = { promptId: `${session}-${prompt}`, run: `${event.toolCallId}-${index}` };
@@ -157,8 +160,6 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
 			// Every lookup for this run shares one deadline, so pi isn't held up for long by a repository that hangs.
 			const deadline = Date.now() + LOOKUP_DEADLINE_MS;
-			// Unverified edits that brought the tree back to content the checks passed on don't make the review Inconclusive.
-			if (parsed && verifyState.unverified) verifyState.creditByContent?.(ctx);
 			if (parsed && verifyState.unverified && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
 				const held = recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput, deadline });
 				// Not recorded as written (its BASE or HEAD is no commit, or couldn't be searched in time): the named commit, else
