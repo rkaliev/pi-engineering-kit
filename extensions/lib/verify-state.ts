@@ -3,6 +3,7 @@
  * a review only when it ran on verified code. pi loads each extension in its own module graph, so a
  * module-level object would be one copy per extension; the state lives on `globalThis` instead.
  */
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GuardBaseline } from "./scope.ts";
 
 const KEY = Symbol.for("pi-engineering-kit.verifyState");
@@ -11,6 +12,8 @@ interface SharedState {
 	unverified: boolean;
 	slowParts: string[];
 	guardBaseline?: GuardBaseline;
+	/** The verify gate's check that unverified edits brought the tree back to content the checks passed on; the guard runs it before calling a review Inconclusive. */
+	creditByContent?: (ctx: ExtensionContext) => void;
 }
 const store = globalThis as typeof globalThis & { [KEY]?: SharedState };
 

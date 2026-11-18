@@ -26,7 +26,7 @@ import { guardScope } from "./lib/scope.ts";
 import { checkFeedback, feedbackConfig, MAX_CHECKED } from "./lib/pr-feedback.ts";
 import { touchedPrs } from "./lib/reviews.ts";
 import { verifyState } from "./lib/verify-state.ts";
-import { callChangesSplit, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
+import { callChangesSplit, contentKey, ignoredPath, trackedChanges, ignoreFilter, treeFingerprint, verificationOnly, type Tree } from "./lib/worktree.ts";
 
 const TAIL_CHARS = 4000;
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -82,19 +82,44 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	/** The hash of the open PR feedback items the agent was last sent back for, and the last PR note shown. */
 	let prFeedbackSent: string | undefined;
 	let prFeedbackNoted: string | undefined;
+	/** The content key (lib/worktree.ts `contentKey`) of the tree the state last turned verified on; edits back to it are verified. */
+	let verifiedKey: string | undefined;
 
 	const setStatus = (ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setStatus("verify", unverified ? "verify: unverified edits" : undefined);
 	};
 
-	const markGreen = (commands: string[], all: string[], ctx: ExtensionContext) => {
+	/**
+	 * `commands` passed. Once every one of `all` is green the edits are verified, and when that turns the state verified,
+	 * `keyTree` (the fingerprint this handler just took, absent when the call changed files itself) gives the content key.
+	 */
+	const markGreen = (commands: string[], all: string[], ctx: ExtensionContext, keyTree?: Tree) => {
 		for (const c of commands) greenSinceEdit.add(c);
 		if (all.length > 0 && all.every((c) => greenSinceEdit.has(c))) {
+			if (unverified) verifiedKey = keyTree && !gitOff ? contentKey(ctx.cwd, keyTree, all) : undefined;
 			unverified = verifyState.unverified = false;
 			edited = [];
 		}
 		setStatus(ctx);
 	};
+
+	/**
+	 * Unverified edits that brought the tree back to content the checks already passed on (a restored file, a pull of a
+	 * squash-merged branch verified before) are verified: the content key of `fresh`, or of a fingerprint taken now,
+	 * equals the stored one.
+	 */
+	const creditByContent = (ctx: ExtensionContext, fresh?: Tree) => {
+		if (!unverified || verifiedKey === undefined || gitOff) return;
+		const { commands, error } = resolveVerifyCommands(ctx.cwd);
+		if (error || commands.length === 0) return;
+		const now = fresh ?? treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), {}, { skip: [...slowParts], previous: tree });
+		if (!now || contentKey(ctx.cwd, now, commands) !== verifiedKey) return;
+		for (const c of commands) greenSinceEdit.add(c);
+		unverified = verifyState.unverified = false;
+		edited = [];
+		setStatus(ctx);
+	};
+	verifyState.creditByContent = (ctx) => creditByContent(ctx);
 
 	/**
 	 * Counts edited `paths`: each owes the commands whose verify.json `paths` cover it (every command without an entry),
@@ -136,7 +161,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	 * background process) counts only in a process with a UI: one without is usually a subagent's own process, and
 	 * its siblings' writes aren't its own.
 	 */
-	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): { marked: string[]; own: { exact: string[]; guessed: string[] } } => {
+	const track = (ctx: ExtensionContext, callId?: string, after?: { command: string; exempt: boolean; powershell?: boolean }): { marked: string[]; own: { exact: string[]; guessed: string[] }; fresh: Tree | undefined } => {
 		const cwd = ctx.cwd;
 		const ignore = resolveIgnore(cwd);
 		const why: { slow?: boolean; slowParts?: string[] } = {};
@@ -160,7 +185,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			while (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value!);
 		}
 		if (now) tree = now;
-		return { marked, own: exempted ? { exact, guessed } : { exact: [], guessed: [] } };
+		return { marked, own: exempted ? { exact, guessed } : { exact: [], guessed: [] }, fresh: now };
 	};
 
 	async function runChecks(ctx: ExtensionContext, signal?: AbortSignal, only: string[] = []): Promise<{ report: string; ok: boolean; results: CheckResult[] }> {
@@ -193,8 +218,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		}
 		const ok = results.length === commands.length && results.every((r) => r.code === 0);
 		// The checks' own changes (a formatter, `lint --fix`) don't count against them, only against the checks that didn't run.
-		const { own } = track(ctx, undefined, { command: "", exempt: true });
-		if (ok) markGreen(commands, resolved.commands, ctx);
+		const { own, fresh } = track(ctx, undefined, { command: "", exempt: true });
+		// A check's own changes (a formatter) still owe the checks before them: the tree after them is no verified content.
+		const changedItself = own.exact.length + own.guessed.length > 0;
+		if (ok) markGreen(commands, resolved.commands, ctx, changedItself ? undefined : fresh);
 		else if (unverified) {
 			// The check that failed and the ones it skipped don't stand green any more, like a failed plain command.
 			for (const c of commands.slice(results.length - 1)) greenSinceEdit.delete(c);
@@ -221,6 +248,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		unverified = verifyState.unverified = false;
 		greenSinceEdit = new Set();
+		verifiedKey = undefined;
 		remindedThisPrompt = false;
 		approvalRemindedThisPrompt = false;
 		workDocsRemindedThisPrompt = false;
@@ -292,12 +320,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 			const ran = commands.filter((c) => commandMatches(shell, c));
 			// Files this command changed, whatever wrote them (a failed command may have written too). Only a check that
 			// passed and did nothing else keeps its own changes off the count.
-			const { marked, own } = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands), powershell: event.toolName === "powershell" });
+			const { marked, own, fresh } = track(ctx, String(event.toolCallId ?? ""), { command: shell, exempt: !event.isError && verificationOnly(shell, commands), powershell: event.toolName === "powershell" });
 			// A call that changed files proves nothing about them, whatever checks it also ran.
 			if (marked.length > 0) return undefined;
 			if (unverified && ran.length > 0) {
 				if (event.isError) for (const c of ran) greenSinceEdit.delete(c);
-				else markGreen(ran, commands, ctx);
+				else markGreen(ran, commands, ctx, own.exact.length + own.guessed.length > 0 ? undefined : fresh);
 			}
 			// A check's own changes (a formatter, `lint --fix`) are off the count for the checks that ran, not for the others.
 			if (own.exact.length + own.guessed.length > 0) markEdited(own.exact, ctx, own.guessed, ran);
@@ -309,7 +337,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const parts: string[] = [];
 		const afterFollowUp = followedUp;
 		// A change no command reported (the user's editor, a background process) is found here.
-		track(ctx);
+		creditByContent(ctx, track(ctx).fresh);
 		// A follow-up goes out once per set of edits: edits an earlier agent_end judged (the agent ran no check, or
 		// reported a failing one) are told to the user once instead of following up every later prompt (Claude Code
 		// transcripts 2026-10..11: 40% of firings repeated the previous one's file list). The agent_end after the verify

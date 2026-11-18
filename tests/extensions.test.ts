@@ -36,6 +36,7 @@ type Handler = (event: any, ctx: any) => unknown;
 beforeEach(() => {
 	delete process.env.ENG_KIT_GUARD_BASELINE;
 	verifyState.guardBaseline = undefined;
+	verifyState.unverified = false;
 });
 
 function fakePi(execCodes: Record<string, number> = {}, onExec: (command: string) => void = () => {}) {
@@ -2404,4 +2405,90 @@ test("PR feedback gate (pi): a hanging gh is a timed-out note within the budget 
 	assert.ok(Date.now() - started < 8000);
 	assert.equal(sent.length, 0);
 	assert.match(c.notes[0] ?? "", /^PR feedback gate: PR feedback not checked: timed out after/);
+});
+
+/** A verify session in a git project where `change` edits `file` as pi's edit tool reports it and `check` passes every command. */
+async function keyedSession(files: Record<string, string> = COMMANDS) {
+	const { dir } = gitProject(files);
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir);
+	await emit("session_start", { reason: "startup" }, c);
+	const change = async (content: string, file = "src/a.ts") => {
+		writeFileSync(join(dir, file), content);
+		await emit("tool_result", { toolName: "edit", input: { path: file }, isError: false }, c);
+	};
+	const check = async () => {
+		for (const command of ["npm test", "npm run typecheck"]) await bashCall(emit, c, command);
+	};
+	const end = async () => {
+		await emit("agent_end", { messages: [] }, c);
+		return sent.length;
+	};
+	return { dir, emit, c, change, check, end };
+}
+
+test("verify: content restored to what the checks passed on is credited at agent_end", async () => {
+	const s = await keyedSession();
+	await s.change("export const a = 2;\n");
+	await s.check();
+	await s.change("export const a = 3;\n");
+	await s.change("export const a = 2;\n");
+	assert.equal(verifyState.unverified, true);
+	assert.equal(await s.end(), 0);
+	assert.equal(verifyState.unverified, false);
+});
+
+test("verify: a squash merge of the verified tree is credited", async () => {
+	const s = await keyedSession();
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, stdio: "pipe" });
+	git("checkout", "-q", "-b", "feat");
+	await s.change("export const a = 2;\n");
+	await bashCall(s.emit, s.c, "git commit -qam a2", false, () => git("commit", "-qam", "a2"));
+	await s.check();
+	await bashCall(s.emit, s.c, "git checkout main", false, () => git("checkout", "-q", "main"));
+	await bashCall(s.emit, s.c, "git merge --squash feat", false, () => git("merge", "-q", "--squash", "feat"));
+	await bashCall(s.emit, s.c, "git commit -m squashed", false, () => git("commit", "-q", "-m", "squashed"));
+	assert.equal(verifyState.unverified, true, "the checkout counted as edits");
+	assert.equal(await s.end(), 0);
+});
+
+test("verify: content that differs from the verified one still follows up", async () => {
+	for (const differ of [(s: Awaited<ReturnType<typeof keyedSession>>) => s.change("export const a = 4;\n"), (s: Awaited<ReturnType<typeof keyedSession>>) => s.change("export const b = 1;\n", "src/b.ts")]) {
+		const s = await keyedSession();
+		await s.change("export const a = 2;\n");
+		await s.check();
+		await differ(s);
+		assert.equal(await s.end(), 1);
+	}
+});
+
+test("verify: a check's own changes leave no content key behind", async () => {
+	// The typecheck run changed the code after npm test passed: restoring that content must not count as verified.
+	const s = await keyedSession();
+	await s.change("export const a = 2;\n");
+	await bashCall(s.emit, s.c, "npm test");
+	await bashCall(s.emit, s.c, "npm run typecheck", false, () => writeFileSync(join(s.dir, "src/a.ts"), "export const a = 3;\n"));
+	await s.change("export const a = 3;\n");
+	assert.equal(await s.end(), 1);
+});
+
+test("review gate: a review of content the checks already passed on keeps its verdict", async () => {
+	const s = await keyedSession({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, encoding: "utf8" }).trim();
+	git("switch", "-qc", "feat/a");
+	await s.change("export const a = 2;\n");
+	git("commit", "-qam", "feat: a");
+	await bashCall(s.emit, s.c, "npm test");
+	await s.change("export const a = 9;\n");
+	await s.change("export const a = 2;\n");
+	assert.equal(verifyState.unverified, true);
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const c = ctx(s.dir);
+	await g.emit("input", { text: "review", source: "interactive" }, c);
+	const verdict = `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: Yes`;
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: verdict }] }, isError: false }, c);
+	assert.equal(c.notes.some((n) => /Inconclusive/.test(n)), false);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, c))?.block, undefined);
 });
