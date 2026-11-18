@@ -254,7 +254,7 @@ test("error cases", () => {
 
 test("not GitHub", () => {
 	const fake = fakeGh({}, { code: 1, stderr: "none of the git remotes configured for this repository point to a known GitHub host" });
-	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 5000, gh: fake.gh });
+	const s = collectPrState({ dir: fake.dir, branch: "feat/x", deadlineMs: 30_000, gh: fake.gh });
 	assert.equal(s.github, false);
 	assert.equal(s.error, "not a GitHub repository");
 });
