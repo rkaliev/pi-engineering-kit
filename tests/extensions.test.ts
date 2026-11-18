@@ -2580,5 +2580,20 @@ test("review gate: content credit counts only for a review of a clean HEAD", asy
 	const verdict = `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: Yes`;
 	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: verdict }] }, isError: false }, c);
 	assert.equal(c.notes.some((n) => /Inconclusive/.test(n)), true);
+	assert.equal(c.notes.some((n) => /other content than the working tree/.test(n)), true, "the notice names the real cause");
 	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, c))?.block, true);
+});
+
+test("verify: a hidden file deleted in the same call gets the follow-up", async () => {
+	const s = await keyedSession();
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, stdio: "pipe" });
+	await s.change("export const a = 2;\n");
+	await s.check();
+	await bashCall(s.emit, s.c, "git commit -qam a2", false, () => git("commit", "-qam", "a2"));
+	await s.change("export const a = 9;\n");
+	await bashCall(s.emit, s.c, "git update-index --skip-worktree src/a.ts && rm src/a.ts", false, () => {
+		git("update-index", "--skip-worktree", "src/a.ts");
+		rmSync(join(s.dir, "src/a.ts"));
+	});
+	assert.equal(await s.end(), 1);
 });

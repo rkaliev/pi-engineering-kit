@@ -162,12 +162,19 @@ export default function guardExtension(pi: ExtensionAPI, options: { reviewsRoot?
 			const parsed = failed ? undefined : parseReview(run.finalOutput!);
 			// Every lookup for this run shares one deadline, so pi isn't held up for long by a repository that hangs.
 			const deadline = Date.now() + LOOKUP_DEADLINE_MS;
-			if (parsed && (verifyState.unverified || (credit !== undefined && !cleanAt(credit, parsed.sha))) && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
+			const otherContent = !verifyState.unverified && credit !== undefined && parsed !== undefined && !cleanAt(credit, parsed.sha);
+			if (parsed && (verifyState.unverified || otherContent) && resolveVerifyCommands(ctx.cwd, { detect: false }).commands.length > 0) {
 				const held = recordVerdict(ctx.cwd, parsed.sha, "Inconclusive", ids, options.reviewsRoot, { base: parsed.base, report: run.finalOutput, deadline });
 				// Not recorded as written (its BASE or HEAD is no commit, or couldn't be searched in time): the named commit, else
 				// each HEAD, so it is never lost; the failed lookup is passed on, not repeated.
 				const still = typeof held === "string" ? holdBack(ctx.cwd, parsed.sha, ids, options.reviewsRoot, deadline, held) : held.missed === undefined ? undefined : holdBack(ctx.cwd, parsed.sha, heldIds(ids), options.reviewsRoot, deadline);
-				if (ctx.hasUI) ctx.ui.notify("Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.", "warning");
+				if (ctx.hasUI)
+					ctx.ui.notify(
+						otherContent
+							? "Review gate: the edits are back to verified content, but the review named a commit with other content than the working tree, so it counts as Inconclusive. Review the HEAD that holds the verified content, with nothing changed in its repository."
+							: "Review gate: the review ran while edits were unverified, so it counts as Inconclusive. Run /verify, then review again.",
+						"warning",
+					);
 				notifyMissed(ctx, typeof held === "string" ? undefined : held.missed, still);
 				return;
 			}

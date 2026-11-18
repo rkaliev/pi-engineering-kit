@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, constants, type Dirent, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { isIgnored, resolveIgnore } from "./commands.ts";
+import { globToRegExp, isIgnored, resolveIgnore } from "./commands.ts";
 import { ignoredFolder, projectRepos } from "./repos.ts";
 import { commandName, splitSegments, tokenize } from "./patterns.ts";
 import { blankQuoted, heredocs, MOVES, reachable, safeRealpath, stripRedirects, writes } from "./shell.ts";
@@ -289,6 +289,8 @@ function isFolder(path: string): boolean {
 
 /** How long one content key may take, git and hashing together. */
 export const KEY_BUDGET_MS = 2000;
+/** More paths than this and `keyCoversAll` reads the whole index instead of naming them. */
+const PATHSPEC_LIMIT = 100;
 /** Past this much listed file content, a tree gets no content key. */
 export const KEY_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -301,8 +303,13 @@ export function keyCovers(projectDir: string, tree: Tree, label: string, deadlin
 	return keyCoversAll(projectDir, tree, [label], deadline);
 }
 
-/** `keyCovers` for every one of `labels`, with one `git ls-files` per repository. */
-export function keyCoversAll(projectDir: string, tree: Tree, labels: string[], deadline = Date.now() + KEY_BUDGET_MS): boolean {
+/**
+ * `keyCovers` for every one of `labels`, with one `git ls-files` per repository (the whole index past `PATHSPEC_LIMIT`
+ * paths, so a large commit never meets a command-line limit). With `gone`, for paths that left git's listing, one gone
+ * from disk is covered when git has no entry for it either (deleted and committed, or an untracked file removed); a
+ * hidden file deleted unseen still has one. Without it a missing path is never covered.
+ */
+export function keyCoversAll(projectDir: string, tree: Tree, labels: string[], deadline = Date.now() + KEY_BUDGET_MS, gone = false): boolean {
 	const byRepo = new Map<string, string[]>();
 	for (const label of labels) {
 		if (Object.hasOwn(tree.files, label)) continue;
@@ -313,13 +320,24 @@ export function keyCoversAll(projectDir: string, tree: Tree, labels: string[], d
 	try {
 		for (const [repo, paths] of byRepo) {
 			const tags = new Map<string, string>();
-			for (const record of git(join(projectDir, repo), ["--literal-pathspecs", "ls-files", "-v", "-z", "--", ...paths], timeLeft(deadline)).split("\0")) {
+			const pathspecs = paths.length > PATHSPEC_LIMIT ? [] : ["--", ...paths];
+			for (const record of git(join(projectDir, repo), ["--literal-pathspecs", "ls-files", "-v", "-z", ...pathspecs], timeLeft(deadline)).split("\0")) {
 				if (record.length > 2) tags.set(record.slice(2), record.slice(0, 2));
 			}
-			if (!paths.every((path) => tags.get(path) === "H ")) return false;
+			if (!paths.every((path) => (existsSync(join(projectDir, repo, path)) ? tags.get(path) === "H " : gone && !tags.has(path)))) return false;
 		}
 		return true;
 	} catch {
+		return false;
+	}
+}
+
+/** Whether a repository's `core.fileMode` is false; unset is true, as in git. A timeout throws, so no key is taken. */
+function fileModeOff(dir: string, deadline: number): boolean {
+	try {
+		return git(dir, ["config", "--bool", "core.fileMode"], timeLeft(deadline)).trim() === "false";
+	} catch (err) {
+		if (timedOut(err)) throw err;
 		return false;
 	}
 }
@@ -351,18 +369,30 @@ export function contentKey(projectDir: string, tree: Tree, commands: string[], l
 	const maxBytes = limits.maxBytes ?? KEY_MAX_BYTES;
 	const ignore = limits.ignore ?? [];
 	try {
-		// HEAD's files are left out as the fingerprint leaves them out: by `ignore`, and in a workspace by each repository's own globs.
-		const ignored = ignoreFilter(projectDir, ignore);
+		const heads = tree.heads ?? { "": tree.head };
+		const repos = Object.keys(heads);
+		// HEAD's files are left out as the fingerprint leaves them out: by `ignore` on the project path, and in a workspace
+		// by each repository's own globs on the path inside it. Compiled once: a HEAD listing can hold 100,000 files.
+		const top = ignore.map(globToRegExp);
+		const own = new Map(repos.filter((r) => r !== "").map((r) => [r, resolveIgnore(join(projectDir, r)).map(globToRegExp)]));
+		const ignored = (repo: string, path: string) => top.some((re) => re.test(repo === "" ? path : `${repo}/${path}`)) || (own.get(repo)?.some((re) => re.test(path)) ?? false);
+		// Repositories where git ignores the disk's executable bit (core.fileMode=false): a listed file takes HEAD's.
+		const modeless = new Set<string>();
 		const content = new Map<string, string>();
-		for (const [repo, head] of Object.entries(tree.heads ?? { "": tree.head })) {
+		for (const [repo, head] of Object.entries(heads)) {
+			const dir = join(projectDir, repo);
+			if (fileModeOff(dir, deadline)) modeless.add(repo);
 			if (head === "") continue;
 			const label = repo === "" ? "" : `${repo}/`;
-			for (const entry of git(join(projectDir, repo), ["ls-tree", "-r", "-z", head], timeLeft(deadline)).split("\0")) {
+			let count = 0;
+			for (const entry of git(dir, ["ls-tree", "-r", "-z", head], timeLeft(deadline)).split("\0")) {
+				if (++count % 1000 === 0 && Date.now() > deadline) return undefined;
 				const tab = entry.indexOf("\t");
 				if (tab < 0) continue;
+				const path = entry.slice(tab + 1);
+				if (ignored(repo, path)) continue;
 				const [mode, type, sha] = entry.slice(0, tab).split(" ");
-				if (ignored(label + entry.slice(tab + 1))) continue;
-				content.set(label + entry.slice(tab + 1), type === "blob" && (mode === "100644" || mode === "100755") ? `${mode === "100755" ? "x" : "f"} ${sha}` : `${type} ${mode} ${sha}`);
+				content.set(label + path, type === "blob" && (mode === "100644" || mode === "100755") ? `${mode === "100755" ? "x" : "f"} ${sha}` : `${type} ${mode} ${sha}`);
 			}
 		}
 		let bytes = 0;
@@ -375,7 +405,9 @@ export function contentKey(projectDir: string, tree: Tree, commands: string[], l
 				continue;
 			}
 			bytes += read.size;
-			content.set(path, read.value);
+			const repo = tree.heads === undefined ? "" : repos.find((r) => path.startsWith(`${r}/`));
+			const executable = repo !== undefined && modeless.has(repo) ? content.get(path)?.startsWith("x ") === true : read.executable;
+			content.set(path, `${executable ? "x" : "f"} ${read.sha}`);
 		}
 		return createHash("sha256").update(JSON.stringify([commands, ignore, [...content].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])).digest("hex");
 	} catch {
@@ -384,11 +416,11 @@ export function contentKey(projectDir: string, tree: Tree, commands: string[], l
 }
 
 /**
- * A listed file's key value (`f`/`x` and its git blob hash), `"deleted"` when it is gone as the fingerprint says, or
+ * A listed file's git blob hash and owner-execute bit, `"deleted"` when it is gone as the fingerprint says, or
  * `undefined` when it isn't a regular file or its size or time differ from `id` before or after the read. Opened
  * without following a symlink and without blocking, so a FIFO or device in its place never hangs the hook.
  */
-function readListed(file: string, id: string, room: number): { value: string; size: number } | "deleted" | undefined {
+function readListed(file: string, id: string, room: number): { sha: string; executable: boolean; size: number } | "deleted" | undefined {
 	let kind: ReturnType<typeof lstatSync>;
 	try {
 		kind = lstatSync(file);
@@ -405,7 +437,7 @@ function readListed(file: string, id: string, room: number): { value: string; si
 		if (!same(fstatSync(fd)) || data.length !== before.size) return undefined;
 		const sha = createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
 		// git records a file as executable by its owner bit alone.
-		return { value: `${before.mode & 0o100 ? "x" : "f"} ${sha}`, size: data.length };
+		return { sha, executable: (before.mode & 0o100) !== 0, size: data.length };
 	} finally {
 		closeSync(fd);
 	}

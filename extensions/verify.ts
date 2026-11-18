@@ -180,11 +180,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const counts = after ? !exempted : ctx.hasUI;
 		const marked = paths.length > 0 && counts ? paths : [];
 		if (marked.length > 0) markEdited(exact, ctx, guessed);
-		// A file that left git's listing with its content unchanged was committed (now a clean tracked file the key reads) or
-		// hidden (assume-unchanged, skip-worktree, an exclude): a hidden one may hold edits the key no longer sees.
+		// A file that left git's listing was committed (a clean tracked file the key reads, or a deletion git no longer knows)
+		// or hidden (assume-unchanged, skip-worktree, an exclude, also deleted unseen): a hidden one may hold edits the key no
+		// longer sees.
 		if (verifiedKey !== undefined && before !== undefined) {
-			const left = now === undefined ? undefined : Object.keys(before.files).filter((p) => !Object.hasOwn(now.files, p) && existsSync(join(cwd, p)));
-			if (left === undefined || (left.length > 0 && !keyCoversAll(cwd, now!, left))) verifiedKey = undefined;
+			const left = now === undefined ? undefined : Object.keys(before.files).filter((p) => !Object.hasOwn(now.files, p));
+			if (left === undefined || (left.length > 0 && !keyCoversAll(cwd, now!, left, undefined, true))) verifiedKey = undefined;
 		}
 		if (callId !== undefined) {
 			pending.delete(callId);

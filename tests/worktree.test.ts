@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -870,4 +870,15 @@ test("cleanAt: the reviewed commit is a HEAD with nothing listed in its reposito
 	assert.equal(cleanAt(fingerprint(ws), wsHead), true, "a workspace repository");
 	writeFileSync(join(ws, "a", "f.ts"), "export const f = 2;\n");
 	assert.equal(cleanAt(fingerprint(ws), wsHead), false, "with a change listed in that repository");
+});
+
+test("contentKey: with core.fileMode=false the executable bit comes from HEAD, as git takes it", { skip: process.platform === "win32" ? "platform: POSIX permission bits only" : false }, () => {
+	const dir = repo();
+	git(dir, "config", "core.fileMode", "false");
+	chmodSync(join(dir, "src/a.ts"), 0o755);
+	writeFileSync(join(dir, "src/a.ts"), "export const a = 2;\n");
+	const verified = key(dir);
+	assert.equal(typeof verified, "string");
+	git(dir, "commit", "-q", "-am", "a = 2");
+	assert.equal(key(dir), verified, "git committed it as 100644 although the disk says executable");
 });
