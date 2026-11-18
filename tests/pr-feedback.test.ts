@@ -216,7 +216,7 @@ test("collects with two gh calls: the PRs of the branch, then the chosen PR's fe
 	assert.equal(s.github, true);
 	assert.deepEqual([s.pr, s.url, s.head, s.login], [48, "https://github.com/o/r/pull/48", "abc123", "me"]);
 	assert.deepEqual(s.open.map((i) => i.id), ["I1"]);
-	assert.deepEqual(s.checks, { state: "FAILURE", failed: ["test", "ci/legacy"] });
+	assert.deepEqual(s.checks, { state: "FAILURE", failed: ["test", "ci/legacy"], pending: 0, total: 3 });
 });
 
 test("branch defaults to the current branch of dir", () => {
