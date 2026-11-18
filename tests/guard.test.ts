@@ -1306,3 +1306,8 @@ test("a project confirm rule reads a marked word without its mark inside a hered
 test("blocks read U+0085 as a blank and a command with its carriage returns dropped", () => {
 	for (const cmd of ["rm -r\u0085~", "rm -rf\r ~", "rm -r\rf ../x"]) assert.equal(action(cmd), "block", JSON.stringify(cmd));
 });
+
+test("the PR watcher script runs without a question: it only reads", () => {
+	assert.equal(action("node /k/scripts/pr-watch.ts --ack a1,b2"), "allow");
+	assert.equal(action("node .pi/git/eng-kit/scripts/pr-watch.ts --pr 48"), "allow");
+});

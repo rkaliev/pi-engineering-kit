@@ -1,8 +1,9 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Item, PrState } from "../extensions/lib/pr-feedback.ts";
 import { decide, eventId, watch } from "../extensions/lib/pr-watch.ts";
 
@@ -134,7 +135,7 @@ function fakeGhSequence(replies: Reply[]): { gh: string; dir: string } {
 }
 
 /** One gh reply that serves both the branch lookup and the PR's own query. */
-function pull(parts: { head?: string; state?: string; mergeable?: string; contexts?: Array<Record<string, unknown>> } = {}): Reply {
+function pull(parts: { head?: string; state?: string; mergeable?: string; contexts?: Array<Record<string, unknown>>; thread?: boolean } = {}): Reply {
 	const node = {
 		number: 48,
 		url: "https://github.com/o/r/pull/48",
@@ -143,7 +144,9 @@ function pull(parts: { head?: string; state?: string; mergeable?: string; contex
 		isCrossRepository: false,
 		headRepositoryOwner: { login: "o" },
 		commits: { nodes: [{ commit: { oid: parts.head ?? "aaa111", statusCheckRollup: { state: "X", contexts: { nodes: parts.contexts ?? [{ __typename: "CheckRun", name: "test", conclusion: "SUCCESS" }] } } } }] },
-		reviewThreads: { totalCount: 0, nodes: [] },
+		reviewThreads: parts.thread
+			? { totalCount: 1, nodes: [{ id: "T1", isResolved: false, path: "a.ts", line: 3, comments: { totalCount: 1, nodes: [{ id: "C1", author: { login: "bob", __typename: "User" }, body: "Rename this.", url: "https://x/C1", createdAt: "2026-11-18T10:00:00Z" }] } }] }
+			: { totalCount: 0, nodes: [] },
 		reviews: { totalCount: 0, nodes: [] },
 		latestOpinionatedReviews: { totalCount: 0, nodes: [] },
 		comments: { totalCount: 0, nodes: [] },
@@ -215,4 +218,27 @@ test("watch: no open PR at start → blocked", async () => {
 test("watch: timeout → blocked timeout", async () => {
 	const r = await run([pull({ contexts: running })], { timeoutMs: 100_000 });
 	assert.deepEqual([r.event.event, r.event.reason, r.clock, r.sleeps], ["blocked", "timeout", 100_000, [30_000, 30_000, 30_000, 10_000]]);
+});
+
+// ---- the CLI ----
+
+const script = resolve(import.meta.dirname, "..", "scripts", "pr-watch.ts");
+function cli(fake: { dir: string }, ...args: string[]) {
+	const r = spawnSync(process.execPath, [script, "--repo", fake.dir, ...args], { encoding: "utf8", env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}` } });
+	return { code: r.status, event: JSON.parse(r.stdout || "null") as { event?: string; eventId?: string; ack?: string; reason?: string } | null };
+}
+
+test("pr-watch CLI prints one event and exits 0", () => {
+	const r = cli(fakeGhSequence([pull({ state: "MERGED" })]), "--pr", "48", "--no-config");
+	assert.deepEqual([r.code, r.event?.event], [0, "merged"]);
+});
+
+test("pr-watch CLI: --ack with two ids suppresses both", () => {
+	const fake = fakeGhSequence([pull({ contexts: oneFailed, thread: true })]);
+	const first = cli(fake, "--pr", "48", "--no-config");
+	assert.equal(first.event?.event, "checks_failed");
+	const second = cli(fake, "--pr", "48", "--no-config", "--ack", first.event?.ack ?? "");
+	assert.equal(second.event?.event, "feedback");
+	const third = cli(fake, "--pr", "48", "--no-config", "--ack", second.event?.ack ?? "", "--timeout", "1", "--interval", "1");
+	assert.deepEqual([third.code, third.event?.event, third.event?.reason], [0, "blocked", "timeout"]);
 });
