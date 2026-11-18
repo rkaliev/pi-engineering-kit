@@ -1,6 +1,6 @@
 # Debugging starts from a control run on the base commit; watcher and verify follow-ups
 
-Status: design approved (2026-11-19)
+Status: plan approved (2026-11-19)
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 24b5d89 · pi 597bc1a
 Links: workspace docs/COMPARISON-FORTUNE-OS.ru.md (0.40.0 item 1, the systematic-debugging control case); source fortune-os `plugins/fos/skills/shared-rules/references/failure-evidence.md` and `plugins/fos/skills/debug/SKILL.md`; 0.42.0 follow-ups in workspace docs/review-rounds/0.42.0/
