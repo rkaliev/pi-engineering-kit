@@ -113,6 +113,14 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		const { commands, error } = resolveVerifyCommands(ctx.cwd);
 		if (error || commands.length === 0) return undefined;
 		const now = fresh ?? treeFingerprint(ctx.cwd, resolveIgnore(ctx.cwd), {}, { skip: [...slowParts], previous: tree });
+		// A fingerprint taken here (the guard, before `track` sees the call) gets the same left-listing check `track` makes.
+		if (!fresh && now && tree) {
+			const left = Object.keys(tree.files).filter((p) => !Object.hasOwn(now.files, p));
+			if (left.length > 0 && !keyCoversAll(ctx.cwd, now, left, undefined, true)) {
+				verifiedKey = undefined;
+				return undefined;
+			}
+		}
 		if (!now || contentKey(ctx.cwd, now, commands, { ignore: resolveIgnore(ctx.cwd) }) !== verifiedKey) return undefined;
 		for (const c of commands) greenSinceEdit.add(c);
 		unverified = verifyState.unverified = false;

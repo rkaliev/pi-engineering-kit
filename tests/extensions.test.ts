@@ -2597,3 +2597,23 @@ test("verify: a hidden file deleted in the same call gets the follow-up", async 
 	});
 	assert.equal(await s.end(), 1);
 });
+
+test("review gate: a file hidden while the reviewer ran isn't credited by content", async () => {
+	const s = await keyedSession({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: s.dir, encoding: "utf8" }).trim();
+	git("switch", "-qc", "feat/a");
+	await s.change("export const a = 2;\n");
+	await bashCall(s.emit, s.c, "npm test");
+	await bashCall(s.emit, s.c, "git commit -qam a2", false, () => git("commit", "-qam", "a2"));
+	await s.change("export const a = 9;\n");
+	// Hidden inside the subagent call, so verify's own tracking hasn't seen it yet when the guard reads the result.
+	git("update-index", "--assume-unchanged", "src/a.ts");
+	const g = fakePi();
+	guard(g.pi, { reviewsRoot: mkdtempSync(join(tmpdir(), "guard-reviews-")) });
+	const c = ctx(s.dir);
+	await g.emit("input", { text: "review", source: "interactive" }, c);
+	const verdict = `Reviewed BASE: ${git("rev-parse", "main")}\nReviewed HEAD: ${git("rev-parse", "HEAD")}\nReady to merge: Yes`;
+	await g.emit("tool_result", { toolName: "subagent", toolCallId: "c1", input: {}, content: [], details: { results: [{ agent: "reviewer", exitCode: 0, finalOutput: verdict }] }, isError: false }, c);
+	assert.equal(verifyState.unverified, true);
+	assert.equal((await g.emit("tool_call", { toolName: "bash", input: { command: "gh pr create --fill" } }, c))?.block, true);
+});
