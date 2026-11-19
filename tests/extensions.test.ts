@@ -720,6 +720,29 @@ test("verify: a watcher message queued into a running run counts as a new prompt
 	assert.equal(sent.length, 2, "no follow-up after a follow-up in the same prompt");
 });
 
+test("verify: a run the watcher's event starts resets once per wake, though pi resets it twice", async () => {
+	// pi emits before_agent_start and then the event's own message_start for such a run (pi-agent-core agent-loop).
+	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
+	const { pi, emit, sent } = fakePi();
+	verify(pi);
+	const c = ctx(dir, { hasUI: false });
+	const wake = { role: "custom", customType: "pr-watch", content: "PR watcher event" };
+	await emit("session_start", { reason: "startup" }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/a.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 1);
+	await emit("before_agent_start", { messageType: "custom", message: wake }, c);
+	await emit("message_start", { message: wake }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/b.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "the woken run's edits get one follow-up");
+	await emit("before_agent_start", { messageType: "custom", message: { customType: "verify-gate", content: "follow-up" } }, c);
+	await emit("message_start", { message: { role: "custom", customType: "verify-gate", content: "follow-up" } }, c);
+	await emit("tool_result", { toolName: "edit", input: { path: "src/c.ts" }, isError: false }, c);
+	await emit("agent_end", { messages: [] }, c);
+	assert.equal(sent.length, 2, "and no more in the same prompt");
+});
+
 test("verify ignores edits outside the project and doc edits by default", async () => {
 	const dir = project({ "AGENTS.md": "## Commands\n- `npm test`\n" });
 	const { pi, emit, sent } = fakePi();
