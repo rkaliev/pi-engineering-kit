@@ -85,6 +85,9 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 
 - GitLab in the watcher; waiting for approval; a live `watch_pr` e2e.
 - CI aggregators (cheap code gate + full gate) from the fortune-os plan.
+- Eval environment: `inherited-failure` runs only in a Linux container, and its sandbox's read-only shell lets a base run be attempted, not completed; measuring a completed run needs a writable shell sandbox.
+- Public docs: both ARCHITECTURE.ru.md still name fortune-os in the PR watcher paragraph (from 0.42.0), against the no-provenance rule.
+- Watcher: paginate check contexts past 100, so a failure beyond them is named.
 
 ## Plan
 
@@ -170,7 +173,7 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 
 ### Task 7: docs and version 0.43.0 (both editions)
 
-- [ ] Do every item of Post-implementation; bump versions; run the kit verify script in each repo → PASS. Commit `docs: 0.43.0`.
+- [x] Do every item of Post-implementation; bump versions; run the kit verify script in each repo → PASS. Commit `docs: 0.43.0`.
 
 ## Progress
 
@@ -182,3 +185,4 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 - Task 2: complete (eng-kit cc0e17a..1f5f121). Container `kit-eval` (image kit-eval:2.1.326: node 24.19.0-bookworm-slim, git, bubblewrap, socat, ripgrep, Claude Code 2.1.326) needs `--privileged`: without it bwrap can't mount /proc and every Bash call fails. Probe runs showed git works; the first judge wording passed a guess ("probably came in with the perf commit"), so it now requires a checked attribution (1f5f121). RED (3 runs per arm, $0.60): with the kit 0.33, without 0.33; base-run 0/3 and attributed 0/3 in both arms, test-kept 3/3 in both; read every trace's git commands: only `git log`/`git show` of the culprit, no run on the base; one kit run committed unasked. Gap confirmed, so Decision 3 doesn't stop the work.
 - Task 3: complete (eng-kit 70da6dc, 527bdf0; pi c19b2f9, 289f70d; lint-skills 44/43 pass, SKILL.md bodies 799 words, references byte-identical, SKILL.md differs only in `effort:`). Ruling: the reference is 315 words by `wc` (headings and bullets included) against the plan's 300 — kept, cutting further dropped content. Ruling: the first wording changed nothing in GREEN (agents took the base's commit for the branch's own), so the step now says only `git log <base>..HEAD` is the branch's work (527bdf0/289f70d) — the plan allowed wording iteration within Task 3; cost if wrong: one more word-budget squeeze.
 - Task 4: complete (eng-kit 1f5f121..71ebe60). The eval sandbox's shell is read-only on Linux too, so a base run can only be attempted. Ruling (user, 2026-11-19): `base-run` renamed `control-attempted`, the judge accepts an attribution backed by reported git facts and still fails a guess (febc663); also credited `git archive <base> | tar` (test row first). Final: with the kit 0.89 (attributed 3/3, control-attempted 2/3), without 0.33 (0/3, 0/3); traces read for the unmatched kit run (merge-base only, no attempt) and a no-kit run ("your branch's commit"). docs/EVALS.md section 71ebe60.
+- Task 7: complete (eng-kit 1f044c4, pi e88bbe0; kit verify script from the workspace → typecheck and tests PASS in both).
