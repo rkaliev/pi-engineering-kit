@@ -12,7 +12,7 @@ Call the `watch_pr` tool (`pr`, `branch`, `ack`, `timeout` are optional) and end
 
 | Event | What to do |
 |---|---|
-| `checks_failed` | systematic-debugging on the failed checks; at most two fix attempts per check, then stop and ask. Commit, push, relaunch with the `ack`. Never re-run a red check hoping it passes. |
+| `checks_failed` | systematic-debugging on the failed checks; at most two fix attempts per check, then stop and ask. Commit, push, relaunch with the `ack`. Never re-run a red check hoping it passes. A reason `failed beyond the N checks read` names no check: find it with `gh pr checks <pr>`. |
 | `feedback` | receiving-code-review on every item in `open[]`: fix it, or reply with the reason in its thread. Relaunch with the `ack` only when every item is fixed or replied. |
 | `conflict` | Stop and ask: a rebase rewrites pushed history, which is the user's choice. |
 | `ready` | If you pushed since the last review, run requesting-code-review on the head first. Then report: checks passed, nothing open. |

@@ -50,7 +50,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
  * The event a successful snapshot (`state.error` null) calls for, or null to keep waiting. Candidates in order:
- * merged or closed, conflict, failed checks, open feedback; the first whose id isn't in `ctx.acked` wins (a terminal
+ * merged or closed, conflict, failed checks (a failed check read, or a red rollup when none of those read failed), open feedback; the first whose id isn't in `ctx.acked` wins (a terminal
  * one always does). Nothing is settled before the head was seen for `quietMs` (checks register only after a push).
  * Then: `blocked` when acked feedback is still open and no check is running or failed (feedback-unanswered), when
  * the head has no checks at all (no-checks), or when the feedback wasn't all read (partial); `ready` when GitHub's
@@ -65,6 +65,8 @@ export function decide(state: PrState, ctx: { acked: string[]; headSeenAt: numbe
 	else if (state.state === "CLOSED") candidates.push(["closed", "the PR was closed without merging"]);
 	if (state.mergeable === "CONFLICTING") candidates.push(["conflict", "the PR conflicts with its base branch"]);
 	if (checks.failed.length > 0) candidates.push(["checks_failed", `failed: ${checks.failed.join(", ")}; ${checks.pending} still running`]);
+	// GitHub's rollup covers every check, so a red rollup with no failed check among those read failed past them.
+	else if (checks.state === "FAILURE" || checks.state === "ERROR") candidates.push(["checks_failed", `failed beyond the ${checks.total} checks read; ${checks.pending} still running`]);
 	if (state.open.length > 0) candidates.push(["feedback", `${plural(state.open.length, "open review item")}`]);
 	for (const [name, reason] of candidates) {
 		if (TERMINAL.has(name) || !acked.includes(eventId(name, state))) return event(name, state, acked, reason);

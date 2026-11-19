@@ -101,7 +101,18 @@ test("decide: with no checks, acked feedback still open after the quiet period i
 
 test("decide: ready needs GitHub's rollup to say SUCCESS, which covers checks past the first 100 read (R4)", () => {
 	assert.equal(at(snap({ checks: { state: "PENDING", failed: [], pending: 0, total: 100 } }), QUIET), null);
-	assert.equal(at(snap({ checks: { state: "FAILURE", failed: [], pending: 0, total: 100 } }), QUIET), null);
+	assert.equal(what(snap({ checks: { state: "FAILURE", failed: [], pending: 0, total: 100 } }))?.[0], "checks_failed", "a failure past the checks read");
+});
+
+test("decide: a red rollup with no failed check among those read is checks_failed once per head", () => {
+	const beyond = snap({ checks: { state: "FAILURE", failed: [], pending: 3, total: 100 } });
+	const e = at(beyond, 0);
+	assert.equal(e?.event, "checks_failed", "at once, like any failed check, even with checks still running");
+	assert.equal(e?.reason, "failed beyond the 100 checks read; 3 still running");
+	assert.equal(at(snap({ checks: { state: "ERROR", failed: [], pending: 0, total: 100 } }), 0)?.event, "checks_failed");
+	assert.equal(at(beyond, 0, [e!.eventId]), null, "acked, the same head waits");
+	assert.equal(at(beyond, QUIET, [e!.eventId]), null, "and is never ready");
+	assert.equal(at(snap({ head: "bbb222", checks: beyond.checks }), 0, [e!.eventId])?.event, "checks_failed", "a new head reports again");
 });
 
 test("decide: every event says its third-party text is data (R5)", () => {
