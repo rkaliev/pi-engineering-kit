@@ -1,6 +1,6 @@
 # Debugging starts from a control run on the base commit; watcher and verify follow-ups
 
-Status: plan approved (2026-11-19)
+Status: in progress
 <!-- draft → design approved (YYYY-MM-DD) → plan approved (YYYY-MM-DD) → in progress. Lives only on its work branch at docs/tasks/YYYY-MM-DD-<slug>.md: when the work is finished, what lasts moves to docs/ and this file is deleted. -->
 Base: eng-kit 24b5d89 · pi 597bc1a
 Links: workspace docs/COMPARISON-FORTUNE-OS.ru.md (0.40.0 item 1, the systematic-debugging control case); source fortune-os `plugins/fos/skills/shared-rules/references/failure-evidence.md` and `plugins/fos/skills/debug/SKILL.md`; 0.42.0 follow-ups in workspace docs/review-rounds/0.42.0/
@@ -122,20 +122,20 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 
 **Files:** Create `evals/inherited-failure/{case.yaml,prompt.md,scaffold.sh}`, `fixture/{package.json,dot-gitignore,src/vat.ts,src/vat.test.ts}`, `graders/{base-run.md,test-kept.md,attributed.md,skill-loaded.md}` · Modify `tests/eval-graders.test.ts`
 
-- [ ] Fixture, copied in shape from `evals/bug-root-cause/` (package.json `"test": "node --test"`, Node ≥ 22.18, no dependencies): `src/vat.ts` exports `vatMinor(netMinor: number, ratePercent: number): number` = `Math.round(netMinor * ratePercent / 100)`; `src/vat.test.ts` has `rounds VAT half-up` asserting `vatMinor(1005, 10) === 101` and `vatMinor(1000, 20) === 200`.
-- [ ] `scaffold.sh`: copy and rename dotfiles as bug-root-cause does; `git init -b main`; commit "initial"; then on `main` change `Math.round` to `Math.floor` and commit `perf: integer VAT math`; then `git switch -c feat/receipt-footer`, add `src/footer.ts` (`receiptFooter(shop: string): string` → `Thank you for shopping at ${shop}!`) and `src/footer.test.ts` (one passing test), commit `feat: receipt footer`. Same `-c user.name=eval … core.hooksPath=/dev/null` flags.
-- [ ] `prompt.md`: "CI is red on my branch `feat/receipt-footer`: `rounds VAT half-up` in `src/vat.test.ts` fails. Fix it so I can merge." plus the standard Node line and "I'm away, so don't ask me questions: make reasonable calls and tell me what you did when it's done." `case.yaml` as bug-root-cause (max_turns 40, timeout 900).
-- [ ] Write failing grader tests in `tests/eval-graders.test.ts` for `inherited-failure/graders/base-run.md` (regex over the trace): match `git stash` + `git switch main` + `npm test`; `git checkout main` then `node --test`; `git worktree add ../base main` then `cd ../base && npm test`; `git checkout $(git merge-base HEAD main)` then `npm test`; no match for `git log main`, `git diff main...HEAD`, `git show main:src/vat.ts`, `npm test` before any git command only, `git switch main` with no later test run. Create `base-run.md` with a pattern that matches nothing yet.
-- [ ] Run `node --test tests/eval-graders.test.ts` → expect FAIL on the positive rows.
-- [ ] Write the `base-run.md` pattern: a Bash command reaching `main` or a merge-base (`git (switch|checkout) …`, `git worktree add … main`, `git -C <dir> (switch|checkout)`) followed later in the trace by `npm test`, `npm run test` or `node --test`.
-- [ ] Run it → expect PASS. Add `test-kept.md` (regex on file `src/vat.test.ts`: `vatMinor\(1005, 10\), 101`), `attributed.md` (llm, final message: PASS if it says the failure already exists on `main`, introduced by the `main` commit `perf: integer VAT math` or otherwise present before the branch, and not caused by the branch's changes; FAIL if it presents the failure as caused by the branch or doesn't say where it came from), `skill-loaded.md` (copy).
-- [ ] Run the full suite → PASS; `claude plugin validate .` → PASS. Commit `test(evals): inherited-failure case`.
+- [x] Fixture, copied in shape from `evals/bug-root-cause/` (package.json `"test": "node --test"`, Node ≥ 22.18, no dependencies): `src/vat.ts` exports `vatMinor(netMinor: number, ratePercent: number): number` = `Math.round(netMinor * ratePercent / 100)`; `src/vat.test.ts` has `rounds VAT half-up` asserting `vatMinor(1005, 10) === 101` and `vatMinor(1000, 20) === 200`.
+- [x] `scaffold.sh`: copy and rename dotfiles as bug-root-cause does; `git init -b main`; commit "initial"; then on `main` change `Math.round` to `Math.floor` and commit `perf: integer VAT math`; then `git switch -c feat/receipt-footer`, add `src/footer.ts` (`receiptFooter(shop: string): string` → `Thank you for shopping at ${shop}!`) and `src/footer.test.ts` (one passing test), commit `feat: receipt footer`. Same `-c user.name=eval … core.hooksPath=/dev/null` flags.
+- [x] `prompt.md`: "CI is red on my branch `feat/receipt-footer`: `rounds VAT half-up` in `src/vat.test.ts` fails. Fix it so I can merge." plus the standard Node line and "I'm away, so don't ask me questions: make reasonable calls and tell me what you did when it's done." `case.yaml` as bug-root-cause (max_turns 40, timeout 900).
+- [x] Write failing grader tests in `tests/eval-graders.test.ts` for `inherited-failure/graders/base-run.md` (regex over the trace): match `git stash` + `git switch main` + `npm test`; `git checkout main` then `node --test`; `git worktree add ../base main` then `cd ../base && npm test`; `git checkout $(git merge-base HEAD main)` then `npm test`; no match for `git log main`, `git diff main...HEAD`, `git show main:src/vat.ts`, `npm test` before any git command only, `git switch main` with no later test run. Create `base-run.md` with a pattern that matches nothing yet.
+- [x] Run `node --test tests/eval-graders.test.ts` → expect FAIL on the positive rows.
+- [x] Write the `base-run.md` pattern: a Bash command reaching `main` or a merge-base (`git (switch|checkout) …`, `git worktree add … main`, `git -C <dir> (switch|checkout)`) followed later in the trace by `npm test`, `npm run test` or `node --test`.
+- [x] Run it → expect PASS. Add `test-kept.md` (regex on file `src/vat.test.ts`: `vatMinor\(1005, 10\), 101`), `attributed.md` (llm, final message: PASS if it says the failure already exists on `main`, introduced by the `main` commit `perf: integer VAT math` or otherwise present before the branch, and not caused by the branch's changes; FAIL if it presents the failure as caused by the branch or doesn't say where it came from), `skill-loaded.md` (copy).
+- [x] Run the full suite → PASS; `claude plugin validate .` → PASS. Commit `test(evals): inherited-failure case`.
 
 ### Task 2: git in the eval sandbox, then RED (eng-kit)
 
-- [ ] Run `npm run eval -- --case inherited-failure --runs 1 --ablation none --keep-temp` and read the kept trace: do `git` commands succeed? If they fail on `xcrun`, try in this order: `DEVELOPER_DIR` set for the run, a non-shim git first on PATH. Record what worked in Progress. If nothing works: **stop and ask the user.**
-- [ ] Read that run's trace against each grader by hand; fix any grader that misjudges it (with a grader-test row first), commit `test(evals): …`.
-- [ ] RED: run the case's no-kit arm 3 times (`npm run eval -- --case inherited-failure --keep-temp`, both arms; the no-kit arm is RED). Record per-grader results in Progress. If the no-kit arm passes `base-run` and `attributed` in 3/3: **stop and ask the user** (Decision 3); Tasks 5–6 may proceed meanwhile.
+- [x] Run `npm run eval -- --case inherited-failure --runs 1 --ablation none --keep-temp` and read the kept trace: do `git` commands succeed? If they fail on `xcrun`, try in this order: `DEVELOPER_DIR` set for the run, a non-shim git first on PATH. Record what worked in Progress. If nothing works: **stop and ask the user.**
+- [x] Read that run's trace against each grader by hand; fix any grader that misjudges it (with a grader-test row first), commit `test(evals): …`.
+- [x] RED: run the case's no-kit arm 3 times (`npm run eval -- --case inherited-failure --keep-temp`, both arms; the no-kit arm is RED). Record per-grader results in Progress. If the no-kit arm passes `base-run` and `attributed` in 3/3: **stop and ask the user** (Decision 3); Tasks 5–6 may proceed meanwhile.
 
 ### Task 3: the control step and the reference (both editions)
 
@@ -155,18 +155,18 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 
 **Files:** Modify `lib/pr-watch.ts` (pi: `extensions/lib/pr-watch.ts`) · Test `tests/pr-watch.test.ts` (both)
 
-- [ ] Own commit first, `test(pr-watch): a red rollup beyond the checks read is no longer a wait`: in the R4 test, replace the assertion that `{ state: "FAILURE", failed: [], pending: 0, total: 100 }` gives `null` with one that it gives `checks_failed` (the PENDING row stays). Run → expect FAIL (received null).
-- [ ] Add test `decide: a red rollup with no failed check among those read is checks_failed once per head`: `{ state: "FAILURE", failed: [], pending: 3, total: 100 }` → `checks_failed` with reason `failed beyond the 100 checks read; 3 still running`; `ERROR` likewise; with that event's id acked → `null` before the quiet period; a new head → `checks_failed` again. Run → FAIL.
-- [ ] In `decide`, when `checks.failed` is empty and `checks.state` is `FAILURE` or `ERROR`, push `["checks_failed", \`failed beyond the ${checks.total} checks read; ${checks.pending} still running\`]` in the same precedence slot; update the doc comment. Copy the lib byte-identical to pi.
-- [ ] Run `npm test` in both → PASS; `cmp` the libs. Commit `fix(pr-watch): report a red rollup beyond the checks read` in each.
+- [x] Own commit first, `test(pr-watch): a red rollup beyond the checks read is no longer a wait`: in the R4 test, replace the assertion that `{ state: "FAILURE", failed: [], pending: 0, total: 100 }` gives `null` with one that it gives `checks_failed` (the PENDING row stays). Run → expect FAIL (received null).
+- [x] Add test `decide: a red rollup with no failed check among those read is checks_failed once per head`: `{ state: "FAILURE", failed: [], pending: 3, total: 100 }` → `checks_failed` with reason `failed beyond the 100 checks read; 3 still running`; `ERROR` likewise; with that event's id acked → `null` before the quiet period; a new head → `checks_failed` again. Run → FAIL.
+- [x] In `decide`, when `checks.failed` is empty and `checks.state` is `FAILURE` or `ERROR`, push `["checks_failed", \`failed beyond the ${checks.total} checks read; ${checks.pending} still running\`]` in the same precedence slot; update the doc comment. Copy the lib byte-identical to pi.
+- [x] Run `npm test` in both → PASS; `cmp` the libs. Commit `fix(pr-watch): report a red rollup beyond the checks read` in each.
 
 ### Task 6: pi verify resets on a queued watcher message (pi)
 
 **Files:** Modify `extensions/verify.ts` · Test `tests/extensions.test.ts`
 
-- [ ] Write test `verify: a watcher message queued into a running run counts as a new prompt`: no UI; edit `src/a.ts`, `agent_end` → 1 sent; `before_agent_start` custom `verify-gate`; `message_start` with `{ role: "custom", customType: "pr-watch" }`; edit `src/b.ts`; `agent_end` → 2 sent. Negative in the same test: then `message_start` with `customType: "verify-gate"` and with `{ role: "user" }`, edit `src/c.ts`, `agent_end` → still 2. Run → FAIL (1 sent).
-- [ ] Add `pi.on("message_start", …)` calling `newPrompt()` when `event.message.role === "custom" && event.message.customType === "pr-watch"`; keep the `before_agent_start` handler (a second reset is harmless; R9 test stays). Fix the comments at verify.ts:10 and :374 to say "once per prompt (a user message or a watcher wake)".
-- [ ] Run `npm test` → PASS. Commit `fix(verify): a queued watcher message starts a new prompt`.
+- [x] Write test `verify: a watcher message queued into a running run counts as a new prompt`: no UI; edit `src/a.ts`, `agent_end` → 1 sent; `before_agent_start` custom `verify-gate`; `message_start` with `{ role: "custom", customType: "pr-watch" }`; edit `src/b.ts`; `agent_end` → 2 sent. Negative in the same test: then `message_start` with `customType: "verify-gate"` and with `{ role: "user" }`, edit `src/c.ts`, `agent_end` → still 2. Run → FAIL (1 sent).
+- [x] Add `pi.on("message_start", …)` calling `newPrompt()` when `event.message.role === "custom" && event.message.customType === "pr-watch"`; keep the `before_agent_start` handler (a second reset is harmless; R9 test stays). Fix the comments at verify.ts:10 and :374 to say "once per prompt (a user message or a watcher wake)".
+- [x] Run `npm test` → PASS. Commit `fix(verify): a queued watcher message starts a new prompt`.
 
 ### Task 7: docs and version 0.43.0 (both editions)
 
@@ -174,4 +174,9 @@ Release 0.43.0 in both editions by CI after merge. Rollback is the previous rele
 
 ## Progress
 
-None yet
+- Baseline (2026-11-19): eng-kit c953148 and pi ad12aed, kit verify script → typecheck and tests PASS in both. Drift: none (plan written on these bases).
+- Task 1: complete (c953148..cc0e17a, `node --test tests/eval-graders.test.ts` → the base-run positive rows failed on assertions against an empty pattern, then 14 pass; `npm test` 949 pass; `claude plugin validate .` passed). Scaffold probed: `rounds VAT half-up` fails on the branch and on `main`.
+- Task 2 spike (2026-11-19, Claude Code 2.1.326): git fails in the macOS eval sandbox. Bare `git` resolves to Apple's `/usr/bin/git` shim, which can't write its xcrun cache and then can't locate git; absolute paths to real binaries work, but neither a PATH prefix (the shell finds only `/usr/bin/git`), a workspace `.claude/settings.json` `env`, nor `DEVELOPER_DIR` reaches the lookup. Two kit-arm runs: the agent fixed the rounding, couldn't run git, and named `perf: integer VAT math` as the likely, unconfirmed cause (base-run and attributed failed). Ruling (user, 2026-11-19): run this case's RED/GREEN in a Linux container (OrbStack), where git works natively.
+- Task 5: complete (eng-kit cc0e17a..9ebcac6, pi ad12aed..8d7fc97; the R4 assertion change and the new once-per-head test failed on assertions first (received no event), then `node --test tests/pr-watch.test.ts` 24 pass in both; kit verify script PASS in both; libs byte-identical). Ruling: the R4 test commit precedes the fix, so that one commit is red — the user asked for test edits in their own commit; cost if wrong: a bisect lands on it.
+- Task 6: complete (pi 8d7fc97..c56062f; the new test failed first with 1 follow-up sent where 2 were expected, then 144 pass in tests/extensions.test.ts; kit verify script PASS, then a comment-only rewrap rechecked with tsc and the file's tests). The pi source confirms a queued follow-up is emitted as `message_start` inside the running run (pi-agent-core agent-loop).
+- Task 2: complete (eng-kit cc0e17a..1f5f121). Container `kit-eval` (image kit-eval:2.1.326: node 24.19.0-bookworm-slim, git, bubblewrap, socat, ripgrep, Claude Code 2.1.326) needs `--privileged`: without it bwrap can't mount /proc and every Bash call fails. Probe runs showed git works; the first judge wording passed a guess ("probably came in with the perf commit"), so it now requires a checked attribution (1f5f121). RED (3 runs per arm, $0.60): with the kit 0.33, without 0.33; base-run 0/3 and attributed 0/3 in both arms, test-kept 3/3 in both; read every trace's git commands: only `git log`/`git show` of the culprit, no run on the base; one kit run committed unasked. Gap confirmed, so Decision 3 doesn't stop the work.
