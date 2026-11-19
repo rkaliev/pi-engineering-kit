@@ -7,9 +7,9 @@
  *   found from a git working-tree fingerprint taken before and after it, lib/worktree.ts), owing the commands whose
  *   verify.json `paths` cover them (every command without an entry, and every command for a path that isn't certain).
  * - When the agent stops with unverified edits, it gets one follow-up asking for evidence and its whole
- *   report (at most once per user message, so it can never loop, and with a UI once per set of edits: edits
- *   already followed up get one notice to the user instead); with no commands at all the user gets
- *   one notice per session instead. The same follow-up carries the approval
+ *   report (at most once per prompt, a user message or a PR watcher wake, so it can never loop, and with a UI
+ *   once per set of edits: edits already followed up get one notice to the user instead); with no commands at all
+ *   the user gets one notice per session instead. The same follow-up carries the approval
  *   gate (an approved design or plan must be committed), the working-docs gate (implemented task
  *   files must be deleted) and the PR feedback gate (unanswered review items on a GitHub PR this prompt touched).
  */
@@ -306,6 +306,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		if (event.messageType === "custom" && (event.message as { customType?: string } | undefined)?.customType === "pr-watch") newPrompt();
 	});
+	// One that arrives while a run is going is delivered into that run instead (a queued follow-up): same rule. For
+	// a run the event starts, this second reset changes nothing.
+	pi.on("message_start", async (event) => {
+		const message = event.message as { role?: string; customType?: string };
+		if (message.role === "custom" && message.customType === "pr-watch") newPrompt();
+	});
 
 	// The working tree before a shell call, so its result can name what that call changed.
 	pi.on("tool_call", async (event, ctx) => {
@@ -371,7 +377,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
 		// reported a failing one) are told to the user once instead of following up every later prompt (Claude Code
 		// transcripts 2026-10..11: 40% of firings repeated the previous one's file list). The agent_end after the verify
 		// gate's own follow-up judges the edits made while answering it. Without a UI no one sees a notice, so edits keep
-		// getting the follow-up once per user message, as before.
+		// getting the follow-up once per prompt (a user message or a PR watcher wake), as before.
 		const followed = parts.length;
 		if (unverified && answering) judged = editCount;
 		else if (unverified && ctx.hasUI && judged === editCount) {
