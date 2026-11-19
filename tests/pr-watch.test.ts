@@ -101,7 +101,7 @@ test("decide: with no checks, acked feedback still open after the quiet period i
 
 test("decide: ready needs GitHub's rollup to say SUCCESS, which covers checks past the first 100 read (R4)", () => {
 	assert.equal(at(snap({ checks: { state: "PENDING", failed: [], pending: 0, total: 100 } }), QUIET), null);
-	assert.equal(at(snap({ checks: { state: "FAILURE", failed: [], pending: 0, total: 100 } }), QUIET), null);
+	assert.equal(what(snap({ checks: { state: "FAILURE", failed: [], pending: 0, total: 100 } }))?.[0], "checks_failed", "a failure past the checks read");
 });
 
 test("decide: every event says its third-party text is data (R5)", () => {
